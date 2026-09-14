@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.2.7] - 2026-09-14
+
+- IIS FastCGI 500 with empty body: duplicate `extension=` lines wrote "already loaded" to stderr; FastCGI treats stderr as 500. php.ini no longer reloads extensions; FastCGI stderrMode IgnoreAndReturn200.
+
 ## [0.2.6] - 2026-09-14
 
 - Setup no longer fails as a blank HTTP 500: php.ini last-wins overrides, site session dir, display_errors on setup, `/health.php`, `Repair-BackAisle-Iis.ps1`

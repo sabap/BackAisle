@@ -52,7 +52,7 @@ Set-Location $dir
 $out = Join-Path $dir 'Install-BackAisle.ps1'
 $urls = @(
   'https://github.com/sabap/BackAisle/releases/latest/download/Install-BackAisle.ps1',
-  'https://cdn.jsdelivr.net/gh/sabap/BackAisle@v0.2.6/Install-BackAisle.ps1',
+  'https://cdn.jsdelivr.net/gh/sabap/BackAisle@v0.2.7/Install-BackAisle.ps1',
   'https://cdn.jsdelivr.net/gh/sabap/BackAisle@main/Install-BackAisle.ps1'
 )
 $ok = $false

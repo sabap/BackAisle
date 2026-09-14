@@ -44,34 +44,22 @@ if (-not (Test-Path $rw)) {
     }
 }
 
-$marker = '; BackAisle site overrides'
 $cur = Get-Content -Path $ini -Raw
-if ($cur -notmatch [regex]::Escape($marker)) {
-    Add-Content -Path $ini -Value @"
+$cur = [regex]::Replace($cur, '(?s)\r?\n; BackAisle site overrides.*\z', '')
+Set-Content -Path $ini -Value ($cur.TrimEnd() + @"
 
-$marker (last value wins)
+; BackAisle site overrides (last value wins; do not repeat extension=)
 cgi.fix_path_info = 1
 fastcgi.impersonate = 1
-display_errors = On
-display_startup_errors = On
+display_errors = Off
+display_startup_errors = Off
 log_errors = On
 error_log = "$logDir\php-error.log"
 session.save_path = "$sess"
 sys_temp_dir = "$sess"
-extension_dir = "$PhpInstallPath\ext"
-extension=curl
-extension=mbstring
-extension=openssl
-extension=fileinfo
-extension=ldap
-extension=pdo_sqlite
-extension=sqlite3
-extension=pdo_odbc
-extension=zip
 
-"@ -Encoding ASCII
-    Write-Host '    Appended php.ini overrides'
-}
+"@) -Encoding ASCII
+Write-Host '    php.ini cleaned (no duplicate extensions)'
 
 $old = $ErrorActionPreference
 $ErrorActionPreference = 'SilentlyContinue'
@@ -95,6 +83,14 @@ if (-not $have) {
     }
     Write-Host "    Registered FastCGI $phpCgi $phpArgs"
 }
+
+try {
+    Get-WebConfiguration -Filter 'system.webServer/fastCgi/application' |
+        Where-Object { $_.fullPath -like '*php-cgi.exe' } |
+        ForEach-Object {
+            Set-WebConfigurationProperty -Filter "system.webServer/fastCgi/application[@fullPath='$($_.fullPath)']" -Name stderrMode -Value IgnoreAndReturn200 -ErrorAction SilentlyContinue
+        }
+} catch { }
 
 try { Restart-WebAppPool $PoolName } catch { Start-WebAppPool $PoolName }
 Start-Website $SiteName -ErrorAction SilentlyContinue

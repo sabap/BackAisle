@@ -96,7 +96,7 @@ function ba_setup_write_secrets(array $form): void {
     @file_put_contents($dir . '\\secrets.env', implode("\n", $lines));
 }
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && isset($_POST['action'])) {
     $action = $_POST['action'];
 
     if ($action === 'choose_mode') {

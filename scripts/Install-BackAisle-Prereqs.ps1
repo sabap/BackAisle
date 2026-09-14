@@ -335,33 +335,22 @@ function Write-SitePhpIni {
     }
     $marker = '; BackAisle site overrides'
     $cur = Get-Content -Path $ini -Raw
-    if ($cur -notmatch [regex]::Escape($marker)) {
-        $block = @"
+    $cur = [regex]::Replace($cur, '(?s)\r?\n; BackAisle site overrides.*\z', '')
+    $block = @"
 
-$marker (last value wins)
+$marker (last value wins; do not repeat extension= -- IIS FastCGI returns 500 on stderr)
 cgi.fix_path_info = 1
 fastcgi.impersonate = 1
-display_errors = On
-display_startup_errors = On
+display_errors = Off
+display_startup_errors = Off
 log_errors = On
 error_log = "$logDir\php-error.log"
 session.save_path = "$sess"
 sys_temp_dir = "$sess"
-extension_dir = "$PhpInstallPath\ext"
-extension=curl
-extension=mbstring
-extension=openssl
-extension=fileinfo
-extension=ldap
-extension=pdo_sqlite
-extension=sqlite3
-extension=pdo_odbc
-extension=zip
 
 "@
-        Add-Content -Path $ini -Value $block -Encoding ASCII
-        Write-Ok "Appended site overrides to $ini"
-    }
+    Set-Content -Path $ini -Value ($cur.TrimEnd() + "`r`n" + $block) -Encoding ASCII
+    Write-Ok "php.ini logging/session paths set"
     return $ini
 }
 
@@ -569,6 +558,14 @@ function Install-BackAisleSite([string]$IniPath) {
         }
         Write-Ok 'Registered site-local FastCGI (-c php.ini)'
     }
+    try {
+        Get-WebConfiguration -Filter 'system.webServer/fastCgi/application' |
+            Where-Object { $_.fullPath -like '*php-cgi.exe' } |
+            ForEach-Object {
+                $filter = "system.webServer/fastCgi/application[@fullPath='$($_.fullPath)']"
+                Set-WebConfigurationProperty -Filter $filter -Name stderrMode -Value IgnoreAndReturn200 -ErrorAction SilentlyContinue
+            }
+    } catch { }
     $existing = Get-Website | Where-Object { $_.Name -eq $SiteName }
     if (-not $existing) {
         New-Website -Name $SiteName -Port $HttpPort -PhysicalPath $public -ApplicationPool $PoolName | Out-Null
