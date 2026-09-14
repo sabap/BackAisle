@@ -22,7 +22,7 @@ function page_login(PDO $db): void {
         $u = trim($_POST['username'] ?? '');
         $p = $_POST['password'] ?? '';
         if (ba_login($db, $u, $p)) {
-            header('Location: /index.php');
+            header('Location: /home.php');
             exit;
         }
         $err = 'Invalid credentials';
