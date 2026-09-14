@@ -15,7 +15,7 @@ function ba_user(): ?array {
 function ba_require_login(): array {
     $u = ba_user();
     if (!$u) {
-        header('Location: /login');
+        header('Location: /login.php');
         exit;
     }
     return $u;

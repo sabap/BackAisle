@@ -80,29 +80,23 @@ function page_org(PDO $db, array $user): void {
                         trim($_POST['web_user'] ?? ''), trim($_POST['notes'] ?? ''),
                     ]);
                 $id = (int)$db->lastInsertId();
-                $py = ba_python();
                 $code = 'import sys; sys.path.insert(0, r"C:\\inetpub\\BackAisle\\collector"); from profiles import set_secret; set_secret(int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4] if len(sys.argv)>4 else "")';
-                $cmd = escapeshellarg($py).' -c '.escapeshellarg($code).' '.escapeshellarg((string)$id).' '
-                    .escapeshellarg($_POST['auth_pass'] ?? '').' '.escapeshellarg($_POST['priv_pass'] ?? '').' '
-                    .escapeshellarg($_POST['web_pass'] ?? '');
-                @exec($cmd);
+                ba_python_run(['-c', $code, (string)$id, (string)($_POST['auth_pass'] ?? ''), (string)($_POST['priv_pass'] ?? ''), (string)($_POST['web_pass'] ?? '')]);
                 ba_audit($db, 'add_snmp_profile', 'snmp_profile', (string)$id);
                 $msg = 'SNMPv3 profile saved (secrets outside web root)';
             } elseif ($act === 'import_pp') {
                 if (empty($_FILES['zip']['tmp_name'])) throw new RuntimeException('Choose a profile.zip');
                 $dest = sys_get_temp_dir().DIRECTORY_SEPARATOR.'pp_'.bin2hex(random_bytes(4)).'.zip';
                 if (!move_uploaded_file($_FILES['zip']['tmp_name'], $dest)) throw new RuntimeException('upload failed');
-                $py = ba_python();
-                $script = 'C:\\inetpub\\BackAisle\\collector\\import_powerpanel.py';
-                $out = [];
-                $code = 0;
-                exec(escapeshellarg($py).' -c '.escapeshellarg(
-                    'import sys,json; sys.path.insert(0, r"C:\\inetpub\\BackAisle\\collector"); from import_powerpanel import import_zip; print(json.dumps(import_zip(sys.argv[1])))'
-                ).' '.escapeshellarg($dest), $out, $code);
+                $code = 'import sys,json; sys.path.insert(0, r"C:\\inetpub\\BackAisle\\collector"); from import_powerpanel import import_zip; print(json.dumps(import_zip(sys.argv[1])))';
+                $run = ba_python_run(['-c', $code, $dest]);
                 @unlink($dest);
-                if ($code !== 0) throw new RuntimeException('import failed: '.implode("\n", $out));
-                $msg = 'Imported '.$out[0];
-                ba_audit($db, 'import_powerpanel', 'import', null, $out[0] ?? '');
+                if ($run['code'] !== 0) {
+                    $detail = trim($run['stderr'] . "\n" . $run['stdout']);
+                    throw new RuntimeException('import failed: ' . ($detail !== '' ? $detail : 'exit ' . $run['code']));
+                }
+                $msg = 'Imported ' . trim($run['stdout']);
+                ba_audit($db, 'import_powerpanel', 'import', null, trim($run['stdout']));
             } elseif ($act === 'add_default') {
                 $ip = trim($_POST['ip'] ?? '');
                 if (!filter_var($ip, FILTER_VALIDATE_IP)) throw new RuntimeException('Bad IP');

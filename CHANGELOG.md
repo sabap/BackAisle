@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.2.9] - 2026-09-14
+
+- Restore front-controller rewrite (no handlers in web.config) so /login and /fleet are not 404
+- Physical /login.php fallback; PowerPanel import uses real python.exe via proc_open and surfaces stderr
+
 ## [0.2.8] - 2026-09-14
 
 - IIS 500.19 (0x80070021): site `web.config` no longer contains `<handlers>` or `<rewrite>` (locked/missing module). PHP handler is registered at the site; handlers section is unlocked.

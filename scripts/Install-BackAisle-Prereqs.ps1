@@ -370,6 +370,49 @@ function Install-Odbc18 {
     }
 }
 
+function Write-SiteWebConfig {
+    $public = Join-Path $SiteRoot 'public'
+    $wc = Join-Path $public 'web.config'
+    $rw = Test-Path (Join-Path $env:SystemRoot 'System32\inetsrv\rewrite.dll')
+    $rewriteXml = ''
+    if ($rw) {
+        $rewriteXml = @'
+    <rewrite>
+      <rules>
+        <rule name="BackAisle Front Controller" stopProcessing="true">
+          <match url=".*" />
+          <conditions logicalGrouping="MatchAll">
+            <add input="{REQUEST_FILENAME}" matchType="IsFile" negate="true" />
+            <add input="{REQUEST_FILENAME}" matchType="IsDirectory" negate="true" />
+          </conditions>
+          <action type="Rewrite" url="index.php" />
+        </rule>
+      </rules>
+    </rewrite>
+'@
+        Write-Ok 'URL Rewrite module present; front-controller rules enabled'
+    } else {
+        Write-Warn 'URL Rewrite not installed; use /login.php and /index.php until it is'
+    }
+    $xml = @"
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+  <system.webServer>
+    <defaultDocument>
+      <files>
+        <clear />
+        <add value="index.php" />
+        <add value="setup.php" />
+      </files>
+    </defaultDocument>
+$rewriteXml
+    <httpErrors existingResponse="PassThrough" errorMode="DetailedLocalOnly" />
+  </system.webServer>
+</configuration>
+"@
+    Set-Content -Path $wc -Value $xml -Encoding ASCII
+}
+
 function Install-UrlRewrite {
     if ($SkipUrlRewrite) { Write-Warn 'Skipping URL Rewrite'; return }
     Write-Step 'IIS URL Rewrite'
@@ -588,6 +631,7 @@ function Install-BackAisleSite([string]$IniPath) {
     }
     New-WebHandler -Name 'PHP_BackAisle' -PSPath $sitePath -Path '*.php' -Verb '*' -Modules FastCgiModule -ScriptProcessor "$phpCgi|$phpArgs" -ResourceType Either -RequiredAccess Script | Out-Null
     Write-Ok "PHP handler $phpCgi|$phpArgs"
+    Write-SiteWebConfig
     # Virtual account exists after the pool is created/started. Never grant the bare
     # pool name (icacls "BackAisle:..." cannot map a SID).
     try { Start-WebAppPool $PoolName } catch { }

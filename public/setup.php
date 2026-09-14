@@ -90,6 +90,7 @@ function ba_setup_write_secrets(array $form): void {
         'SNMPV3_PRIV_PASS=' . ($form['snmp_priv'] ?? ''),
         'APP_ADMIN_USER=' . ($form['admin_username'] ?? 'admin'),
         'APP_ADMIN_PASS=' . ($form['admin_password'] ?? ''),
+        'PYTHON=' . ba_python(),
         'AllowMultiWrite=false',
         '',
     ];
@@ -242,16 +243,14 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && isset($_POST['action']))
                 if (!move_uploaded_file($file['tmp_name'], $dest)) {
                     throw new RuntimeException('Could not store profile.zip.');
                 }
-                $py = ba_python();
                 $code = 'import sys,json; sys.path.insert(0, r"' . BA_ROOT . '\\collector"); from import_powerpanel import import_zip; print(json.dumps(import_zip(sys.argv[1])))';
-                $out = [];
-                $rc = 0;
-                exec(escapeshellarg($py) . ' -c ' . escapeshellarg($code) . ' ' . escapeshellarg($dest), $out, $rc);
+                $run = ba_python_run(['-c', $code, $dest]);
                 @unlink($dest);
-                if ($rc !== 0) {
-                    throw new RuntimeException('PowerPanel import failed: ' . implode("\n", $out));
+                if ($run['code'] !== 0) {
+                    $detail = trim($run['stderr'] . "\n" . $run['stdout']);
+                    throw new RuntimeException('PowerPanel import failed: ' . ($detail !== '' ? $detail : 'exit ' . $run['code']));
                 }
-                $success[] = 'PowerPanel import: ' . ($out[0] ?? 'ok');
+                $success[] = 'PowerPanel import: ' . trim($run['stdout']);
             }
             $step = 4;
         } catch (Throwable $e) {

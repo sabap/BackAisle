@@ -18,17 +18,50 @@ function ba_version(): string {
 
 function ba_python(): string {
     $s = ba_secrets();
-    if (!empty($s['PYTHON']) && is_file($s['PYTHON'])) {
-        return $s['PYTHON'];
+    $candidates = [];
+    if (!empty($s['PYTHON'])) {
+        $candidates[] = $s['PYTHON'];
     }
-    foreach ([
-        'C:\\Python312\\python.exe',
+    $candidates = array_merge($candidates, [
         'C:\\Program Files\\Python312\\python.exe',
+        'C:\\Program Files\\Python313\\python.exe',
+        'C:\\Python312\\python.exe',
         'C:\\Program Files\\Python311\\python.exe',
-    ] as $p) {
-        if (is_file($p)) return $p;
+    ]);
+    foreach ($candidates as $p) {
+        if (!is_string($p) || $p === '' || !is_file($p)) {
+            continue;
+        }
+        if (stripos($p, 'WindowsApps') !== false) {
+            continue;
+        }
+        $sz = @filesize($p);
+        if ($sz !== false && $sz >= 2048) {
+            return $p;
+        }
     }
-    return 'python';
+    return '';
+}
+
+/** @param list<string> $args */
+function ba_python_run(array $args, ?string $cwd = null): array {
+    $py = ba_python();
+    if ($py === '') {
+        return ['code' => 127, 'stdout' => '', 'stderr' => 'python.exe not found (Microsoft Store stub is ignored). Install Python 3.12 from python.org.'];
+    }
+    $cmd = array_merge([$py], $args);
+    $dspec = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+    $p = @proc_open($cmd, $dspec, $pipes, $cwd ?? BA_ROOT, null, ['bypass_shell' => true]);
+    if (!is_resource($p)) {
+        return ['code' => 1, 'stdout' => '', 'stderr' => 'proc_open failed for ' . $py];
+    }
+    fclose($pipes[0]);
+    $stdout = (string)stream_get_contents($pipes[1]);
+    $stderr = (string)stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    $code = proc_close($p);
+    return ['code' => $code, 'stdout' => $stdout, 'stderr' => $stderr];
 }
 
 function ba_status_class(?int $output, ?int $onBatt, ?string $comm, ?float $temp, ?int $sensorExpected, ?int $sensorPresent): string {

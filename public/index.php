@@ -17,6 +17,12 @@ require __DIR__ . '/../app/update.php';
 
 $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
 $path = rtrim($path, '/') ?: '/';
+if ($path === '/login.php') {
+    $path = '/login';
+}
+if ($path === '/index.php') {
+    $path = '/';
+}
 
 if (!ba_is_installed() && $path !== '/setup' && !str_starts_with($path, '/setup')) {
     header('Location: /setup.php');
@@ -39,7 +45,7 @@ if ($path === '/login') {
 if ($path === '/logout') {
     $_SESSION = [];
     session_destroy();
-    header('Location: /login');
+    header('Location: /login.php');
     exit;
 }
 
