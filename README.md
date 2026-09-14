@@ -35,11 +35,29 @@ No VM/OS shutdown. No SNMPv1. No SET/write to the UPS except optional admin batt
 
 ## Install
 
-1. Copy this tree to `C:\inetpub\BackAisle`.
-2. Copy `secrets.env.example` to `C:\ProgramData\BackAisle\secrets.env` and fill credentials. Set `APP_ADMIN_PASS`.
-3. Point FastCGI at `C:\inetpub\BackAisle\php.ini` (enable pdo_sqlite / sqlite3). Do not reuse another site’s php.ini.
-4. Run `Install-BackAisle.ps1` (creates the BackAisle site/pool on port 8080; does not touch Default Web Site).
-5. `python collector\seed.py` then start `collector\collector.py` and `collector\writer.py`.
+Recommended (elevated PowerShell; review the script first):
+
+```powershell
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/sabap/BackAisle/main/Install-BackAisle.ps1" `
+  -OutFile .\Install-BackAisle.ps1
+Set-ExecutionPolicy Bypass -Scope Process -Force
+.\Install-BackAisle.ps1 -OpenSetup -RegisterCollectorTask
+```
+
+The installer:
+
+1. Enables IIS FastCGI role services (does **not** change Default Web Site or port 80)
+2. Installs VC++ Redistributable, PHP NTS, ODBC Driver 18, URL Rewrite, Python 3.12+ and pip packages
+3. Creates IIS site **BackAisle** on **:8080** with a site-local `php.ini`
+4. Opens **http://localhost:8080/setup.php**
+
+In the wizard, pick **SQLite** (no extra engine) or **SQL Server** (existing instance — this script does not install SQL Server), then:
+
+- Fresh install (admin account), or
+- Restore a `backaisle-site_*.zip` / `.baisle` package, or
+- Import a PowerPanel `profile.zip`
+
+Manual copy is still supported: place the tree under `C:\inetpub\BackAisle` and run `scripts\Install-BackAisle-Prereqs.ps1`.
 
 ## Updates
 

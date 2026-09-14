@@ -5,6 +5,8 @@
 /storage/
 /secrets.env
 /php.ini
+/config/config.php
+/config/collector.json
 /collector/__pycache__/
 *.pyc
 public/assets/tpl/

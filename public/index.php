@@ -18,6 +18,11 @@ require __DIR__ . '/../app/update.php';
 $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
 $path = rtrim($path, '/') ?: '/';
 
+if (!ba_is_installed() && $path !== '/setup' && !str_starts_with($path, '/setup')) {
+    header('Location: /setup.php');
+    exit;
+}
+
 try {
     $db = ba_db();
 } catch (Throwable $e) {

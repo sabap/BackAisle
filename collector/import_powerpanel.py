@@ -5,7 +5,7 @@ import json
 import zipfile
 from pathlib import Path
 
-from db import init_db
+from db import init_db, last_id
 from profiles import set_secret
 
 AUTH_MAP = {"0": "NONE", "1": "MD5", "2": "SHA", "None": "SHA"}
@@ -40,7 +40,7 @@ def import_zip(zip_path: str | Path) -> dict:
                 "INSERT INTO snmp_profiles (name, username, auth_proto, priv_proto, notes) VALUES (?,?,?,?,?)",
                 (name, user, auth, priv, "imported from PowerPanel"),
             )
-            nid = con.execute("SELECT last_insert_rowid()").fetchone()[0]
+            nid = last_id(con)
         auth_key = s.get("authKey") or ""
         priv_key = s.get("privacyKey") or ""
         if auth_key and auth_key != "None" and len(auth_key) < 80:
@@ -70,7 +70,7 @@ def import_zip(zip_path: str | Path) -> dict:
             nid = exist["id"]
         else:
             con.execute("INSERT INTO groups (parent_id, name, notes) VALUES (?,?,?)", (parent_new, name, "PowerPanel import"))
-            nid = con.execute("SELECT last_insert_rowid()").fetchone()[0]
+            nid = last_id(con)
             stats["groups"] += 1
         group_map[oid] = nid
 

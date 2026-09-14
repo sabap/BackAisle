@@ -1,6 +1,77 @@
 <?php
 declare(strict_types=1);
 
+function ba_db_driver(): string {
+    $d = strtolower((string)(ba_config()['db']['driver'] ?? 'sqlite'));
+    return $d === 'sqlsrv' || $d === 'sqlserver' ? 'sqlsrv' : 'sqlite';
+}
+
+function ba_adapt_sql(string $sql): string {
+    if (ba_db_driver() !== 'sqlsrv') {
+        return $sql;
+    }
+    $sql = str_ireplace("datetime('now')", 'SYSUTCDATETIME()', $sql);
+    $sql = str_ireplace('IFNULL(', 'ISNULL(', $sql);
+    $sql = str_ireplace('INSERT OR IGNORE INTO', 'INSERT INTO', $sql);
+    $sql = str_ireplace('INSERT OR REPLACE INTO', 'INSERT INTO', $sql);
+    if (preg_match('/^(.*)\s+LIMIT\s+(\d+)\s*$/is', $sql, $m)) {
+        $inner = $m[1];
+        $n = (int)$m[2];
+        if (preg_match('/^\s*SELECT\s+/i', $inner) && !preg_match('/\bSELECT\s+TOP\s+/i', $inner)) {
+            $inner = preg_replace('/^\s*SELECT\s+/i', 'SELECT TOP ' . $n . ' ', $inner, 1);
+        }
+        $sql = $inner;
+    }
+    return $sql;
+}
+
+class BaPdo extends PDO
+{
+    public function prepare(string $query, array $options = []): PDOStatement|false
+    {
+        return parent::prepare(ba_adapt_sql($query), $options);
+    }
+
+    public function query(string $query, ?int $fetchMode = null, mixed ...$fetchModeArgs): PDOStatement|false
+    {
+        $q = ba_adapt_sql($query);
+        if ($fetchMode === null) {
+            return parent::query($q);
+        }
+        return parent::query($q, $fetchMode, ...$fetchModeArgs);
+    }
+
+    public function exec(string $statement): int|false
+    {
+        return parent::exec(ba_adapt_sql($statement));
+    }
+}
+
+function ba_sqlsrv_dsn(array $db, bool $includeDatabase = true): string
+{
+    $driver = $db['odbc_driver'] ?? 'ODBC Driver 18 for SQL Server';
+    $host = $db['host'] ?? 'localhost';
+    $port = (int)($db['port'] ?? 1433);
+    $server = $port && $port !== 1433 ? $host . ',' . $port : $host;
+    $enc = !empty($db['encrypt']) ? 'yes' : 'no';
+    $trust = !empty($db['trust_server_certificate']) ? 'yes' : 'no';
+    $dsn = "odbc:Driver={{$driver}};Server={$server};Encrypt={$enc};TrustServerCertificate={$trust}";
+    if ($includeDatabase && !empty($db['database'])) {
+        $dsn .= ';Database=' . $db['database'];
+    }
+    return $dsn;
+}
+
+function ba_connect_sqlserver(array $db, bool $includeDatabase = true): PDO
+{
+    $dsn = ba_sqlsrv_dsn($db, $includeDatabase);
+    $pdo = new BaPdo($dsn, (string)($db['username'] ?? ''), (string)($db['password'] ?? ''), [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+    ]);
+    return $pdo;
+}
+
 function ba_db(bool $reconnect = false): PDO {
     static $pdo = null;
     if ($reconnect) {
@@ -9,10 +80,18 @@ function ba_db(bool $reconnect = false): PDO {
     if ($pdo instanceof PDO) {
         return $pdo;
     }
-    if (!is_file(BA_DB)) {
-        throw new RuntimeException('Database not initialized. Run collector seed first.');
+    $cfg = ba_config();
+    $db = $cfg['db'] ?? ['driver' => 'sqlite', 'path' => BA_DB];
+    if (ba_db_driver() === 'sqlsrv') {
+        $pdo = ba_connect_sqlserver($db, true);
+        ba_ensure_infra_schema($pdo);
+        return $pdo;
     }
-    $pdo = new PDO('sqlite:' . BA_DB, null, null, [
+    $path = (string)($db['path'] ?? BA_DB);
+    if (!is_file($path)) {
+        throw new RuntimeException('Database not initialized. Run setup.php or collector seed first.');
+    }
+    $pdo = new BaPdo('sqlite:' . $path, null, null, [
         PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
     ]);
@@ -21,6 +100,20 @@ function ba_db(bool $reconnect = false): PDO {
     $pdo->exec('PRAGMA busy_timeout=30000');
     ba_ensure_infra_schema($pdo);
     return $pdo;
+}
+
+function ba_apply_sqlserver_schema(PDO $pdo): void {
+    $file = BA_ROOT . DIRECTORY_SEPARATOR . 'sql' . DIRECTORY_SEPARATOR . 'schema.sql';
+    $sql = @file_get_contents($file);
+    if ($sql === false) {
+        throw new RuntimeException('Missing sql/schema.sql');
+    }
+    $parts = preg_split('/^\s*GO\s*$/mi', $sql);
+    foreach ($parts as $part) {
+        $part = trim($part);
+        if ($part === '') continue;
+        $pdo->exec($part);
+    }
 }
 
 function ba_add_col(PDO $db, string $table, string $col, string $spec): void {
@@ -34,6 +127,9 @@ function ba_add_col(PDO $db, string $table, string $col, string $spec): void {
 }
 
 function ba_ensure_infra_schema(PDO $db): void {
+    if (ba_db_driver() === 'sqlsrv') {
+        return;
+    }
     $db->exec(
         "CREATE TABLE IF NOT EXISTS racks (
             id INTEGER PRIMARY KEY,

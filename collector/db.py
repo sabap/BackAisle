@@ -1,9 +1,38 @@
 from __future__ import annotations
 
+import json
+import re
 import sqlite3
 from pathlib import Path
 
 DB_PATH = Path(r"C:\inetpub\BackAisle\data\backaisle.db")
+CONFIG_JSON = Path(r"C:\inetpub\BackAisle\config\collector.json")
+
+
+def load_app_config() -> dict:
+    if CONFIG_JSON.is_file():
+        try:
+            return json.loads(CONFIG_JSON.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {"driver": "sqlite", "path": str(DB_PATH)}
+
+
+def is_sqlsrv() -> bool:
+    return (load_app_config().get("driver") or "sqlite").lower() in ("sqlsrv", "sqlserver")
+
+
+def adapt_sql(sql: str) -> str:
+    if not is_sqlsrv():
+        return sql
+    sql = sql.replace("datetime('now')", "SYSUTCDATETIME()")
+    sql = sql.replace("IFNULL(", "ISNULL(")
+    sql = sql.replace("INSERT OR IGNORE INTO", "INSERT INTO")
+    sql = sql.replace("INSERT OR REPLACE INTO", "INSERT INTO")
+    m = re.search(r"^(.*)\s+LIMIT\s+(\d+)\s*$", sql, re.I | re.S)
+    if m and re.match(r"\s*SELECT\s", m.group(1), re.I) and "SELECT TOP " not in m.group(1).upper():
+        sql = re.sub(r"^\s*SELECT\s+", f"SELECT TOP {int(m.group(2))} ", m.group(1), count=1, flags=re.I)
+    return sql
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -272,8 +301,81 @@ CREATE TABLE IF NOT EXISTS certs (
 """
 
 
-def connect(path: Path | None = None) -> sqlite3.Connection:
-    p = path or DB_PATH
+class _Row(dict):
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return list(self.values())[key]
+        return super().__getitem__(key)
+
+
+class SqlSrvConn:
+    def __init__(self, raw):
+        self.raw = raw
+
+    def execute(self, sql, params=()):
+        cur = self.raw.cursor()
+        cur.execute(adapt_sql(sql), params or ())
+        return SqlSrvCursor(cur)
+
+    def executescript(self, sql):
+        return self
+
+    def commit(self):
+        self.raw.commit()
+
+    def close(self):
+        self.raw.close()
+
+
+class SqlSrvCursor:
+    def __init__(self, cur):
+        self.cur = cur
+
+    def fetchone(self):
+        row = self.cur.fetchone()
+        if row is None:
+            return None
+        cols = [c[0] for c in (self.cur.description or [])]
+        return _Row(zip(cols, row))
+
+    def fetchall(self):
+        cols = [c[0] for c in (self.cur.description or [])]
+        return [_Row(zip(cols, r)) for r in self.cur.fetchall()]
+
+    def fetchcolumn(self):
+        row = self.fetchone()
+        if row is None:
+            return None
+        return list(row.values())[0]
+
+
+def last_id(con) -> int:
+    if is_sqlsrv():
+        row = con.execute("SELECT SCOPE_IDENTITY()").fetchone()
+        return int(list(row.values())[0] if isinstance(row, dict) else row[0])
+    return int(con.execute("SELECT last_insert_rowid()").fetchone()[0])
+
+
+def connect(path: Path | None = None):
+    cfg = load_app_config()
+    if (cfg.get("driver") or "sqlite").lower() in ("sqlsrv", "sqlserver"):
+        import pyodbc
+        enc = "yes" if cfg.get("encrypt") else "no"
+        trust = "yes" if cfg.get("trust_server_certificate", True) else "no"
+        drv = cfg.get("odbc_driver") or "ODBC Driver 18 for SQL Server"
+        server = cfg.get("host") or "localhost"
+        port = int(cfg.get("port") or 1433)
+        if port != 1433:
+            server = f"{server},{port}"
+        dbn = cfg.get("database") or "BackAisle"
+        raw = pyodbc.connect(
+            f"DRIVER={{{drv}}};SERVER={server};DATABASE={dbn};"
+            f"UID={cfg.get('username','')};PWD={cfg.get('password','')};"
+            f"Encrypt={enc};TrustServerCertificate={trust}",
+            timeout=30,
+        )
+        return SqlSrvConn(raw)
+    p = Path(cfg.get("path") or path or DB_PATH)
     p.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(str(p), timeout=30)
     con.row_factory = sqlite3.Row
@@ -288,9 +390,13 @@ def _add_col(con: sqlite3.Connection, table: str, col: str, spec: str) -> None:
         con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {spec}")
 
 
-def init_db(con: sqlite3.Connection | None = None) -> sqlite3.Connection:
+def init_db(con=None):
     own = con is None
     con = con or connect()
+    if is_sqlsrv():
+        if own:
+            return con
+        return con
     con.executescript(SCHEMA)
     _add_col(con, "devices", "group_id", "INTEGER")
     _add_col(con, "devices", "snmp_profile_id", "INTEGER")
@@ -328,7 +434,7 @@ def init_db(con: sqlite3.Connection | None = None) -> sqlite3.Connection:
         )
     if con.execute("SELECT COUNT(*) n FROM groups").fetchone()["n"] == 0:
         con.execute("INSERT INTO groups (parent_id, name) VALUES (NULL,'Hospital')")
-        hid = con.execute("SELECT last_insert_rowid()").fetchone()[0]
+        hid = last_id(con)
         for (b, c) in con.execute("SELECT DISTINCT building, idf_closet FROM devices WHERE building IS NOT NULL").fetchall():
             if not c:
                 continue
@@ -337,13 +443,13 @@ def init_db(con: sqlite3.Connection | None = None) -> sqlite3.Connection:
                 bid = exist["id"]
             else:
                 con.execute("INSERT INTO groups (parent_id, name) VALUES (?,?)", (hid, b or "Campus"))
-                bid = con.execute("SELECT last_insert_rowid()").fetchone()[0]
+                bid = last_id(con)
             closet = con.execute("SELECT id FROM groups WHERE parent_id=? AND name=?", (bid, c)).fetchone()
             if closet:
                 gid = closet["id"]
             else:
                 con.execute("INSERT INTO groups (parent_id, name) VALUES (?,?)", (bid, c))
-                gid = con.execute("SELECT last_insert_rowid()").fetchone()[0]
+                gid = last_id(con)
             con.execute("UPDATE devices SET group_id=? WHERE building=? AND idf_closet=?", (gid, b, c))
     con.commit()
     if own:
