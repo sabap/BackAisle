@@ -1,0 +1,255 @@
+{
+  "device": {
+    "protocol": "SNMPv3 authPriv SHA/AES-128",
+    "card": "RMCARD205",
+    "sysObjectID": "1.3.6.1.4.1.3808.1.1.1"
+  },
+  "identity": {
+    "sysDescr": {"oid": "10.20.0.3.10.20.0.5.0", "supported": true, "sample": "UPS SNMP Card"},
+    "sysName": {"oid": "10.20.0.3.10.0.1.5.0", "supported": true, "sample": "RMCARD205"},
+    "ifPhysAddress.1": {"oid": "10.20.0.3.192.168.1.3.1.6.1", "supported": true},
+    "upsBaseIdentModel": {"oid": "10.20.0.3.4.1.3808.1.1.1.1.1.1.0", "supported": true, "sample": "PR2000RT2UC"},
+    "upsBaseIdentName": {"oid": "10.20.0.3.4.1.3808.1.1.1.1.1.2.0", "supported": true, "sample": "RMCARD205"},
+    "upsAdvanceIdentFirmwareRevision": {"oid": "10.20.0.3.4.1.3808.1.1.1.1.2.1.0", "supported": true, "sample": "1.1746"},
+    "upsAdvanceIdentSerialNumber": {"oid": "10.20.0.3.4.1.3808.1.1.1.1.2.3.0", "supported": true},
+    "upsAdvanceIdentAgentFirmwareRevision": {"oid": "10.20.0.3.4.1.3808.1.1.1.1.2.4.0", "supported": true, "sample": "1.4.1"},
+    "upsAdvanceIdentDateOfManufacture": {"oid": "10.20.0.3.4.1.3808.1.1.1.1.2.2.0", "supported": false, "error": "noSuchName"}
+  },
+  "battery": {
+    "upsBaseBatteryStatus": {
+      "oid": "10.20.0.3.4.1.3808.1.1.1.2.1.1.0",
+      "supported": true,
+      "syntax": "INTEGER",
+      "enum": {"1": "unknown", "2": "batteryNormal", "3": "batteryLow", "4": "batteryNotPresent"},
+      "sample_raw": 2,
+      "sample_display": "batteryNormal"
+    },
+    "upsBaseBatteryTimeOnBattery": {
+      "oid": "10.20.0.3.4.1.3808.1.1.1.2.1.2.0",
+      "supported": true,
+      "syntax": "TimeTicks",
+      "scale": "hundredths of a second",
+      "sample_raw": 0,
+      "sample_display": "0 min"
+    },
+    "upsBaseBatteryLastReplaceDate": {
+      "oid": "10.20.0.3.4.1.3808.1.1.1.2.1.3.0",
+      "supported": true,
+      "sample": "09/12/2026"
+    },
+    "upsAdvanceBatteryCapacity": {
+      "oid": "10.20.0.3.4.1.3808.1.1.1.2.2.1.0",
+      "supported": true,
+      "syntax": "Gauge",
+      "unit": "%",
+      "scale": 1,
+      "sample_raw": 100,
+      "sample_display": "100 %"
+    },
+    "upsAdvanceBatteryVoltage": {
+      "oid": "10.20.0.3.4.1.3808.1.1.1.2.2.2.0",
+      "supported": true,
+      "syntax": "INTEGER",
+      "unit": "VDC",
+      "scale": 0.1,
+      "sample_raw": 532,
+      "sample_display": "53.2 V"
+    },
+    "upsAdvanceBatteryTemperature": {
+      "oid": "10.20.0.3.4.1.3808.1.1.1.2.2.3.0",
+      "supported": false,
+      "error": "noSuchName"
+    },
+    "upsAdvanceBatteryRunTimeRemaining": {
+      "oid": "10.20.0.3.4.1.3808.1.1.1.2.2.4.0",
+      "supported": true,
+      "syntax": "TimeTicks",
+      "scale": "hundredths of a second; divide by 100 then 60 for minutes",
+      "sample_raw": 870000,
+      "sample_display": "145 min",
+      "note": "870000/100 = 8700 s = 145 min; matches RFC 1628 upsEstimatedMinutesRemaining"
+    },
+    "upsAdvanceBatteryReplaceIndicator": {
+      "oid": "10.20.0.3.4.1.3808.1.1.1.2.2.5.0",
+      "supported": true,
+      "enum": {"1": "noBatteryNeedsReplacing", "2": "batteryNeedsReplacing"},
+      "sample_raw": 1
+    },
+    "rfcEstMinutesRemaining": {
+      "oid": "10.20.0.3.192.168.1.2.0",
+      "supported": true,
+      "unit": "min",
+      "sample_raw": 145,
+      "note": "integer minutes; prefer for display, CPS TimeTicks as fallback"
+    }
+  },
+  "output": {
+    "upsBaseOutputStatus": {
+      "oid": "10.20.0.3.4.1.3808.1.1.1.4.1.1.0",
+      "supported": true,
+      "enum": {
+        "1": "unknown",
+        "2": "onLine",
+        "3": "onBattery",
+        "4": "onBoost",
+        "5": "onSleep",
+        "6": "off",
+        "7": "rebooting",
+        "8": "onECO",
+        "9": "onBypass",
+        "10": "onBuck",
+        "11": "onOverload"
+      },
+      "sample_raw": 2,
+      "sample_display": "onLine"
+    },
+    "upsAdvanceOutputVoltage": {
+      "oid": "10.20.0.3.4.1.3808.1.1.1.4.2.1.0",
+      "supported": true,
+      "unit": "VAC",
+      "scale": 0.1,
+      "sample_raw": 1161,
+      "sample_display": "116.1 V"
+    },
+    "upsAdvanceOutputFrequency": {
+      "oid": "10.20.0.3.4.1.3808.1.1.1.4.2.2.0",
+      "supported": true,
+      "unit": "Hz",
+      "scale": 0.1,
+      "sample_raw": 600,
+      "sample_display": "60.0 Hz"
+    },
+    "upsAdvanceOutputLoad": {
+      "oid": "10.20.0.3.4.1.3808.1.1.1.4.2.3.0",
+      "supported": true,
+      "unit": "%",
+      "scale": 1,
+      "sample_raw": 6,
+      "sample_display": "6 %"
+    },
+    "upsAdvanceOutputCurrent": {
+      "oid": "10.20.0.3.4.1.3808.1.1.1.4.2.4.0",
+      "supported": true,
+      "unit": "A",
+      "scale": 0.1,
+      "sample_raw": 10,
+      "sample_display": "1.0 A"
+    }
+  },
+  "input": {
+    "upsAdvanceInputLineVoltage": {
+      "oid": "10.20.0.3.4.1.3808.1.1.1.3.2.1.0",
+      "supported": true,
+      "unit": "VAC",
+      "scale": 0.1,
+      "sample_raw": 1161,
+      "sample_display": "116.1 V"
+    },
+    "upsAdvanceInputFrequency": {
+      "oid": "10.20.0.3.4.1.3808.1.1.1.3.2.4.0",
+      "supported": true,
+      "unit": "Hz",
+      "scale": 0.1,
+      "sample_raw": 600,
+      "sample_display": "60.0 Hz"
+    },
+    "upsAdvanceInputStatus": {
+      "oid": "10.20.0.3.4.1.3808.1.1.1.3.2.6.0",
+      "supported": true,
+      "enum": {
+        "1": "normal",
+        "2": "overVoltage",
+        "3": "underVoltage",
+        "4": "frequencyFailure",
+        "5": "blackout",
+        "6": "powerFailure"
+      },
+      "sample_raw": 1
+    }
+  },
+  "environment": {
+    "finding": "envir2_tables_are_the_live_path",
+    "summary": "Legacy scalar envirTemp/envirHumid stay Null. Live ENVIROSENSOR values are environmentSensor2 tables: temp 1/100 of envir2TempUnit (lab unit=Celsius), humidity 1/100 percent. Lab sample 2368 -> 23.68 C -> 74.6 F; 6015 -> 60.1 %RH. Never display 2368 as degrees.",
+    "envirIdentName": {"oid": "10.20.0.3.4.1.3808.1.1.4.1.1.0", "supported": true, "sample": "EnvSensor"},
+    "envirIdentLocation": {"oid": "10.20.0.3.4.1.3808.1.1.4.1.2.0", "supported": true, "sample": "Server Room"},
+    "envirTemperature": {
+      "oid": "10.20.0.3.4.1.3808.1.1.4.2.1.0",
+      "supported": true,
+      "present": true,
+      "syntax": "INTEGER",
+      "unit": "°F",
+      "scale": 0.1,
+      "mib_note": "expressed in 1/10 Fahrenheit",
+      "sample_raw": null,
+      "sample_type": "Null",
+      "sample_display": null,
+      "do_not_display_as": "784 °F — divide by 10 only when an integer is returned"
+    },
+    "envirTempHighThreshold": {"oid": "10.20.0.3.4.1.3808.1.1.4.2.2.0", "supported": true, "unit": "°F", "scale": 1, "sample_raw": 90},
+    "envirTempLowThreshold": {"oid": "10.20.0.3.4.1.3808.1.1.4.2.3.0", "supported": true, "unit": "°F", "scale": 1, "sample_raw": 59},
+    "envirTemperatureCelsius": {"oid": "10.20.0.3.4.1.3808.1.1.4.2.6.0", "supported": true, "sample_raw": null, "sample_type": "Null", "scale": 0.1, "unit": "°C"},
+    "envirHumidity": {
+      "oid": "10.20.0.3.4.1.3808.1.1.4.3.1.0",
+      "supported": true,
+      "present": true,
+      "unit": "%RH",
+      "scale": 1,
+      "sample_raw": null,
+      "sample_type": "Null"
+    },
+    "envirHumidHighThreshold": {"oid": "10.20.0.3.4.1.3808.1.1.4.3.2.0", "supported": true, "sample_raw": 80},
+    "envirHumidLowThreshold": {"oid": "10.20.0.3.4.1.3808.1.1.4.3.3.0", "supported": true, "sample_raw": 20},
+    "envirContactTableSize": {"oid": "10.20.0.3.4.1.3808.1.1.4.4.1.0", "supported": true, "sample_raw": 4},
+    "envirContactStatus": {
+      "oid_base": "10.20.0.3.4.1.3808.1.1.4.4.2.1.3",
+      "supported": true,
+      "indexes": [1, 2, 3, 4],
+      "sample_type": "Null",
+      "note": "names exist (Contact#1..4); status currently Null"
+    },
+    "environmentSensor2": {
+      "oid": "10.20.0.3.4.1.3808.1.1.8",
+      "envir2IdentTableSize": 1,
+      "envir2TempTableSize": 1,
+      "envir2TempUnit": {"oid": "10.20.0.3.4.1.3808.1.1.8.2.2.0", "sample_raw": 1, "enum": {"1": "celsius", "2": "fahrenheit"}},
+      "envir2Temperature": {"oid": "10.20.0.3.4.1.3808.1.1.8.2.3.1.3.1", "scale": 0.01, "sample_raw": 2368, "sample_display": "74.6 F"},
+      "envir2Humidity": {"oid": "10.20.0.3.4.1.3808.1.1.8.3.2.1.3.1", "scale": 0.01, "sample_raw": 6015, "sample_display": "60.1 %RH"},
+      "envir2ContactStatus": {"oid": "10.20.0.3.4.1.3808.1.1.8.4.2.1.5.1", "sample_raw": 1, "enum": {"1": "normal", "2": "abnormal"}}
+    }
+  },
+  "poll_sets": {
+    "status_60s": [
+      "upsBaseOutputStatus",
+      "upsBaseBatteryStatus",
+      "upsAdvanceBatteryCapacity",
+      "upsAdvanceBatteryRunTimeRemaining",
+      "rfcEstMinutesRemaining",
+      "upsAdvanceOutputLoad",
+      "upsAdvanceInputLineVoltage",
+      "upsAdvanceOutputVoltage",
+      "upsAdvanceBatteryReplaceIndicator",
+      "upsBaseBatteryTimeOnBattery"
+    ],
+    "climate_5min": [
+      "envir2IdentSize",
+      "envir2Name",
+      "envir2TempUnit",
+      "envir2Temp",
+      "envir2Humid",
+      "envir2Contact1",
+      "envirIdentName",
+      "envirTemperature",
+      "envirHumidity"
+    ],
+    "identity_on_add": [
+      "upsBaseIdentModel",
+      "upsBaseIdentName",
+      "upsAdvanceIdentSerialNumber",
+      "upsAdvanceIdentFirmwareRevision",
+      "ifPhysAddress.1"
+    ]
+  },
+  "writes": {
+    "policy": "No SET/write in v1 poller. Optional admin-gated battery self-test is not enabled."
+  }
+}

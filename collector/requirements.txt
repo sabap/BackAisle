@@ -1,0 +1,4 @@
+pysnmp>=7.1
+cryptography>=42
+paramiko>=3
+scp>=0.14

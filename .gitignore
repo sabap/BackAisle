@@ -1,0 +1,17 @@
+/data/*.db
+/data/*.db-shm
+/data/*.db-wal
+/logs/
+/storage/
+/secrets.env
+/php.ini
+/collector/__pycache__/
+*.pyc
+public/assets/tpl/
+docs/phase0_walk_live.json
+docs/qc-poll.md
+.idea/
+.vscode/
+*.zip
+profile.zip
+profile_unzip/
