@@ -15,7 +15,8 @@ require __DIR__ . '/../app/templates.php';
 require __DIR__ . '/../app/backup.php';
 require __DIR__ . '/../app/update.php';
 
-$path = ba_request_path();
+try {
+$path = function_exists('ba_request_path') ? ba_request_path() : (rtrim((string)parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH), '/') ?: '/');
 
 if (!ba_is_installed() && $path !== '/setup' && !str_starts_with($path, '/setup')) {
     header('Location: /setup.php');
@@ -129,4 +130,10 @@ switch ($path) {
     default:
         http_response_code(404);
         echo 'Not found';
+}
+} catch (Throwable $e) {
+    @file_put_contents(BA_ROOT . '\\logs\\php-error.log', date('c') . ' INDEX ' . $e->getMessage() . "\n" . $e->getFile() . ':' . $e->getLine() . "\n" . $e->getTraceAsString() . "\n", FILE_APPEND);
+    http_response_code(500);
+    header('Content-Type: text/plain; charset=utf-8');
+    echo 'BackAisle error: ' . $e->getMessage() . "\n" . $e->getFile() . ':' . $e->getLine();
 }

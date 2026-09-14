@@ -22,7 +22,7 @@ function page_login(PDO $db): void {
         $u = trim($_POST['username'] ?? '');
         $p = $_POST['password'] ?? '';
         if (ba_login($db, $u, $p)) {
-            header('Location: /');
+            header('Location: /index.php');
             exit;
         }
         $err = 'Invalid credentials';
@@ -117,7 +117,11 @@ function ba_idf_summaries(PDO $db): array {
 
 function page_dashboard(PDO $db): void {
     $q = trim($_GET['q'] ?? '');
-    $idfs = ba_idf_summaries($db);
+    try {
+        $idfs = ba_idf_summaries($db);
+    } catch (Throwable $e) {
+        $idfs = [];
+    }
     if ($q !== '') {
         $ql = strtolower($q);
         $idfs = array_values(array_filter($idfs, static function ($row) use ($ql) {
@@ -125,7 +129,12 @@ function page_dashboard(PDO $db): void {
             return str_contains($hay, $ql);
         }));
     }
-    $open = (int)$db->query("SELECT COUNT(*) FROM alerts WHERE status='open'")->fetchColumn();
+    $open = 0;
+    try {
+        $open = (int)$db->query("SELECT COUNT(*) FROM alerts WHERE status='open'")->fetchColumn();
+    } catch (Throwable $e) {
+        $open = 0;
+    }
     $nUps = 0; $ok = 0; $batt = 0; $hot = 0; $down = 0; $nRacks = 0;
     foreach ($idfs as $row) {
         $nUps += $row['ups'];

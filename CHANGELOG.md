@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.2] - 2026-09-14
+
+- After login, redirect to /index.php (not /). Index errors are shown as text instead of a blank 500. Port 80 is optional via -HttpPort 80 when Default Web Site is unused.
+
 ## [0.3.1] - 2026-09-14
 
 - Register the PHP FastCGI handler after writing web.config so replacing web.config cannot wipe *.php mappings (IIS 404 on login.php)

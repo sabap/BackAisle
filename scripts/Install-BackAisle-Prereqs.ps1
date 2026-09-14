@@ -10,7 +10,7 @@
     - ODBC Driver 18 for SQL Server (setup wizard)
     - IIS URL Rewrite
     - Python 3.12+ and pip packages (pysnmp, cryptography, paramiko, pyodbc)
-    - IIS site **BackAisle** on port 8080 (never Default Web Site / :80)
+    - IIS site **BackAisle** (default port 8080 so Default Web Site / ColdAisle can keep :80; pass -HttpPort 80 when :80 is free)
     - NTFS grants for the BackAisle app pool
 
     Does NOT install SQL Server. Use setup.php to connect SQLite or an existing SQL instance.
@@ -25,7 +25,7 @@
     Application root. Default C:\inetpub\BackAisle
 
 .PARAMETER HttpPort
-    IIS site port. Default 8080 (leave 80 for other sites)
+    IIS site port. Default 8080 so another site can own :80. Use 80 when this server has no site on :80.
 
 .PARAMETER DeploySource
     Source tree to copy. Default: parent of this script.
