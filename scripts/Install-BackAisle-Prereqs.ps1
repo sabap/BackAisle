@@ -542,11 +542,16 @@ function Install-BackAisleSite([string]$IniPath) {
     Set-ItemProperty "IIS:\AppPools\$PoolName" -Name managedPipelineMode -Value Integrated
     Set-ItemProperty "IIS:\AppPools\$PoolName" -Name processModel.identityType -Value ApplicationPoolIdentity
     $phpCgi = Join-Path $PhpInstallPath 'php-cgi.exe'
-    $phpArgs = "-c $IniPath"
+    $phpArgsQuoted = "-c `"$IniPath`""
+    $phpArgsPlain = "-c $IniPath"
+    $phpArgs = $phpArgsQuoted
     $fcgi = Get-WebConfiguration -Filter 'system.webServer/fastCgi' | Select-Object -ExpandProperty Collection
     $have = $false
     foreach ($app in $fcgi) {
-        if ($app.fullPath -eq $phpCgi -and $app.arguments -eq $phpArgs) { $have = $true }
+        if ($app.fullPath -eq $phpCgi -and ($app.arguments -eq $phpArgsQuoted -or $app.arguments -eq $phpArgsPlain)) {
+            $have = $true
+            $phpArgs = [string]$app.arguments
+        }
     }
     if (-not $have) {
         Add-WebConfiguration -Filter 'system.webServer/fastCgi' -Value @{
@@ -558,6 +563,11 @@ function Install-BackAisleSite([string]$IniPath) {
         }
         Write-Ok 'Registered site-local FastCGI (-c php.ini)'
     }
+    $appcmd = Join-Path $env:windir 'system32\inetsrv\appcmd.exe'
+    if (Test-Path $appcmd) {
+        & $appcmd unlock config /section:system.webServer/handlers | Out-Null
+    }
+    $sitePath = "IIS:\Sites\$SiteName"
     try {
         Get-WebConfiguration -Filter 'system.webServer/fastCgi/application' |
             Where-Object { $_.fullPath -like '*php-cgi.exe' } |
@@ -573,6 +583,11 @@ function Install-BackAisleSite([string]$IniPath) {
         Set-ItemProperty "IIS:\Sites\$SiteName" -Name physicalPath -Value $public
         Set-ItemProperty "IIS:\Sites\$SiteName" -Name applicationPool -Value $PoolName
     }
+    foreach ($hn in @('PHP_BackAisle','PHP_via_FastCGI')) {
+        Remove-WebHandler -Name $hn -PSPath $sitePath -ErrorAction SilentlyContinue
+    }
+    New-WebHandler -Name 'PHP_BackAisle' -PSPath $sitePath -Path '*.php' -Verb '*' -Modules FastCgiModule -ScriptProcessor "$phpCgi|$phpArgs" -ResourceType Either -RequiredAccess Script | Out-Null
+    Write-Ok "PHP handler $phpCgi|$phpArgs"
     # Virtual account exists after the pool is created/started. Never grant the bare
     # pool name (icacls "BackAisle:..." cannot map a SID).
     try { Start-WebAppPool $PoolName } catch { }

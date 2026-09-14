@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.2.8] - 2026-09-14
+
+- IIS 500.19 (0x80070021): site `web.config` no longer contains `<handlers>` or `<rewrite>` (locked/missing module). PHP handler is registered at the site; handlers section is unlocked.
+
 ## [0.2.7] - 2026-09-14
 
 - IIS FastCGI 500 with empty body: duplicate `extension=` lines wrote "already loaded" to stderr; FastCGI treats stderr as 500. php.ini no longer reloads extensions; FastCGI stderrMode IgnoreAndReturn200.
