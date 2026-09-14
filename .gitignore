@@ -17,3 +17,5 @@ docs/qc-poll.md
 *.zip
 profile.zip
 profile_unzip/
+
+data/sessions/
