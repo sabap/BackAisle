@@ -35,7 +35,15 @@ No VM/OS shutdown. No SNMPv1. No SET/write to the UPS except optional admin batt
 
 ## Install
 
-Elevated PowerShell. **Do not run from `C:\Windows\system32`.** Some networks intercept `raw.githubusercontent.com` and save an HTML page instead of the script (first line will be `<!DOCTYPE html>` instead of `#Requires`). Use `curl.exe --fail` and confirm the file before running:
+Elevated PowerShell. **Do not run from `C:\Windows\system32`.**
+
+Some networks:
+
+- Intercept `raw.githubusercontent.com` and save HTML (`<!DOCTYPE html>`) instead of the script
+- Fail GitHub TLS revocation checks (`CRYPT_E_NO_REVOCATION_CHECK` / curl 35) -- retry with `--ssl-no-revoke`
+- Use Windows PowerShell 5.1, which misparses UTF-8 em-dashes unless the file has a BOM
+
+Use `curl.exe --fail --ssl-no-revoke`, confirm the first line, then run:
 
 ```powershell
 $dir = Join-Path $env:TEMP 'BackAisle-install'
@@ -44,19 +52,26 @@ Set-Location $dir
 $out = Join-Path $dir 'Install-BackAisle.ps1'
 $urls = @(
   'https://github.com/sabap/BackAisle/releases/latest/download/Install-BackAisle.ps1',
-  'https://cdn.jsdelivr.net/gh/sabap/BackAisle@main/Install-BackAisle.ps1',
-  'https://raw.githubusercontent.com/sabap/BackAisle/main/Install-BackAisle.ps1'
+  'https://cdn.jsdelivr.net/gh/sabap/BackAisle@v0.2.1/Install-BackAisle.ps1',
+  'https://cdn.jsdelivr.net/gh/sabap/BackAisle@main/Install-BackAisle.ps1'
 )
 $ok = $false
 foreach ($u in $urls) {
   Write-Host "Trying $u"
-  & curl.exe -fsSL --max-time 60 -o $out $u
+  & curl.exe -fsSL --ssl-no-revoke --max-time 60 -o $out $u
   if ($LASTEXITCODE -ne 0) { continue }
-  $head = Get-Content -LiteralPath $out -TotalCount 1
+  $head = Get-Content -LiteralPath $out -TotalCount 1 -Encoding UTF8
   if ($head -match 'Requires') { $ok = $true; break }
   Write-Host "Not a script (got: $head)"
 }
 if (-not $ok) { throw 'Could not download Install-BackAisle.ps1. Clone https://github.com/sabap/BackAisle instead.' }
+# Windows PowerShell 5.1 needs a UTF-8 BOM to parse the file.
+$utf8bom = New-Object System.Text.UTF8Encoding $true
+$bytes = [IO.File]::ReadAllBytes($out)
+$skip = 0
+if ($bytes.Length -ge 3 -and $bytes[0] -eq 239 -and $bytes[1] -eq 187 -and $bytes[2] -eq 191) { $skip = 3 }
+$text = [Text.Encoding]::UTF8.GetString($bytes, $skip, $bytes.Length - $skip)
+[IO.File]::WriteAllText($out, $text, $utf8bom)
 Get-Content $out -TotalCount 3
 Set-ExecutionPolicy Bypass -Scope Process -Force
 .\Install-BackAisle.ps1 -OpenSetup -RegisterCollectorTask

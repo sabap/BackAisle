@@ -1,4 +1,4 @@
-#Requires -RunAsAdministrator
+﻿#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
     Install BackAisle on Windows (IIS + PHP + ODBC + Python) and deploy the latest release from GitHub.
@@ -18,7 +18,7 @@
            - Install ODBC Driver 18 for SQL Server
            - Install URL Rewrite
            - Install Python 3.12+ and pip packages
-           - Create IIS site **BackAisle** on port 8080 (never Default Web Site)
+           - Create IIS site BackAisle on port 8080 (never Default Web Site)
       5. Optionally register collector/writer scheduled tasks
       6. Opens the web setup wizard (setup.php)
 
@@ -27,18 +27,19 @@
       - Create the database or admin user (use setup.php)
       - Modify ColdAisle / Default Web Site / port 80
 
-    Recommended (elevated PowerShell, not from C:\Windows\system32).
-    Prefer the GitHub release asset or jsDelivr — some networks replace
-    raw.githubusercontent.com with an HTML interstitial:
+    This file is ASCII + UTF-8 BOM so Windows PowerShell 5.1 can parse it.
+    Some networks intercept raw.githubusercontent.com (HTML interstitial) or
+    fail GitHub TLS revocation checks (CRYPT_E_NO_REVOCATION_CHECK). Prefer
+    the GitHub release asset or jsDelivr, and pass --ssl-no-revoke to curl.
 
       $out = Join-Path $env:TEMP 'Install-BackAisle.ps1'
-      curl.exe -fsSL -o $out https://github.com/sabap/BackAisle/releases/latest/download/Install-BackAisle.ps1
+      curl.exe -fsSL --ssl-no-revoke -o $out https://github.com/sabap/BackAisle/releases/latest/download/Install-BackAisle.ps1
       Get-Content $out -TotalCount 1   # must be: #Requires -RunAsAdministrator
       Set-ExecutionPolicy Bypass -Scope Process -Force
       & $out -OpenSetup
 
 .PARAMETER Version
-    Tag without/with v (e.g. 0.2.0) or branch main. Default: latest GitHub Release / tag.
+    Tag without/with v (e.g. 0.2.1) or branch main. Default: latest GitHub Release / tag.
 
 .PARAMETER SiteRoot
     Application root. Default C:\inetpub\BackAisle
@@ -90,11 +91,57 @@ function Ensure-Tls12 {
         [Net.ServicePointManager]::SecurityProtocol = `
             [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     } catch { }
+    try { [Net.ServicePointManager]::CheckCertificateRevocationList = $false } catch { }
+}
+
+function Invoke-BaDownload {
+    param([string]$Uri, [string]$OutFile, [int]$MinBytes = 64)
+    Ensure-Tls12
+    $dir = Split-Path -Parent $OutFile
+    if ($dir -and -not (Test-Path $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+    $ua = 'BackAisle-Installer'
+    $ok = $false
+    if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
+        foreach ($revoke in @($false, $true)) {
+            $curlArgs = @(
+                '-fsSL', '-L', '--retry', '2', '--max-time', '120',
+                '-A', $ua, '-o', $OutFile, $Uri
+            )
+            if ($revoke) { $curlArgs = @('--ssl-no-revoke') + $curlArgs }
+            $err = Join-Path $env:TEMP ('ba-curl-{0}.err' -f [guid]::NewGuid().ToString('N'))
+            try {
+                $p = Start-Process -FilePath 'curl.exe' -ArgumentList $curlArgs -Wait -PassThru -NoNewWindow -RedirectStandardError $err
+                if ($p.ExitCode -eq 0 -and (Test-Path -LiteralPath $OutFile) -and ((Get-Item -LiteralPath $OutFile).Length -ge $MinBytes)) {
+                    $ok = $true
+                    break
+                }
+            } catch { }
+            finally { Remove-Item -LiteralPath $err -Force -ErrorAction SilentlyContinue }
+        }
+    }
+    if (-not $ok) {
+        try {
+            Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing -Headers @{ 'User-Agent' = $ua }
+            if ((Test-Path -LiteralPath $OutFile) -and ((Get-Item -LiteralPath $OutFile).Length -ge $MinBytes)) {
+                $ok = $true
+            }
+        } catch {
+            Write-Warn $_.Exception.Message
+        }
+    }
+    if (-not $ok) { throw "Download failed: $Uri" }
 }
 
 function Get-GitHubJson([string]$Url) {
-    $headers = @{ Accept = 'application/vnd.github+json'; 'User-Agent' = 'BackAisle-Installer' }
-    return Invoke-RestMethod -Uri $Url -Headers $headers -UseBasicParsing
+    $tmp = Join-Path $env:TEMP ("ba-gh-{0}.json" -f [guid]::NewGuid().ToString('N'))
+    try {
+        Invoke-BaDownload -Uri $Url -OutFile $tmp -MinBytes 2
+        return (Get-Content -LiteralPath $tmp -Raw -Encoding UTF8 | ConvertFrom-Json)
+    } finally {
+        Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Resolve-LatestVersion {
@@ -115,19 +162,26 @@ function Resolve-LatestVersion {
     } catch {
         Write-Warn "No formal GitHub Release (will use tags): $($_.Exception.Message)"
     }
-    $tags = Get-GitHubJson "https://api.github.com/repos/$Owner/$Repo/tags?per_page=30"
-    $best = $null
-    foreach ($t in $tags) {
-        $tv = ([string]$t.name) -replace '^[vV]', ''
-        if ($tv -notmatch '^\d+\.\d+') { continue }
-        if ($null -eq $best) { $best = $tv }
-        else {
-            try { if ([version]$tv -gt [version]$best) { $best = $tv } } catch { if ($tv -gt $best) { $best = $tv } }
+    try {
+        $tags = Get-GitHubJson "https://api.github.com/repos/$Owner/$Repo/tags?per_page=30"
+        $best = $null
+        foreach ($t in $tags) {
+            $tv = ([string]$t.name) -replace '^[vV]', ''
+            if ($tv -notmatch '^\d+\.\d+') { continue }
+            if ($null -eq $best) { $best = $tv }
+            else {
+                try { if ([version]$tv -gt [version]$best) { $best = $tv } } catch { if ($tv -gt $best) { $best = $tv } }
+            }
         }
+        if ($best) {
+            Write-Ok "Latest version tag: v$best"
+            return $best
+        }
+    } catch {
+        Write-Warn "Could not list tags: $($_.Exception.Message)"
     }
-    if (-not $best) { throw "No version tags on $Owner/$Repo. Push v0.1.0 first." }
-    Write-Ok "Latest version tag: v$best"
-    return $best
+    Write-Warn 'Falling back to branch main'
+    return 'main'
 }
 
 function Find-AppRoot([string]$ExtractDir) {
@@ -145,21 +199,33 @@ function Find-AppRoot([string]$ExtractDir) {
 function Download-Release {
     param([string]$Owner, [string]$Repo, [string]$Version, [string]$WorkRoot)
     $ref = $Version.Trim()
+    $urls = @()
     if ($ref -match '^(?i)(main|master)$') {
-        $zipUrl = "https://github.com/$Owner/$Repo/archive/refs/heads/$($ref.ToLower()).zip"
         $label = $ref.ToLower()
+        $urls += "https://codeload.github.com/$Owner/$Repo/zip/refs/heads/$label"
+        $urls += "https://github.com/$Owner/$Repo/archive/refs/heads/$label.zip"
     } else {
         $ref = $ref -replace '^[vV]', ''
-        $zipUrl = "https://github.com/$Owner/$Repo/archive/refs/tags/v$ref.zip"
         $label = "v$ref"
+        $urls += "https://codeload.github.com/$Owner/$Repo/zip/refs/tags/$label"
+        $urls += "https://github.com/$Owner/$Repo/archive/refs/tags/$label.zip"
+        $urls += "https://codeload.github.com/$Owner/$Repo/zip/refs/heads/main"
     }
     $zipPath = Join-Path $WorkRoot "BackAisle-$label.zip"
     $extractRoot = Join-Path $WorkRoot 'extract'
     Write-Step "Downloading $Owner/$Repo $label"
-    Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
-    if (-not (Test-Path $zipPath) -or ((Get-Item $zipPath).Length -lt 1000)) {
-        throw "Download failed: $zipPath"
+    $got = $false
+    foreach ($zipUrl in $urls) {
+        try {
+            Write-Host "    Trying $zipUrl"
+            Invoke-BaDownload -Uri $zipUrl -OutFile $zipPath -MinBytes 1000
+            $got = $true
+            break
+        } catch {
+            Write-Warn $_.Exception.Message
+        }
     }
+    if (-not $got) { throw "Could not download $Owner/$Repo $label zip" }
     Write-Ok ("Downloaded {0:N0} bytes" -f (Get-Item $zipPath).Length)
     if (Test-Path $extractRoot) { Remove-Item $extractRoot -Recurse -Force }
     New-Item -ItemType Directory -Path $extractRoot -Force | Out-Null
@@ -187,23 +253,23 @@ try {
     $appRoot = Download-Release -Owner $GitHubOwner -Repo $GitHubRepo -Version $ver -WorkRoot $work
     $prereq = Join-Path $appRoot 'scripts\Install-BackAisle-Prereqs.ps1'
     if (-not (Test-Path $prereq)) {
-        throw "Missing $prereq — this release is too old. Pass -Version main"
+        throw "Missing $prereq - this release is too old. Pass -Version main"
     }
     Write-Step 'Running platform + deploy script'
-    $args = @{
+    $prereqArgs = @{
         PhpVersion       = $PhpVersion
         PhpInstallPath   = $PhpInstallPath
         SiteRoot         = $SiteRoot
         HttpPort         = $HttpPort
         DeploySource     = $appRoot
     }
-    if ($SkipOdbc) { $args.SkipOdbc = $true }
-    if ($SkipUrlRewrite) { $args.SkipUrlRewrite = $true }
-    if ($SkipPython) { $args.SkipPython = $true }
-    if ($Force) { $args.Force = $true }
-    if ($OpenSetup) { $args.OpenSetup = $true }
-    if ($RegisterCollectorTask) { $args.RegisterCollectorTask = $true }
-    & $prereq @args
+    if ($SkipOdbc) { $prereqArgs.SkipOdbc = $true }
+    if ($SkipUrlRewrite) { $prereqArgs.SkipUrlRewrite = $true }
+    if ($SkipPython) { $prereqArgs.SkipPython = $true }
+    if ($Force) { $prereqArgs.Force = $true }
+    if ($OpenSetup) { $prereqArgs.OpenSetup = $true }
+    if ($RegisterCollectorTask) { $prereqArgs.RegisterCollectorTask = $true }
+    & $prereq @prereqArgs
     if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) {
         throw "Install-BackAisle-Prereqs.ps1 exited $LASTEXITCODE"
     }

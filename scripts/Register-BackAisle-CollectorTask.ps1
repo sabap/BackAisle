@@ -1,4 +1,4 @@
-#Requires -RunAsAdministrator
+﻿#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
     Register Task Scheduler jobs for the BackAisle SNMPv3 collector and writer.

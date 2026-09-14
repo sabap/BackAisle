@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.1] - 2026-09-14
+
+- Installer is ASCII + UTF-8 BOM so Windows PowerShell 5.1 does not treat em-dashes as `"` and fail to parse
+- Downloads retry with curl `--ssl-no-revoke` (CRYPT_E_NO_REVOCATION_CHECK on locked-down networks)
+- Zip fetch tries `codeload.github.com` before `github.com`
+
 ## [0.2.0] - 2026-09-14
 
 - Windows installer (`Install-BackAisle.ps1`) modeled on ColdAisle: IIS roles, VC++, PHP, ODBC 18, URL Rewrite, Python, own site on :8080

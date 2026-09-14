@@ -1,4 +1,4 @@
-#Requires -RunAsAdministrator
+﻿#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
     Installs IIS + PHP + ODBC + Python prerequisites for BackAisle and deploys the app.
@@ -70,6 +70,7 @@ function Ensure-Tls12 {
         [Net.ServicePointManager]::SecurityProtocol = `
             [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     } catch { }
+    try { [Net.ServicePointManager]::CheckCertificateRevocationList = $false } catch { }
 }
 
 function Test-CommandExists([string]$Name) {
@@ -78,6 +79,7 @@ function Test-CommandExists([string]$Name) {
 
 function Download-File([string]$Uri, [string]$OutFile) {
     Ensure-Tls12
+    try { [Net.ServicePointManager]::CheckCertificateRevocationList = $false } catch { }
     Write-Host "    Downloading: $Uri"
     if ((Test-Path $OutFile) -and -not $Force) {
         Write-Ok "Already present: $OutFile"
@@ -85,15 +87,31 @@ function Download-File([string]$Uri, [string]$OutFile) {
     }
     $dir = Split-Path -Parent $OutFile
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $ok = $false
     if (Test-CommandExists 'curl.exe') {
-        & curl.exe -fsSL -L --retry 3 -o $OutFile $Uri
-        if ($LASTEXITCODE -ne 0) { throw "curl download failed: $Uri" }
-    } else {
-        Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing
+        foreach ($revoke in @($false, $true)) {
+            $curlArgs = @('-fsSL', '-L', '--retry', '3', '--max-time', '180', '-A', 'BackAisle-Installer', '-o', $OutFile, $Uri)
+            if ($revoke) { $curlArgs = @('--ssl-no-revoke') + $curlArgs }
+            $err = Join-Path $env:TEMP ('ba-curl-{0}.err' -f [guid]::NewGuid().ToString('N'))
+            try {
+                $p = Start-Process -FilePath 'curl.exe' -ArgumentList $curlArgs -Wait -PassThru -NoNewWindow -RedirectStandardError $err
+                if ($p.ExitCode -eq 0 -and (Test-Path -LiteralPath $OutFile) -and ((Get-Item -LiteralPath $OutFile).Length -ge 1024)) {
+                    $ok = $true
+                    break
+                }
+            } catch { }
+            finally { Remove-Item -LiteralPath $err -Force -ErrorAction SilentlyContinue }
+        }
     }
-    if (-not (Test-Path $OutFile) -or ((Get-Item $OutFile).Length -lt 1024)) {
-        throw "Download failed or file too small: $OutFile"
+    if (-not $ok) {
+        try {
+            Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing
+            if ((Test-Path -LiteralPath $OutFile) -and ((Get-Item -LiteralPath $OutFile).Length -ge 1024)) {
+                $ok = $true
+            }
+        } catch { }
     }
+    if (-not $ok) { throw "Download failed or file too small: $OutFile" }
 }
 
 function Set-IniValue {
@@ -176,6 +194,14 @@ function Get-PhpDownloadUrl([string]$Version) {
             $resp = Invoke-WebRequest -Uri $url -Method Head -UseBasicParsing -TimeoutSec 20
             if ($resp.StatusCode -ge 200 -and $resp.StatusCode -lt 400) { return $url }
         } catch { }
+        if (Test-CommandExists 'curl.exe') {
+            $err = Join-Path $env:TEMP ('ba-phphead-{0}.err' -f [guid]::NewGuid().ToString('N'))
+            try {
+                $p = Start-Process -FilePath 'curl.exe' -ArgumentList @('-fsSI','--ssl-no-revoke','--max-time','20','-o','NUL',$url) -Wait -PassThru -NoNewWindow -RedirectStandardError $err
+                if ($p.ExitCode -eq 0) { return $url }
+            } catch { }
+            finally { Remove-Item -LiteralPath $err -Force -ErrorAction SilentlyContinue }
+        }
     }
     throw "Could not find PHP $Version NTS x64 on windows.php.net. Pass -PhpVersion from https://windows.php.net/download/"
 }
