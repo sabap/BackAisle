@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.2.5] - 2026-09-14
+
+- Collector watch task uses a 3650-day repetition (not TimeSpan.MaxValue, which Task Scheduler rejects as P99999999DT23H59M59S)
+
 ## [0.2.4] - 2026-09-14
 
 - NTFS grants use `IIS APPPOOL\BackAisle` (not the bare pool name). icacls stderr no longer aborts the install.

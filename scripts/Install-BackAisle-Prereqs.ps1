@@ -588,7 +588,10 @@ Install-BackAisleSite -IniPath $ini
 
 if ($RegisterCollectorTask) {
     $reg = Join-Path $SiteRoot 'scripts\Register-BackAisle-CollectorTask.ps1'
-    if (Test-Path $reg) { & $reg -SiteRoot $SiteRoot }
+    if (Test-Path $reg) {
+        try { & $reg -SiteRoot $SiteRoot }
+        catch { Write-Warn "Collector task registration: $($_.Exception.Message)" }
+    }
 }
 
 $setupUrl = "http://localhost:$HttpPort/setup.php"

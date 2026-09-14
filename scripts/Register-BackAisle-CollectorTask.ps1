@@ -40,9 +40,16 @@ $writer = Join-Path $SiteRoot 'collector\writer.py'
 $watchdog = Join-Path $SiteRoot 'collector\watchdog.ps1'
 if (-not (Test-Path $collector)) { throw "Missing $collector" }
 
+function New-BaRepeatTrigger([int]$Minutes = 5) {
+    # Do not use [TimeSpan]::MaxValue -- it becomes P99999999DT23H59M59S (0x80041318).
+    return New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes(1)) `
+        -RepetitionInterval (New-TimeSpan -Minutes $Minutes) `
+        -RepetitionDuration (New-TimeSpan -Days 3650)
+}
+
 function Register-BaTask([string]$Name, [string]$Exe, [string]$Args, [string]$Every) {
     $action = New-ScheduledTaskAction -Execute $Exe -Argument $Args -WorkingDirectory $SiteRoot
-    $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).Date -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration ([TimeSpan]::MaxValue)
+    $trigger = New-BaRepeatTrigger -Minutes 5
     $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 0)
     Unregister-ScheduledTask -TaskName $Name -Confirm:$false -ErrorAction SilentlyContinue
@@ -62,10 +69,16 @@ Unregister-ScheduledTask -TaskName 'BackAisleWriter' -Confirm:$false -ErrorActio
 Register-ScheduledTask -TaskName 'BackAisleWriter' -Action $wAction -Trigger $boot -Principal $prin -Settings $set -Force | Out-Null
 
 if (Test-Path $watchdog) {
-    $wdAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$watchdog`""
-    $wdTrig = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration ([TimeSpan]::MaxValue)
-    Unregister-ScheduledTask -TaskName 'BackAisleCollectorWatch' -Confirm:$false -ErrorAction SilentlyContinue
-    Register-ScheduledTask -TaskName 'BackAisleCollectorWatch' -Action $wdAction -Trigger $wdTrig -Principal $prin -Settings $set -Force | Out-Null
+    try {
+        $wdAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$watchdog`"" -WorkingDirectory $SiteRoot
+        $wdTrig = New-BaRepeatTrigger -Minutes 5
+        $wdBoot = New-ScheduledTaskTrigger -AtStartup
+        Unregister-ScheduledTask -TaskName 'BackAisleCollectorWatch' -Confirm:$false -ErrorAction SilentlyContinue
+        Register-ScheduledTask -TaskName 'BackAisleCollectorWatch' -Action $wdAction -Trigger @($wdBoot, $wdTrig) -Principal $prin -Settings $set -Force | Out-Null
+        Write-Host 'Registered BackAisleCollectorWatch'
+    } catch {
+        Write-Warning "BackAisleCollectorWatch not registered: $($_.Exception.Message)"
+    }
 }
 
 Write-Host "BackAisle collector/writer tasks registered. Python: $PythonExe"
