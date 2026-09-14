@@ -10,20 +10,29 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-if (-not $PythonExe) {
-    $cmd = Get-Command python -ErrorAction SilentlyContinue
-    if ($cmd) { $PythonExe = $cmd.Source }
+function Test-BaPython([string]$Path) {
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return $false }
+    if ($Path -match '(?i)\\WindowsApps\\') { return $false }
+    $item = Get-Item -LiteralPath $Path -ErrorAction SilentlyContinue
+    return ($item -and $item.Length -ge 2048)
 }
-if (-not $PythonExe -or -not (Test-Path $PythonExe)) {
+if ($PythonExe -and -not (Test-BaPython $PythonExe)) { $PythonExe = '' }
+if (-not $PythonExe) {
     foreach ($c in @(
         "$env:ProgramFiles\Python312\python.exe",
-        "$env:LocalAppData\Programs\Python\Python312\python.exe"
+        "$env:ProgramFiles\Python313\python.exe",
+        "$env:LocalAppData\Programs\Python\Python312\python.exe",
+        "$env:LocalAppData\Programs\Python\Python313\python.exe"
     )) {
-        if (Test-Path $c) { $PythonExe = $c; break }
+        if (Test-BaPython $c) { $PythonExe = $c; break }
     }
 }
-if (-not $PythonExe -or -not (Test-Path $PythonExe)) {
-    throw 'Python not found. Install Python 3.12+ and re-run.'
+if (-not $PythonExe) {
+    $cmd = Get-Command python.exe -ErrorAction SilentlyContinue
+    if ($cmd -and (Test-BaPython $cmd.Source)) { $PythonExe = $cmd.Source }
+}
+if (-not $PythonExe) {
+    throw 'Python not found. Install Python 3.12+ from python.org (not the Microsoft Store stub) and re-run.'
 }
 
 $collector = Join-Path $SiteRoot 'collector\collector.py'

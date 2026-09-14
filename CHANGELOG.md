@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.2.3] - 2026-09-14
+
+- Ignore the Microsoft Store `WindowsApps\python.exe` stub; install CPython 3.12 from python.org when no real interpreter is present
+
 ## [0.2.2] - 2026-09-14
 
 - PHP download no longer trusts a HEAD 302 on windows.php.net (8.3.32 left /releases/ and 404s). Tries the 8.3 latest zip, archives, then releases.json, and only accepts a real ZIP.

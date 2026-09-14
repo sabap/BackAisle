@@ -362,31 +362,115 @@ function Install-UrlRewrite {
     Write-Ok 'URL Rewrite installed'
 }
 
+function Test-RealPythonExe([string]$Path) {
+    if (-not $Path) { return $false }
+    if (-not (Test-Path -LiteralPath $Path)) { return $false }
+    $full = [IO.Path]::GetFullPath($Path)
+    if ($full -match '(?i)\\WindowsApps\\') { return $false }
+    $item = Get-Item -LiteralPath $full -ErrorAction SilentlyContinue
+    if (-not $item -or $item.Length -lt 2048) { return $false }
+    $old = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out = & $full -c "import sys; print('%d.%d' % sys.version_info[:2])" 2>&1
+        if ($LASTEXITCODE -ne 0) { return $false }
+        $ver = ([string]$out).Trim()
+        if ($ver -notmatch '^(\d+)\.(\d+)$') { return $false }
+        $maj = [int]$Matches[1]; $min = [int]$Matches[2]
+        return ($maj -gt 3) -or ($maj -eq 3 -and $min -ge 12)
+    } catch {
+        return $false
+    } finally {
+        $ErrorActionPreference = $old
+    }
+}
+
+function Find-RealPython {
+    $candidates = New-Object System.Collections.Generic.List[string]
+    foreach ($c in @(
+        "$env:ProgramFiles\Python312\python.exe",
+        "$env:ProgramFiles\Python313\python.exe",
+        "$env:LocalAppData\Programs\Python\Python312\python.exe",
+        "$env:LocalAppData\Programs\Python\Python313\python.exe"
+    )) {
+        if (Test-Path -LiteralPath $c) { [void]$candidates.Add($c) }
+    }
+    foreach ($root in @("$env:ProgramFiles", "$env:LocalAppData\Programs\Python")) {
+        if (Test-Path $root) {
+            Get-ChildItem -Path $root -Directory -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -match '^Python3\d' } |
+                ForEach-Object {
+                    $p = Join-Path $_.FullName 'python.exe'
+                    if (Test-Path -LiteralPath $p) { [void]$candidates.Add($p) }
+                }
+        }
+    }
+    $pyLauncher = Get-Command py.exe -ErrorAction SilentlyContinue
+    if ($pyLauncher -and $pyLauncher.Source -notmatch '(?i)\\WindowsApps\\') {
+        $old = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            foreach ($tag in @('-3.12', '-3.13', '-3')) {
+                $loc = & py.exe $tag -c "import sys; print(sys.executable)" 2>$null
+                if ($LASTEXITCODE -eq 0 -and $loc) {
+                    $t = ([string]$loc).Trim()
+                    if ($t) { $candidates.Insert(0, $t) }
+                }
+            }
+        } catch { }
+        finally { $ErrorActionPreference = $old }
+    }
+    $cmd = Get-Command python.exe -ErrorAction SilentlyContinue
+    if ($cmd -and $cmd.Source -notmatch '(?i)\\WindowsApps\\') { [void]$candidates.Add($cmd.Source) }
+    foreach ($c in $candidates) {
+        if (Test-RealPythonExe $c) { return $c }
+    }
+    return $null
+}
+
 function Install-Python {
     if ($SkipPython) { Write-Warn 'Skipping Python'; return }
     Write-Step 'Python 3.12+'
-    $py = $null
-    $cmd = Get-Command python -ErrorAction SilentlyContinue
-    if ($cmd) { $py = $cmd.Source }
-    foreach ($c in @("$env:ProgramFiles\Python312\python.exe", "$env:LocalAppData\Programs\Python\Python312\python.exe")) {
-        if (-not $py -and (Test-Path $c)) { $py = $c }
-    }
+    $py = Find-RealPython
     if ($py -and -not $Force) {
         Write-Ok "Python present: $py"
     } else {
+        $stub = Get-Command python.exe -ErrorAction SilentlyContinue
+        if ($stub -and $stub.Source -match '(?i)\\WindowsApps\\') {
+            Write-Warn "Ignoring Microsoft Store python stub: $($stub.Source)"
+        }
         $exe = Join-Path $env:TEMP 'python-3.12.10-amd64.exe'
         Download-File -Uri 'https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe' -OutFile $exe
-        Start-Process -FilePath $exe -ArgumentList '/quiet','InstallAllUsers=1','PrependPath=1','Include_pip=1','Include_test=0' -Wait
-        $py = "$env:ProgramFiles\Python312\python.exe"
+        Write-Host '    Installing Python 3.12.10 for all users...'
+        $p = Start-Process -FilePath $exe -ArgumentList '/quiet','InstallAllUsers=1','PrependPath=1','Include_pip=1','Include_test=0','SimpleInstall=1' -Wait -PassThru
+        if ($p.ExitCode -notin 0, 3010) {
+            Write-Warn "Python installer exit $($p.ExitCode)"
+        }
+        $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
+        $py = Find-RealPython
+        if (-not $py -and (Test-Path "$env:ProgramFiles\Python312\python.exe")) {
+            $py = "$env:ProgramFiles\Python312\python.exe"
+        }
+        if (-not $py) { throw 'Python 3.12 install finished but python.exe was not found. Install from https://www.python.org/downloads/windows/ (disable App execution aliases for python.exe) and re-run.' }
         Write-Ok "Python installed: $py"
     }
     $req = Join-Path $SiteRoot 'collector\requirements.txt'
-    if ((Test-Path $py) -and (Test-Path $req)) {
-        Write-Host '    pip install -r collector/requirements.txt'
+    if (-not (Test-Path -LiteralPath $req)) {
+        Write-Warn "No collector/requirements.txt at $req"
+        return
+    }
+    Write-Host "    $py -m pip install -r collector/requirements.txt"
+    $old = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
         & $py -m pip install --upgrade pip
         & $py -m pip install -r $req
-        Write-Ok 'Python packages installed (pysnmp, cryptography, paramiko, pyodbc)'
+        $code = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $old
     }
+    if ($code -ne 0) { throw "pip install failed (exit $code) using $py" }
+    Write-Ok "Python packages installed (pysnmp, cryptography, paramiko, pyodbc) via $py"
 }
 
 function Deploy-AppFiles {

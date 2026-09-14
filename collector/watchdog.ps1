@@ -1,9 +1,20 @@
 $py = $env:BACKAISLE_PYTHON
-if (-not $py) {
-    $cmd = Get-Command python -ErrorAction SilentlyContinue
-    if ($cmd) { $py = $cmd.Source }
+if (-not $py -or $py -match '(?i)\\WindowsApps\\' -or -not (Test-Path -LiteralPath $py)) {
+    $py = $null
+    foreach ($c in @(
+        "$env:ProgramFiles\Python312\python.exe",
+        "$env:ProgramFiles\Python313\python.exe",
+        "$env:LocalAppData\Programs\Python\Python312\python.exe",
+        'C:\Python312\python.exe'
+    )) {
+        if ($c -and (Test-Path -LiteralPath $c)) { $py = $c; break }
+    }
 }
-if (-not $py) { $py = 'C:\Python312\python.exe' }
+if (-not $py) {
+    $cmd = Get-Command python.exe -ErrorAction SilentlyContinue
+    if ($cmd -and $cmd.Source -notmatch '(?i)\\WindowsApps\\') { $py = $cmd.Source }
+}
+if (-not $py) { throw 'watchdog: real python.exe not found (Microsoft Store stub is ignored)' }
 function Ensure-Proc($script, $pidFile, $stdoutLog, $stderrLog) {
     $running = $false
     if (Test-Path $pidFile) {
