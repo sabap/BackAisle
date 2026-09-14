@@ -605,12 +605,12 @@ function Install-BackAisleSite([string]$IniPath) {
         Set-ItemProperty "IIS:\Sites\$SiteName" -Name physicalPath -Value $public
         Set-ItemProperty "IIS:\Sites\$SiteName" -Name applicationPool -Value $PoolName
     }
+    Write-SiteWebConfig
     foreach ($hn in @('PHP_BackAisle','PHP_via_FastCGI')) {
         Remove-WebHandler -Name $hn -PSPath $sitePath -ErrorAction SilentlyContinue
     }
     New-WebHandler -Name 'PHP_BackAisle' -PSPath $sitePath -Path '*.php' -Verb '*' -Modules FastCgiModule -ScriptProcessor "$phpCgi|$phpArgs" -ResourceType Either -RequiredAccess Script | Out-Null
     Write-Ok "PHP handler $phpCgi|$phpArgs"
-    Write-SiteWebConfig
     # Virtual account exists after the pool is created/started. Never grant the bare
     # pool name (icacls "BackAisle:..." cannot map a SID).
     try { Start-WebAppPool $PoolName } catch { }

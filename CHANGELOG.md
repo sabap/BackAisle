@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.1] - 2026-09-14
+
+- Register the PHP FastCGI handler after writing web.config so replacing web.config cannot wipe *.php mappings (IIS 404 on login.php)
+
 ## [0.3.0] - 2026-09-14
 
 - IIS routes are real `*.php` files (login.php, fleet.php, ...). URL Rewrite is no longer required, so /login is not a 404.
