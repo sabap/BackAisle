@@ -27,13 +27,15 @@
       - Create the database or admin user (use setup.php)
       - Modify ColdAisle / Default Web Site / port 80
 
-    Recommended:
+    Recommended (elevated PowerShell, not from C:\Windows\system32).
+    Prefer the GitHub release asset or jsDelivr — some networks replace
+    raw.githubusercontent.com with an HTML interstitial:
 
-      Invoke-WebRequest -Uri "https://raw.githubusercontent.com/sabap/BackAisle/main/Install-BackAisle.ps1" `
-        -OutFile .\Install-BackAisle.ps1
-      notepad .\Install-BackAisle.ps1
+      $out = Join-Path $env:TEMP 'Install-BackAisle.ps1'
+      curl.exe -fsSL -o $out https://github.com/sabap/BackAisle/releases/latest/download/Install-BackAisle.ps1
+      Get-Content $out -TotalCount 1   # must be: #Requires -RunAsAdministrator
       Set-ExecutionPolicy Bypass -Scope Process -Force
-      .\Install-BackAisle.ps1 -OpenSetup
+      & $out -OpenSetup
 
 .PARAMETER Version
     Tag without/with v (e.g. 0.2.0) or branch main. Default: latest GitHub Release / tag.

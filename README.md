@@ -35,13 +35,39 @@ No VM/OS shutdown. No SNMPv1. No SET/write to the UPS except optional admin batt
 
 ## Install
 
-Recommended (elevated PowerShell; review the script first):
+Elevated PowerShell. **Do not run from `C:\Windows\system32`.** Some networks intercept `raw.githubusercontent.com` and save an HTML page instead of the script (first line will be `<!DOCTYPE html>` instead of `#Requires`). Use `curl.exe --fail` and confirm the file before running:
 
 ```powershell
-Invoke-WebRequest -Uri "https://raw.githubusercontent.com/sabap/BackAisle/main/Install-BackAisle.ps1" `
-  -OutFile .\Install-BackAisle.ps1
+$dir = Join-Path $env:TEMP 'BackAisle-install'
+New-Item -ItemType Directory -Force -Path $dir | Out-Null
+Set-Location $dir
+$out = Join-Path $dir 'Install-BackAisle.ps1'
+$urls = @(
+  'https://github.com/sabap/BackAisle/releases/latest/download/Install-BackAisle.ps1',
+  'https://cdn.jsdelivr.net/gh/sabap/BackAisle@main/Install-BackAisle.ps1',
+  'https://raw.githubusercontent.com/sabap/BackAisle/main/Install-BackAisle.ps1'
+)
+$ok = $false
+foreach ($u in $urls) {
+  Write-Host "Trying $u"
+  & curl.exe -fsSL --max-time 60 -o $out $u
+  if ($LASTEXITCODE -ne 0) { continue }
+  $head = Get-Content -LiteralPath $out -TotalCount 1
+  if ($head -match 'Requires') { $ok = $true; break }
+  Write-Host "Not a script (got: $head)"
+}
+if (-not $ok) { throw 'Could not download Install-BackAisle.ps1. Clone https://github.com/sabap/BackAisle instead.' }
+Get-Content $out -TotalCount 3
 Set-ExecutionPolicy Bypass -Scope Process -Force
 .\Install-BackAisle.ps1 -OpenSetup -RegisterCollectorTask
+```
+
+Or clone the repo and run the same script from disk:
+
+```powershell
+git clone https://github.com/sabap/BackAisle.git C:\TEMP\BackAisle-src
+Set-ExecutionPolicy Bypass -Scope Process -Force
+& C:\TEMP\BackAisle-src\Install-BackAisle.ps1 -OpenSetup -RegisterCollectorTask
 ```
 
 The installer:
