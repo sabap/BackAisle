@@ -16,7 +16,7 @@
     Does NOT install SQL Server. Use setup.php to connect SQLite or an existing SQL instance.
 
 .PARAMETER PhpVersion
-    PHP NTS build on windows.php.net. Default 8.3.32
+    PHP NTS build on windows.php.net. Default 8.3.33 (falls back to the 8.3 latest zip / archives)
 
 .PARAMETER PhpInstallPath
     Shared PHP binaries. Default C:\PHP
@@ -34,7 +34,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$PhpVersion = '8.3.32',
+    [string]$PhpVersion = '8.3.33',
     [string]$PhpInstallPath = 'C:\PHP',
     [string]$SiteRoot = 'C:\inetpub\BackAisle',
     [int]$HttpPort = 8080,
@@ -77,41 +77,85 @@ function Test-CommandExists([string]$Name) {
     return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
 }
 
-function Download-File([string]$Uri, [string]$OutFile) {
+function Test-DownloadedFile {
+    param([string]$Path, [int]$MinBytes = 1024, [switch]$RequireZip)
+    if (-not (Test-Path -LiteralPath $Path)) { return $false }
+    $len = (Get-Item -LiteralPath $Path).Length
+    if ($len -lt $MinBytes) { return $false }
+    $fs = [IO.File]::OpenRead($Path)
+    try {
+        $b = New-Object byte[] 4
+        $n = $fs.Read($b, 0, 4)
+        if ($n -ge 1 -and $b[0] -eq 0x3C) { return $false }
+        if ($RequireZip) { return ($n -ge 2 -and $b[0] -eq 0x50 -and $b[1] -eq 0x4B) }
+        return $true
+    } finally { $fs.Close() }
+}
+
+function Invoke-CurlGet {
+    param([string]$Uri, [string]$OutFile, [int]$TimeoutSec = 180)
+    if (-not (Test-CommandExists 'curl.exe')) {
+        return @{ Ok = $false; ExitCode = -1; Detail = 'curl.exe not found' }
+    }
+    $sets = @(
+        @('-fL', '--retry', '2', '--max-time', "$TimeoutSec", '-A', 'BackAisle-Installer', '-o', $OutFile, $Uri),
+        @('-fL', '--ssl-no-revoke', '--retry', '2', '--max-time', "$TimeoutSec", '-A', 'BackAisle-Installer', '-o', $OutFile, $Uri)
+    )
+    $code = -1
+    $detail = ''
+    $old = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        foreach ($a in $sets) {
+            if (Test-Path -LiteralPath $OutFile) { Remove-Item -LiteralPath $OutFile -Force -ErrorAction SilentlyContinue }
+            $detail = ((& curl.exe @a 2>&1) | Out-String).Trim()
+            $code = $LASTEXITCODE
+            if ($code -eq 0 -and (Test-Path -LiteralPath $OutFile) -and ((Get-Item -LiteralPath $OutFile).Length -gt 0)) {
+                return @{ Ok = $true; ExitCode = 0; Detail = '' }
+            }
+        }
+    } finally { $ErrorActionPreference = $old }
+    return @{ Ok = $false; ExitCode = $code; Detail = $detail }
+}
+
+function Download-File {
+    param(
+        [string]$Uri,
+        [string]$OutFile,
+        [int]$MinBytes = 1024,
+        [switch]$RequireZip
+    )
     Ensure-Tls12
     try { [Net.ServicePointManager]::CheckCertificateRevocationList = $false } catch { }
     Write-Host "    Downloading: $Uri"
-    if ((Test-Path $OutFile) -and -not $Force) {
+    if ((Test-DownloadedFile -Path $OutFile -MinBytes $MinBytes -RequireZip:$RequireZip) -and -not $Force) {
         Write-Ok "Already present: $OutFile"
         return
     }
     $dir = Split-Path -Parent $OutFile
-    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
     $ok = $false
-    if (Test-CommandExists 'curl.exe') {
-        foreach ($revoke in @($false, $true)) {
-            $curlArgs = @('-fsSL', '-L', '--retry', '3', '--max-time', '180', '-A', 'BackAisle-Installer', '-o', $OutFile, $Uri)
-            if ($revoke) { $curlArgs = @('--ssl-no-revoke') + $curlArgs }
-            $err = Join-Path $env:TEMP ('ba-curl-{0}.err' -f [guid]::NewGuid().ToString('N'))
-            try {
-                $p = Start-Process -FilePath 'curl.exe' -ArgumentList $curlArgs -Wait -PassThru -NoNewWindow -RedirectStandardError $err
-                if ($p.ExitCode -eq 0 -and (Test-Path -LiteralPath $OutFile) -and ((Get-Item -LiteralPath $OutFile).Length -ge 1024)) {
-                    $ok = $true
-                    break
-                }
-            } catch { }
-            finally { Remove-Item -LiteralPath $err -Force -ErrorAction SilentlyContinue }
+    $why = ''
+    $curl = Invoke-CurlGet -Uri $Uri -OutFile $OutFile
+    if ($curl.Ok -and (Test-DownloadedFile -Path $OutFile -MinBytes $MinBytes -RequireZip:$RequireZip)) {
+        $ok = $true
+    } else {
+        if (-not $curl.Ok) { $why = "curl exit $($curl.ExitCode) $($curl.Detail)" }
+        elseif (Test-Path -LiteralPath $OutFile) {
+            $len = (Get-Item -LiteralPath $OutFile).Length
+            $why = "file was $len bytes (need zip=$RequireZip min=$MinBytes)"
         }
     }
     if (-not $ok) {
         try {
+            if (Test-Path -LiteralPath $OutFile) { Remove-Item -LiteralPath $OutFile -Force -ErrorAction SilentlyContinue }
             Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing
-            if ((Test-Path -LiteralPath $OutFile) -and ((Get-Item -LiteralPath $OutFile).Length -ge 1024)) {
-                $ok = $true
-            }
-        } catch { }
+            if (Test-DownloadedFile -Path $OutFile -MinBytes $MinBytes -RequireZip:$RequireZip) { $ok = $true }
+        } catch {
+            if (-not $why) { $why = $_.Exception.Message }
+        }
     }
-    if (-not $ok) { throw "Download failed or file too small: $OutFile" }
+    if (-not $ok) { throw "Download failed: $Uri  $why" }
 }
 
 function Set-IniValue {
@@ -181,29 +225,48 @@ function Install-VcRedist {
     }
 }
 
-function Get-PhpDownloadUrl([string]$Version) {
-    $candidates = @(
-        "https://windows.php.net/downloads/releases/php-$Version-nts-Win32-vs16-x64.zip",
-        "https://windows.php.net/downloads/releases/php-$Version-nts-Win32-vs17-x64.zip",
-        "https://windows.php.net/downloads/releases/archives/php-$Version-nts-Win32-vs16-x64.zip",
-        "https://windows.php.net/downloads/releases/archives/php-$Version-nts-Win32-vs17-x64.zip"
-    )
-    Ensure-Tls12
-    foreach ($url in $candidates) {
-        try {
-            $resp = Invoke-WebRequest -Uri $url -Method Head -UseBasicParsing -TimeoutSec 20
-            if ($resp.StatusCode -ge 200 -and $resp.StatusCode -lt 400) { return $url }
-        } catch { }
-        if (Test-CommandExists 'curl.exe') {
-            $err = Join-Path $env:TEMP ('ba-phphead-{0}.err' -f [guid]::NewGuid().ToString('N'))
-            try {
-                $p = Start-Process -FilePath 'curl.exe' -ArgumentList @('-fsSI','--ssl-no-revoke','--max-time','20','-o','NUL',$url) -Wait -PassThru -NoNewWindow -RedirectStandardError $err
-                if ($p.ExitCode -eq 0) { return $url }
-            } catch { }
-            finally { Remove-Item -LiteralPath $err -Force -ErrorAction SilentlyContinue }
-        }
+function Get-PhpZipUrls([string]$Version) {
+    $v = $Version.Trim()
+    if ($v -notmatch '^(\d+)\.(\d+)') { $v = '8.3.33'; $majmin = '8.3' }
+    else { $majmin = "$($Matches[1]).$($Matches[2])" }
+    $vs = 'vs16'
+    try { if ([version]$majmin -ge [version]'8.4') { $vs = 'vs17' } } catch { }
+
+    $urls = New-Object System.Collections.Generic.List[string]
+    function Add-Url([string]$u) { if ($u -and -not $urls.Contains($u)) { [void]$urls.Add($u) } }
+
+    # Unversioned latest alias does not 404 when a patch leaves /releases/.
+    Add-Url "https://downloads.php.net/~windows/releases/latest/php-$majmin-nts-Win32-$vs-x64-latest.zip"
+    Add-Url "https://windows.php.net/downloads/releases/latest/php-$majmin-nts-Win32-$vs-x64-latest.zip"
+
+    if ($v -match '^\d+\.\d+\.\d+') {
+        $fn = "php-$v-nts-Win32-$vs-x64.zip"
+        Add-Url "https://downloads.php.net/~windows/releases/archives/$fn"
+        Add-Url "https://windows.php.net/downloads/releases/archives/$fn"
+        Add-Url "https://downloads.php.net/~windows/releases/$fn"
+        Add-Url "https://windows.php.net/downloads/releases/$fn"
     }
-    throw "Could not find PHP $Version NTS x64 on windows.php.net. Pass -PhpVersion from https://windows.php.net/download/"
+
+    try {
+        $rj = Join-Path $env:TEMP 'php-releases.json'
+        $r = Invoke-CurlGet -Uri 'https://downloads.php.net/~windows/releases/releases.json' -OutFile $rj -TimeoutSec 30
+        if ($r.Ok) {
+            $rel = Get-Content -LiteralPath $rj -Raw -Encoding UTF8 | ConvertFrom-Json
+            $series = $rel.PSObject.Properties[$majmin].Value
+            if ($series) {
+                $nts = $series.PSObject.Properties["nts-$vs-x64"].Value
+                $path = [string]$nts.zip.path
+                if ($path) {
+                    Add-Url "https://downloads.php.net/~windows/releases/$path"
+                    Add-Url "https://windows.php.net/downloads/releases/$path"
+                    Add-Url "https://downloads.php.net/~windows/releases/archives/$path"
+                }
+            }
+        }
+    } catch {
+        Write-Warn "releases.json skipped: $($_.Exception.Message)"
+    }
+    return $urls
 }
 
 function Install-Php {
@@ -212,11 +275,23 @@ function Install-Php {
     if ((Test-Path $phpCgi) -and -not $Force) {
         Write-Ok "PHP already present at $PhpInstallPath (will not overwrite another site's php.ini)"
     } else {
-        $url = Get-PhpDownloadUrl -Version $PhpVersion
         $zip = Join-Path $env:TEMP "php-$PhpVersion-nts-x64.zip"
-        Download-File -Uri $url -OutFile $zip
+        $urls = @(Get-PhpZipUrls -Version $PhpVersion)
+        $got = $false
+        foreach ($url in $urls) {
+            try {
+                Download-File -Uri $url -OutFile $zip -MinBytes 5000000 -RequireZip
+                $got = $true
+                break
+            } catch {
+                Write-Warn $_.Exception.Message
+            }
+        }
+        if (-not $got) {
+            throw "Could not download PHP $PhpVersion NTS x64. Install PHP to $PhpInstallPath (php-cgi.exe) or pass -PhpVersion from https://windows.php.net/download/"
+        }
         New-Item -ItemType Directory -Path $PhpInstallPath -Force | Out-Null
-        Expand-Archive -Path $zip -DestinationPath $PhpInstallPath -Force
+        Expand-Archive -LiteralPath $zip -DestinationPath $PhpInstallPath -Force
         Write-Ok "PHP extracted to $PhpInstallPath"
     }
     if (-not (Test-Path $phpCgi)) { throw "php-cgi.exe missing under $PhpInstallPath" }

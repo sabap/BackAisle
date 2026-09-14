@@ -58,7 +58,7 @@ param(
     [string]$Version = '',
     [string]$SiteRoot = 'C:\inetpub\BackAisle',
     [int]$HttpPort = 8080,
-    [string]$PhpVersion = '8.3.32',
+    [string]$PhpVersion = '8.3.33',
     [string]$PhpInstallPath = 'C:\PHP',
     [string]$GitHubOwner = 'sabap',
     [string]$GitHubRepo = 'BackAisle',

@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.2.2] - 2026-09-14
+
+- PHP download no longer trusts a HEAD 302 on windows.php.net (8.3.32 left /releases/ and 404s). Tries the 8.3 latest zip, archives, then releases.json, and only accepts a real ZIP.
+
 ## [0.2.1] - 2026-09-14
 
 - Installer is ASCII + UTF-8 BOM so Windows PowerShell 5.1 does not treat em-dashes as `"` and fail to parse
