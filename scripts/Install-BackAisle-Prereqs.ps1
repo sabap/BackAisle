@@ -495,6 +495,23 @@ function Deploy-AppFiles {
     Write-Ok "Files copied (preserved data/logs/secrets/config.php if present)"
 }
 
+function Grant-BaAcl {
+    param([string]$Path, [string]$Identity, [string]$Rights)
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    $old = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $null = & icacls.exe $Path /grant "${Identity}:(OI)(CI)${Rights}" /T /C /Q 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warn "icacls $Identity on $Path exit $LASTEXITCODE"
+        }
+    } catch {
+        Write-Warn "icacls $Identity on $Path : $($_.Exception.Message)"
+    } finally {
+        $ErrorActionPreference = $old
+    }
+}
+
 function Install-BackAisleSite([string]$IniPath) {
     Write-Step "IIS site $SiteName on :$HttpPort (does not change Default Web Site)"
     Import-Module WebAdministration -ErrorAction Stop
@@ -529,15 +546,22 @@ function Install-BackAisleSite([string]$IniPath) {
         Set-ItemProperty "IIS:\Sites\$SiteName" -Name physicalPath -Value $public
         Set-ItemProperty "IIS:\Sites\$SiteName" -Name applicationPool -Value $PoolName
     }
-    icacls $SiteRoot /grant "${PoolName}:(OI)(CI)RX" /T | Out-Null
+    # Virtual account exists after the pool is created/started. Never grant the bare
+    # pool name (icacls "BackAisle:..." cannot map a SID).
+    try { Start-WebAppPool $PoolName } catch { }
+    $poolId = "IIS APPPOOL\$PoolName"
+    $identities = @($poolId, 'NT AUTHORITY\IUSR', 'IIS_IUSRS')
+    foreach ($id in $identities) {
+        Grant-BaAcl -Path $SiteRoot -Identity $id -Rights 'M'
+        Grant-BaAcl -Path 'C:\ProgramData\BackAisle' -Identity $id -Rights 'M'
+    }
     foreach ($p in @('data','logs','storage','config')) {
         $full = Join-Path $SiteRoot $p
-        icacls $full /grant "IIS APPPOOL\${PoolName}:(OI)(CI)M" /T | Out-Null
-        icacls $full /grant "IUSR:(OI)(CI)M" /T | Out-Null
+        if (-not (Test-Path $full)) { New-Item -ItemType Directory -Path $full -Force | Out-Null }
+        foreach ($id in $identities) { Grant-BaAcl -Path $full -Identity $id -Rights 'M' }
     }
-    icacls 'C:\ProgramData\BackAisle' /grant "IIS APPPOOL\${PoolName}:(OI)(CI)M" /T | Out-Null
-    Start-WebAppPool $PoolName
-    Start-Website $SiteName
+    Write-Ok "NTFS Modify granted to $($identities -join ', ')"
+    try { Start-Website $SiteName } catch { Write-Warn "Start-Website: $($_.Exception.Message)" }
     Write-Ok "Site $SiteName listening on :$HttpPort"
 }
 

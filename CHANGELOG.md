@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.2.4] - 2026-09-14
+
+- NTFS grants use `IIS APPPOOL\BackAisle` (not the bare pool name). icacls stderr no longer aborts the install.
+
 ## [0.2.3] - 2026-09-14
 
 - Ignore the Microsoft Store `WindowsApps\python.exe` stub; install CPython 3.12 from python.org when no real interpreter is present
