@@ -391,7 +391,7 @@ $steps = [1 => 'Welcome', 2 => 'Database', 3 => 'Site data', 4 => 'Done'];
   <?php if ($step === 4): ?>
     <h1>Ready</h1>
     <p>BackAisle is installed. Sign in with the admin account you created (or an account from the restored backup).</p>
-    <p><a class="btn" href="/login">Open BackAisle</a></p>
+    <p><a class="btn" href="/login.php">Open BackAisle</a></p>
     <p class="muted">Start the collector after install: <code>python C:\inetpub\BackAisle\collector\collector.py</code> or the scheduled task registered by the installer.</p>
   <?php endif; ?>
 </div>

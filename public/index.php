@@ -2,9 +2,9 @@
 declare(strict_types=1);
 
 require __DIR__ . '/../app/bootstrap.php';
+require __DIR__ . '/../app/helpers.php';
 require __DIR__ . '/../app/db.php';
 require __DIR__ . '/../app/auth.php';
-require __DIR__ . '/../app/helpers.php';
 require __DIR__ . '/../app/layout.php';
 require __DIR__ . '/../app/pages.php';
 require __DIR__ . '/../app/writes.php';
@@ -15,14 +15,7 @@ require __DIR__ . '/../app/templates.php';
 require __DIR__ . '/../app/backup.php';
 require __DIR__ . '/../app/update.php';
 
-$path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
-$path = rtrim($path, '/') ?: '/';
-if ($path === '/login.php') {
-    $path = '/login';
-}
-if ($path === '/index.php') {
-    $path = '/';
-}
+$path = ba_request_path();
 
 if (!ba_is_installed() && $path !== '/setup' && !str_starts_with($path, '/setup')) {
     header('Location: /setup.php');

@@ -373,28 +373,7 @@ function Install-Odbc18 {
 function Write-SiteWebConfig {
     $public = Join-Path $SiteRoot 'public'
     $wc = Join-Path $public 'web.config'
-    $rw = Test-Path (Join-Path $env:SystemRoot 'System32\inetsrv\rewrite.dll')
-    $rewriteXml = ''
-    if ($rw) {
-        $rewriteXml = @'
-    <rewrite>
-      <rules>
-        <rule name="BackAisle Front Controller" stopProcessing="true">
-          <match url=".*" />
-          <conditions logicalGrouping="MatchAll">
-            <add input="{REQUEST_FILENAME}" matchType="IsFile" negate="true" />
-            <add input="{REQUEST_FILENAME}" matchType="IsDirectory" negate="true" />
-          </conditions>
-          <action type="Rewrite" url="index.php" />
-        </rule>
-      </rules>
-    </rewrite>
-'@
-        Write-Ok 'URL Rewrite module present; front-controller rules enabled'
-    } else {
-        Write-Warn 'URL Rewrite not installed; use /login.php and /index.php until it is'
-    }
-    $xml = @"
+    $xml = @'
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
   <system.webServer>
@@ -405,12 +384,12 @@ function Write-SiteWebConfig {
         <add value="setup.php" />
       </files>
     </defaultDocument>
-$rewriteXml
     <httpErrors existingResponse="PassThrough" errorMode="DetailedLocalOnly" />
   </system.webServer>
 </configuration>
-"@
+'@
     Set-Content -Path $wc -Value $xml -Encoding ASCII
+    Write-Ok 'web.config (no rewrite/handlers; routes are *.php files)'
 }
 
 function Install-UrlRewrite {

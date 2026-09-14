@@ -23,34 +23,34 @@ function ba_layout_start(string $title, string $nav = 'fleet'): void {
 <header class="top">
   <div class="brand"><span class="mark">BA</span> BackAisle <small>IDF infrastructure</small></div>
   <nav>
-    <a class="<?= $nav==='dash'?'on':'' ?>" href="/">Dashboard</a>
-    <a class="<?= $nav==='idfs'?'on':'' ?>" href="/idfs">IDFs</a>
-    <a class="<?= $nav==='devices'?'on':'' ?>" href="/devices">Inventory</a>
-    <a class="<?= $nav==='templates'?'on':'' ?>" href="/templates">Templates</a>
+    <a class="<?= $nav==='dash'?'on':'' ?>" href="/index.php">Dashboard</a>
+    <a class="<?= $nav==='idfs'?'on':'' ?>" href="/idfs.php">IDFs</a>
+    <a class="<?= $nav==='devices'?'on':'' ?>" href="/devices.php">Inventory</a>
+    <a class="<?= $nav==='templates'?'on':'' ?>" href="/templates.php">Templates</a>
     <span class="nav-cat <?= $powerOn ?>">
       <span class="nav-cat-label">Power</span>
-      <a class="<?= $nav==='fleet'?'on':'' ?>" href="/fleet">UPS fleet</a>
-      <a class="<?= $nav==='batteries'?'on':'' ?>" href="/batteries">Batteries</a>
-      <a class="<?= $nav==='battery'?'on':'' ?>" href="/battery">Due</a>
-      <a class="<?= $nav==='alerts'?'on':'' ?>" href="/alerts">Alerts</a>
-      <a class="<?= $nav==='events'?'on':'' ?>" href="/events">Events</a>
+      <a class="<?= $nav==='fleet'?'on':'' ?>" href="/fleet.php">UPS fleet</a>
+      <a class="<?= $nav==='batteries'?'on':'' ?>" href="/batteries.php">Batteries</a>
+      <a class="<?= $nav==='battery'?'on':'' ?>" href="/battery.php">Due</a>
+      <a class="<?= $nav==='alerts'?'on':'' ?>" href="/alerts.php">Alerts</a>
+      <a class="<?= $nav==='events'?'on':'' ?>" href="/events.php">Events</a>
       <?php if ($role === 'admin'): ?>
-        <a class="<?= $nav==='writes'?'on':'' ?>" href="/writes">Writes</a>
+        <a class="<?= $nav==='writes'?'on':'' ?>" href="/writes.php">Writes</a>
       <?php endif; ?>
     </span>
     <span class="nav-cat <?= $envOn ?>">
       <span class="nav-cat-label">Environment</span>
-      <a class="<?= $nav==='climate'?'on':'' ?>" href="/climate">Climate</a>
+      <a class="<?= $nav==='climate'?'on':'' ?>" href="/climate.php">Climate</a>
     </span>
     <?php if ($role === 'admin'): ?>
       <span class="nav-cat <?= ba_nav_on($nav, ['org','admin']) ?>">
         <span class="nav-cat-label">Admin</span>
-        <a class="<?= $nav==='org'?'on':'' ?>" href="/org">Org</a>
-        <a class="<?= $nav==='admin'?'on':'' ?>" href="/admin">Admin</a>
+        <a class="<?= $nav==='org'?'on':'' ?>" href="/org.php">Org</a>
+        <a class="<?= $nav==='admin'?'on':'' ?>" href="/admin.php">Admin</a>
       </span>
     <?php endif; ?>
   </nav>
-  <div class="who"><?= h($u['username'] ?? '') ?> · <?= h($role) ?> · <a href="/logout">out</a></div>
+  <div class="who"><?= h($u['username'] ?? '') ?> · <?= h($role) ?> · <a href="/logout.php">out</a></div>
 </header>
 <main>
 <?php

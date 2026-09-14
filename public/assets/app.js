@@ -102,7 +102,7 @@ function drawChart(canvas, points, color) {
 }
 
 async function loadSeries(id) {
-  const r = await fetch('/api/series?id=' + encodeURIComponent(id));
+  const r = await fetch('/api_series.php?id=' + encodeURIComponent(id));
   if (!r.ok) return;
   const data = await r.json();
   document.querySelectorAll('[data-series]').forEach(cv => {
@@ -131,7 +131,7 @@ function renderRank(el, title, rows, key, unit, color) {
 }
 
 async function loadDashboard() {
-  const r = await fetch('/api/dashboard');
+  const r = await fetch('/api_dashboard.php');
   if (!r.ok) return;
   const data = await r.json();
   drawChart(document.getElementById('dash-power'), data.power || [], '#5b9fd4');

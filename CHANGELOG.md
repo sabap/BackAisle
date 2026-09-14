@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.0] - 2026-09-14
+
+- IIS routes are real `*.php` files (login.php, fleet.php, ...). URL Rewrite is no longer required, so /login is not a 404.
+
 ## [0.2.9] - 2026-09-14
 
 - Restore front-controller rewrite (no handlers in web.config) so /login and /fleet are not 404

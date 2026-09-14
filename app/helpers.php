@@ -5,6 +5,71 @@ function h(?string $s): string {
     return htmlspecialchars((string)$s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 }
 
+function ba_request_path(): string {
+    foreach (['HTTP_X_ORIGINAL_URL', 'UNENCODED_URL', 'HTTP_URL'] as $k) {
+        if (empty($_SERVER[$k])) {
+            continue;
+        }
+        $p = parse_url((string)$_SERVER[$k], PHP_URL_PATH);
+        if (is_string($p) && $p !== '' && !preg_match('/\.php$/i', $p)) {
+            return rtrim($p, '/') ?: '/';
+        }
+    }
+    $script = str_replace('\\', '/', (string)($_SERVER['SCRIPT_NAME'] ?? ''));
+    $base = strtolower(basename($script));
+    if ($base === 'writes.php') {
+        $v = (string)($_GET['view'] ?? '');
+        if ($v === 'template') {
+            return '/writes/template';
+        }
+        if ($v === 'job') {
+            return '/writes/job';
+        }
+        return '/writes';
+    }
+    if ($base === 'admin.php' && isset($_GET['download'])) {
+        return '/admin/backup-download';
+    }
+    $map = [
+        'index.php' => '/',
+        'login.php' => '/login',
+        'logout.php' => '/logout',
+        'fleet.php' => '/fleet',
+        'idfs.php' => '/idfs',
+        'rack.php' => '/rack',
+        'climate.php' => '/climate',
+        'batteries.php' => '/batteries',
+        'battery.php' => '/battery',
+        'alerts.php' => '/alerts',
+        'events.php' => '/events',
+        'devices.php' => '/devices',
+        'device.php' => '/device',
+        'templates.php' => '/templates',
+        'admin.php' => '/admin',
+        'writes.php' => '/writes',
+        'org.php' => '/org',
+        'api_health.php' => '/api/health',
+        'api_series.php' => '/api/series',
+        'api_dashboard.php' => '/api/dashboard',
+    ];
+    if (isset($map[$base]) && $base !== 'index.php') {
+        return $map[$base];
+    }
+    $uri = parse_url((string)($_SERVER['REQUEST_URI'] ?? '/'), PHP_URL_PATH) ?: '/';
+    $uri = rtrim($uri, '/') ?: '/';
+    if ($uri === '/login.php') {
+        return '/login';
+    }
+    if ($uri === '/index.php' || $uri === '/index') {
+        return '/';
+    }
+    $ubase = strtolower(basename($uri));
+    if (isset($map[$ubase]) && $ubase !== 'index.php') {
+        return $map[$ubase];
+    }
+    return $uri;
+}
+
 function ba_version(): string {
     $path = BA_ROOT . DIRECTORY_SEPARATOR . 'VERSION';
     if (is_file($path)) {
