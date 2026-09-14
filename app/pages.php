@@ -919,10 +919,10 @@ function page_api_dashboard(PDO $db): void {
     }
     $hottest = $db->query("SELECT g.id, g.name, AVG(s.temp_f) t FROM devices d JOIN groups g ON g.id=d.group_id
         JOIN samples s ON s.id = (SELECT id FROM samples WHERE device_id=d.id ORDER BY ts DESC LIMIT 1)
-        WHERE s.temp_f IS NOT NULL AND ".ba_ups_only_sql()." GROUP BY g.id ORDER BY t DESC LIMIT 5")->fetchAll();
+        WHERE s.temp_f IS NOT NULL AND ".ba_ups_only_sql()." GROUP BY g.id, g.name ORDER BY t DESC LIMIT 5")->fetchAll();
     $powerTop = $db->query("SELECT g.id, g.name, AVG(COALESCE(s.power_w, s.load_pct*20.0)) w FROM devices d JOIN groups g ON g.id=d.group_id
         JOIN samples s ON s.id = (SELECT id FROM samples WHERE device_id=d.id ORDER BY ts DESC LIMIT 1)
-        WHERE ".ba_ups_only_sql()." GROUP BY g.id ORDER BY w DESC LIMIT 5")->fetchAll();
+        WHERE ".ba_ups_only_sql()." GROUP BY g.id, g.name ORDER BY w DESC LIMIT 5")->fetchAll();
     echo json_encode(['power' => $power, 'temp' => $temp, 'humid' => $humid, 'hottest' => $hottest, 'power_top' => $powerTop]);
 }
 

@@ -10,15 +10,24 @@ function ba_adapt_sql(string $sql): string {
     if (ba_db_driver() !== 'sqlsrv') {
         return $sql;
     }
+    $sql = preg_replace("/datetime\('now'\s*,\s*'-(\d+)\s*days?'\)/i", 'DATEADD(day, -$1, SYSUTCDATETIME())', $sql) ?? $sql;
     $sql = str_ireplace("datetime('now')", 'SYSUTCDATETIME()', $sql);
     $sql = str_ireplace('IFNULL(', 'ISNULL(', $sql);
     $sql = str_ireplace('INSERT OR IGNORE INTO', 'INSERT INTO', $sql);
     $sql = str_ireplace('INSERT OR REPLACE INTO', 'INSERT INTO', $sql);
+    $sql = str_ireplace("strftime('%Y-%m-%d %H:00:00', ts)", "CONVERT(varchar(13), ts, 120) + ':00:00'", $sql);
+    $sql = preg_replace_callback(
+        '/\(\s*SELECT\s+(?!TOP\b)([^()]*?)\s+LIMIT\s+(\d+)\s*\)/is',
+        static function (array $m): string {
+            return '(SELECT TOP ' . $m[2] . ' ' . trim($m[1]) . ')';
+        },
+        $sql
+    ) ?? $sql;
     if (preg_match('/^(.*)\s+LIMIT\s+(\d+)\s*$/is', $sql, $m)) {
         $inner = $m[1];
         $n = (int)$m[2];
         if (preg_match('/^\s*SELECT\s+/i', $inner) && !preg_match('/\bSELECT\s+TOP\s+/i', $inner)) {
-            $inner = preg_replace('/^\s*SELECT\s+/i', 'SELECT TOP ' . $n . ' ', $inner, 1);
+            $inner = preg_replace('/^\s*SELECT\s+/i', 'SELECT TOP ' . $n . ' ', $inner, 1) ?? $inner;
         }
         $sql = $inner;
     }
