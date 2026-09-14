@@ -41,7 +41,7 @@ $watchdog = Join-Path $SiteRoot 'collector\watchdog.ps1'
 if (-not (Test-Path $collector)) { throw "Missing $collector" }
 
 function New-BaRepeatTrigger([int]$Minutes = 5) {
-    # Do not use [TimeSpan]::MaxValue -- it becomes P99999999DT23H59M59S (0x80041318).
+    # Indefinite repeat is not portable on Task Scheduler; 10 years is.
     return New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes(1)) `
         -RepetitionInterval (New-TimeSpan -Minutes $Minutes) `
         -RepetitionDuration (New-TimeSpan -Days 3650)
