@@ -100,5 +100,14 @@ function ba_audit(PDO $db, string $action, ?string $entity = null, ?string $id =
     $st->execute([$_SESSION['user']['username'] ?? null, $action, $entity, $id, $details]);
 }
 
+$sessionDir = BA_ROOT . DIRECTORY_SEPARATOR . 'data' . DIRECTORY_SEPARATOR . 'sessions';
+if (!is_dir($sessionDir)) {
+    @mkdir($sessionDir, 0775, true);
+}
+if (is_dir($sessionDir)) {
+    session_save_path($sessionDir);
+}
 session_name('BACKAISLE');
-session_start();
+if (session_status() !== PHP_SESSION_ACTIVE) {
+    @session_start();
+}

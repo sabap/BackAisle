@@ -1,6 +1,16 @@
 <?php
 declare(strict_types=1);
 
+error_reporting(E_ALL);
+ini_set('display_errors', '1');
+ini_set('display_startup_errors', '1');
+ini_set('log_errors', '1');
+$baLogDir = dirname(__DIR__) . DIRECTORY_SEPARATOR . 'logs';
+if (!is_dir($baLogDir)) {
+    @mkdir($baLogDir, 0775, true);
+}
+ini_set('error_log', $baLogDir . DIRECTORY_SEPARATOR . 'php-error.log');
+
 require __DIR__ . '/../app/bootstrap.php';
 require __DIR__ . '/../app/db.php';
 require __DIR__ . '/../app/helpers.php';

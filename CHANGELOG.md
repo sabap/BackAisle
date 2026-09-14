@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.2.6] - 2026-09-14
+
+- Setup no longer fails as a blank HTTP 500: php.ini last-wins overrides, site session dir, display_errors on setup, `/health.php`, `Repair-BackAisle-Iis.ps1`
+
 ## [0.2.5] - 2026-09-14
 
 - Collector watch task uses a 3650-day repetition (not TimeSpan.MaxValue, which Task Scheduler rejects as P99999999DT23H59M59S)

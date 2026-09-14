@@ -301,37 +301,67 @@ function Write-SitePhpIni {
     Write-Step 'Site-local php.ini for BackAisle (does not change global php.ini)'
     $prod = Join-Path $PhpInstallPath 'php.ini-production'
     $ini = Join-Path $SiteRoot 'php.ini'
+    $sess = Join-Path $SiteRoot 'data\sessions'
+    $logDir = Join-Path $SiteRoot 'logs'
+    New-Item -ItemType Directory -Path $sess, $logDir -Force | Out-Null
     if (-not (Test-Path $prod)) { throw "php.ini-production missing in $PhpInstallPath" }
-    if ((Test-Path $ini) -and -not $Force) {
+    if (-not (Test-Path $ini) -or $Force) {
+        $c = Get-Content -Path $prod -Raw
+        $c = Set-IniValue $c 'extension_dir' "`"$PhpInstallPath\ext`""
+        $c = Set-IniValue $c 'cgi.fix_path_info' '1'
+        $c = Set-IniValue $c 'fastcgi.impersonate' '1'
+        $c = Set-IniValue $c 'date.timezone' 'UTC'
+        $c = Set-IniValue $c 'expose_php' 'Off'
+        $c = Set-IniValue $c 'display_errors' 'On'
+        $c = Set-IniValue $c 'log_errors' 'On'
+        $c = Set-IniValue $c 'error_log' "`"$logDir\php-error.log`""
+        $c = Set-IniValue $c 'upload_max_filesize' '64M'
+        $c = Set-IniValue $c 'post_max_size' '64M'
+        $c = Set-IniValue $c 'memory_limit' '256M'
+        $c = Set-IniValue $c 'max_execution_time' '180'
+        $c = Set-IniValue $c 'session.save_path' "`"$sess`""
+        $c = Set-IniValue $c 'sys_temp_dir' "`"$sess`""
+        foreach ($ext in @('curl','mbstring','openssl','fileinfo','ldap','pdo_sqlite','sqlite3','pdo_odbc','zip')) {
+            $c = Set-IniValue $c $ext -IsExtension
+        }
+        foreach ($ext in @('pdo_sqlsrv','sqlsrv')) {
+            $dll = Join-Path $PhpInstallPath "ext\php_$ext.dll"
+            if (Test-Path $dll) { $c = Set-IniValue $c $ext -IsExtension }
+        }
+        Set-Content -Path $ini -Value $c -Encoding ASCII
+        Write-Ok "Wrote $ini"
+    } else {
         Write-Ok "Keeping existing $ini"
-        return $ini
     }
-    $c = Get-Content -Path $prod -Raw
-    $c = Set-IniValue $c 'extension_dir' "`"$PhpInstallPath\ext`""
-    $c = Set-IniValue $c 'cgi.fix_path_info' '1'
-    $c = Set-IniValue $c 'fastcgi.impersonate' '1'
-    $c = Set-IniValue $c 'date.timezone' 'UTC'
-    $c = Set-IniValue $c 'expose_php' 'Off'
-    $c = Set-IniValue $c 'display_errors' 'Off'
-    $c = Set-IniValue $c 'log_errors' 'On'
-    $c = Set-IniValue $c 'error_log' "`"$SiteRoot\logs\php-error.log`""
-    $c = Set-IniValue $c 'upload_max_filesize' '64M'
-    $c = Set-IniValue $c 'post_max_size' '64M'
-    $c = Set-IniValue $c 'memory_limit' '256M'
-    $c = Set-IniValue $c 'max_execution_time' '180'
-    $winTemp = Join-Path $env:SystemRoot 'Temp'
-    $c = Set-IniValue $c 'session.save_path' "`"$winTemp`""
-    $c = Set-IniValue $c 'sys_temp_dir' "`"$winTemp`""
-    foreach ($ext in @('curl','mbstring','openssl','fileinfo','ldap','pdo_sqlite','sqlite3','pdo_odbc','zip')) {
-        $c = Set-IniValue $c $ext -IsExtension
+    $marker = '; BackAisle site overrides'
+    $cur = Get-Content -Path $ini -Raw
+    if ($cur -notmatch [regex]::Escape($marker)) {
+        $block = @"
+
+$marker (last value wins)
+cgi.fix_path_info = 1
+fastcgi.impersonate = 1
+display_errors = On
+display_startup_errors = On
+log_errors = On
+error_log = "$logDir\php-error.log"
+session.save_path = "$sess"
+sys_temp_dir = "$sess"
+extension_dir = "$PhpInstallPath\ext"
+extension=curl
+extension=mbstring
+extension=openssl
+extension=fileinfo
+extension=ldap
+extension=pdo_sqlite
+extension=sqlite3
+extension=pdo_odbc
+extension=zip
+
+"@
+        Add-Content -Path $ini -Value $block -Encoding ASCII
+        Write-Ok "Appended site overrides to $ini"
     }
-    foreach ($ext in @('pdo_sqlsrv','sqlsrv')) {
-        $dll = Join-Path $PhpInstallPath "ext\php_$ext.dll"
-        if (Test-Path $dll) { $c = Set-IniValue $c $ext -IsExtension }
-    }
-    New-Item -ItemType Directory -Path (Join-Path $SiteRoot 'logs') -Force | Out-Null
-    Set-Content -Path $ini -Value $c -Encoding ASCII
-    Write-Ok "Wrote $ini"
     return $ini
 }
 
@@ -523,7 +553,7 @@ function Install-BackAisleSite([string]$IniPath) {
     Set-ItemProperty "IIS:\AppPools\$PoolName" -Name managedPipelineMode -Value Integrated
     Set-ItemProperty "IIS:\AppPools\$PoolName" -Name processModel.identityType -Value ApplicationPoolIdentity
     $phpCgi = Join-Path $PhpInstallPath 'php-cgi.exe'
-    $phpArgs = "-c `"$IniPath`""
+    $phpArgs = "-c $IniPath"
     $fcgi = Get-WebConfiguration -Filter 'system.webServer/fastCgi' | Select-Object -ExpandProperty Collection
     $have = $false
     foreach ($app in $fcgi) {
