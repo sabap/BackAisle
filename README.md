@@ -52,7 +52,7 @@ New-Item -ItemType Directory -Force -Path $dir | Out-Null
 Set-Location $dir
 $out = Join-Path $dir 'Install-BackAisle.ps1'
 $urls = @(
-  'https://cdn.jsdelivr.net/gh/sabap/BackAisle@v0.4.2/Install-BackAisle.ps1',
+  'https://cdn.jsdelivr.net/gh/sabap/BackAisle@v0.4.3/Install-BackAisle.ps1',
   'https://cdn.jsdelivr.net/gh/sabap/BackAisle@main/Install-BackAisle.ps1'
 )
 $ok = $false

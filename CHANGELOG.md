@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.4.3] - 2026-09-17
+
+- Org tabs and other in-app links use `*.php` (PowerPanel import was 404 at `/org?tab=import`).
+- SQL Server settings upsert (Admin no longer uses SQLite `ON CONFLICT`).
+
 ## [0.4.2] - 2026-09-17
 
 - PowerPanel import uses PHP/PDO (no IIS pyodbc). SQL passwords may contain punctuation.
