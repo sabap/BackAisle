@@ -8,7 +8,7 @@ function ba_nav_on(string $nav, array $keys): string {
 function ba_layout_start(string $title, string $nav = 'fleet'): void {
     $u = ba_user();
     $role = $u['role'] ?? '';
-    $powerOn = ba_nav_on($nav, ['fleet', 'batteries', 'battery', 'alerts', 'events', 'writes']);
+    $powerOn = ba_nav_on($nav, ['fleet', 'batteries', 'battery', 'alerts', 'events', 'writes', 'snmp']);
     $envOn = ba_nav_on($nav, ['climate']);
     ?>
 <!doctype html>
@@ -29,6 +29,7 @@ function ba_layout_start(string $title, string $nav = 'fleet'): void {
     <a class="<?= $nav==='templates'?'on':'' ?>" href="/templates.php">Templates</a>
     <span class="nav-cat <?= $powerOn ?>">
       <span class="nav-cat-label">Power</span>
+      <a class="<?= $nav==='snmp'?'on':'' ?>" href="/snmp.php">SNMP</a>
       <a class="<?= $nav==='fleet'?'on':'' ?>" href="/fleet.php">UPS fleet</a>
       <a class="<?= $nav==='batteries'?'on':'' ?>" href="/batteries.php">Batteries</a>
       <a class="<?= $nav==='battery'?'on':'' ?>" href="/battery.php">Due</a>

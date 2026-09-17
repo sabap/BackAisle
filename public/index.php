@@ -13,6 +13,7 @@ require __DIR__ . '/../app/import_pp.php';
 require __DIR__ . '/../app/org.php';
 require __DIR__ . '/../app/racks.php';
 require __DIR__ . '/../app/templates.php';
+require __DIR__ . '/../app/snmp_page.php';
 require __DIR__ . '/../app/backup.php';
 require __DIR__ . '/../app/update.php';
 
@@ -118,6 +119,9 @@ switch ($path) {
         break;
     case '/org':
         page_org($db, $user);
+        break;
+    case '/snmp':
+        page_snmp($db, $user);
         break;
     case '/battery':
         page_battery_report($db);

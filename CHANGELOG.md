@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.0] - 2026-09-17
+
+- SNMP page: poller status, Windows tasks, scheduled devices, poll one / poll selected / poll all, add to schedule
+
 ## [0.4.9] - 2026-09-17
 
 - Overlay stops the IIS app pool, copies with [IO.File]::Copy, and verifies VERSION on disk (fixes silent no-op when PHP files were in use)

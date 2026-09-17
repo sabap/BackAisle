@@ -25,6 +25,7 @@ from profiles import get_secret, seed_from_env  # noqa: E402
 
 LOG = ROOT / "logs" / "collector.log"
 PID = ROOT / "logs" / "collector.pid"
+HEARTBEAT = ROOT / "logs" / "collector.heartbeat.json"
 STATUS_INTERVAL = 60
 CLIMATE_INTERVAL = 300
 TRAP_PORT = 162
@@ -323,6 +324,41 @@ def _housekeep(con, secrets) -> None:
     con.commit()
 
 
+def write_heartbeat(extra: dict | None = None) -> None:
+    payload = {
+        "ts": int(time.time()),
+        "at": now(),
+        "pid": os_getpid(),
+    }
+    if extra:
+        payload.update(extra)
+    try:
+        HEARTBEAT.parent.mkdir(parents=True, exist_ok=True)
+        HEARTBEAT.write_text(json.dumps(payload), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def load_devices_by_ids(ids: list[int]) -> list[dict]:
+    ids = [int(i) for i in ids if int(i) > 0]
+    if not ids:
+        return []
+    con = connect()
+    try:
+        q = ",".join("?" * len(ids))
+        rows = [dict(r) for r in con.execute(
+            f"""SELECT d.*, sp.username AS snmp_username, ps.comm_state
+               FROM devices d
+               LEFT JOIN snmp_profiles sp ON sp.id=d.snmp_profile_id
+               LEFT JOIN poll_state ps ON ps.device_id=d.id
+               WHERE d.id IN ({q})""",
+            ids,
+        ).fetchall()]
+    finally:
+        con.close()
+    return rows
+
+
 def load_enabled_devices() -> list[dict]:
     con = connect()
     try:
@@ -476,8 +512,8 @@ def _due_live(live: list[dict], pool: WorkerPool, t0: float, force: bool = False
     return due
 
 
-async def poll_cycle(secrets, climate=False):
-    devices = load_enabled_devices()
+async def poll_cycle(secrets, climate=False, only_ids: list[int] | None = None):
+    devices = load_devices_by_ids(only_ids) if only_ids else load_enabled_devices()
     live = [d for d in devices if not d["is_simulated"]]
     sims = [d for d in devices if d["is_simulated"]]
     n_w = _worker_count(len(live))
@@ -535,6 +571,15 @@ async def daemon(secrets):
                     f"ok={pool.ok} fail={pool.fail} timeout={pool.timeouts}"
                 )
                 last_log = t0
+            write_heartbeat({
+                "ok": pool.ok,
+                "fail": pool.fail,
+                "timeout": pool.timeouts,
+                "in_flight": len(pool.in_flight),
+                "queue": pool.queue.qsize(),
+                "live": len(live),
+                "sim": len(sims),
+            })
         except Exception:
             log("poll tick error\n" + traceback.format_exc())
         await asyncio.sleep(0.25)
@@ -713,8 +758,19 @@ def main():
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--qc", type=int, default=0)
     parser.add_argument("--init", action="store_true")
+    parser.add_argument("--ids", default="", help="Comma-separated device ids for a one-shot poll")
+    parser.add_argument("--id", type=int, default=0, help="Single device id for a one-shot poll")
     args = parser.parse_args()
-    if not (args.once or args.qc or args.init):
+    only_ids: list[int] = []
+    if args.ids:
+        for part in str(args.ids).split(","):
+            part = part.strip()
+            if part.isdigit():
+                only_ids.append(int(part))
+    if args.id > 0:
+        only_ids.append(args.id)
+    only_ids = list(dict.fromkeys(only_ids))
+    if not (args.once or args.qc or args.init or only_ids):
         _bind_stdio_to_log()
     secrets = load_secrets()
     init_db()
@@ -722,6 +778,10 @@ def main():
     PID.write_text(str(os_getpid()), encoding="utf-8")
     if args.qc:
         asyncio.run(qc_poll(secrets, args.qc))
+        return
+    if only_ids:
+        log(f"one-shot poll ids={only_ids}")
+        asyncio.run(poll_cycle(secrets, climate=True, only_ids=only_ids))
         return
     if args.once or args.init:
         asyncio.run(poll_cycle(secrets, climate=True))

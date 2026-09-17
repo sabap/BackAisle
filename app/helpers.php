@@ -83,6 +83,7 @@ function ba_request_path(): string {
         'admin.php' => '/admin',
         'writes.php' => '/writes',
         'org.php' => '/org',
+        'snmp.php' => '/snmp',
         'api_health.php' => '/api/health',
         'api_series.php' => '/api/series',
         'api_dashboard.php' => '/api/dashboard',
