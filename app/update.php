@@ -688,7 +688,7 @@ class BackAisleUpdate
         }
         $best = $floor;
         $probes = 0;
-        $max = 16;
+        $max = 24;
         $try = function (string $ver) use (&$best, &$probes, $max): bool {
             if ($probes >= $max) {
                 return false;
@@ -707,17 +707,36 @@ class BackAisleUpdate
             }
             return true;
         };
-        for ($p = $parts[2] + 1; $p <= $parts[2] + 8; $p++) {
-            if (!$try($parts[0] . '.' . $parts[1] . '.' . $p)) {
+        // Do not stop at the first missing patch (CDN 404 on 0.5.2 hid 0.5.3).
+        $miss = 0;
+        for ($p = $parts[2] + 1; $p <= $parts[2] + 12; $p++) {
+            if ($probes >= $max) {
                 break;
+            }
+            if ($try($parts[0] . '.' . $parts[1] . '.' . $p)) {
+                $miss = 0;
+            } else {
+                $miss++;
+                if ($miss >= 3) {
+                    break;
+                }
             }
         }
         for ($mi = 1; $mi <= 3; $mi++) {
             $minor = $parts[1] + $mi;
             if ($try($parts[0] . '.' . $minor . '.0')) {
+                $miss = 0;
                 for ($p = 1; $p <= 8; $p++) {
-                    if (!$try($parts[0] . '.' . $minor . '.' . $p)) {
+                    if ($probes >= $max) {
                         break;
+                    }
+                    if ($try($parts[0] . '.' . $minor . '.' . $p)) {
+                        $miss = 0;
+                    } else {
+                        $miss++;
+                        if ($miss >= 3) {
+                            break;
+                        }
                     }
                 }
             }
@@ -764,8 +783,9 @@ class BackAisleUpdate
         } catch (Throwable $e) {
             $errors[] = $e->getMessage();
         }
-        $probed = self::probeJsDelivrNewer($acc['tag'] ?? self::installedVersion());
-        if ($probed !== null) {
+        $floor = $acc['tag'] ?? self::installedVersion();
+        $probed = self::probeJsDelivrNewer($floor);
+        if ($probed !== null && ($floor === null || version_compare($probed, $floor, '>'))) {
             self::considerVersion($acc, $probed, 'jsdelivr-tag');
         }
         try {

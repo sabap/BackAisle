@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.4] - 2026-09-17
+
+- Check for updates no longer stops at the first missing jsDelivr patch tag (a 404 on 0.5.2 hid 0.5.3)
+
 ## [0.5.3] - 2026-09-17
 
 - Admin Update matches ColdAisle: Check then Apply from the page. jsDelivr first (GitHub zip is often a proxy page here). IIS file replace uses the same locked-file staging as ColdAisle. Apply fails closed if VERSION on disk does not match the target.
