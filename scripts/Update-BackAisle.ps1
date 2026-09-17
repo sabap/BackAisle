@@ -7,7 +7,8 @@
 [CmdletBinding()]
 param(
     [string]$SiteRoot = 'C:\inetpub\BackAisle',
-    [string]$Ref = 'latest',
+    [string]$Ref = 'v0.4.8',
+    [string]$MinVersion = '0.4.8',
     [string]$Owner = 'sabap',
     [string]$Repo = 'BackAisle',
     [string]$PoolName = 'BackAisle'
@@ -100,6 +101,8 @@ $work = Join-Path $env:TEMP ("BackAisle-update-{0}" -f [guid]::NewGuid().ToStrin
 New-Item -ItemType Directory -Force -Path $work | Out-Null
 $got = $false
 $tryRefs = New-Object System.Collections.Generic.List[string]
+[void]$tryRefs.Add('v0.4.8')
+[void]$tryRefs.Add('0.4.8')
 [void]$tryRefs.Add('v0.4.7')
 [void]$tryRefs.Add('0.4.7')
 if ($Ref -and $Ref -ne 'latest' -and $Ref -ne 'main') {
@@ -150,6 +153,7 @@ foreach ($tryRef in $ordered) {
         $files = @(Get-JsDelivrRelPaths $meta '')
         if ($files.Count -lt 10) { throw "file list too small ($($files.Count))" }
         $src = Join-Path $work 'src'
+        if (Test-Path $src) { Remove-Item $src -Recurse -Force }
         New-Item -ItemType Directory -Force -Path $src | Out-Null
         $n = 0
         foreach ($rel in $files) {
@@ -160,6 +164,17 @@ foreach ($tryRef in $ordered) {
             $n++
         }
         if (-not (Test-Path (Join-Path $src 'public\index.php'))) { throw 'jsDelivr tree missing public/index.php' }
+        $srcVerFile = Join-Path $src 'VERSION'
+        if (Test-Path $srcVerFile) {
+            $srcVer = ((@(Get-Content $srcVerFile -TotalCount 1 -ErrorAction SilentlyContinue))[0] | ForEach-Object { $_.ToString().Trim() })
+            Write-Ok "jsDelivr @$tryRef VERSION file is $srcVer"
+            $want = [version]$MinVersion
+            $have = $null
+            try { $have = [version](($srcVer -replace '[^\d.].*','')) } catch { }
+            if ($have -and $have -lt $want) {
+                throw "jsDelivr @$tryRef is stale ($srcVer < $MinVersion). Skipping this ref."
+            }
+        }
         Write-Ok "Fetched $n files @$tryRef"
         Write-Step "Overlay onto $SiteRoot (preserving data, config.php, collector.json, php.ini, secrets, logs)"
         Get-ChildItem -Path $src -Recurse -File -Force | ForEach-Object {
@@ -184,9 +199,32 @@ if (-not $got) {
 }
 
 $verFile = Join-Path $SiteRoot 'VERSION'
+$nowVer = ''
 if (Test-Path $verFile) {
     $vl = @(Get-Content $verFile -TotalCount 1 -ErrorAction SilentlyContinue)
-    if ($vl.Count -gt 0 -and $vl[0]) { Write-Ok ("Now at VERSION " + $vl[0].ToString().Trim()) }
+    if ($vl.Count -gt 0 -and $vl[0]) { $nowVer = $vl[0].ToString().Trim() }
+}
+Write-Ok ("VERSION file $verFile = $nowVer")
+$pages = Join-Path $SiteRoot 'app\pages.php'
+if (Test-Path $pages) {
+    $hit = Select-String -Path $pages -Pattern 'ba_flash' -SimpleMatch -Quiet
+    if ($hit) { Write-Ok 'app\pages.php contains ba_flash (update-check UI is present)' }
+    else { Write-Warn 'app\pages.php does not contain ba_flash - overlay did not replace Admin PHP' }
+}
+try {
+    Import-Module WebAdministration
+    Get-Website | ForEach-Object {
+        $pp = [Environment]::ExpandEnvironmentVariables([string]$_.physicalPath)
+        Write-Host ("    IIS site '{0}' physicalPath={1} state={2}" -f $_.Name, $pp, $_.State)
+    }
+} catch { }
+if ($nowVer) {
+    $have = $null
+    try { $have = [version](($nowVer -replace '[^\d.].*','')) } catch { }
+    $want = [version]$MinVersion
+    if ($have -and $have -lt $want) {
+        throw "Overlay left VERSION $nowVer (need $MinVersion or newer). jsDelivr served a stale tree. Re-run with -Ref v$MinVersion after the GitHub tag exists on jsDelivr."
+    }
 }
 
 try {
