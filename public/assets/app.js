@@ -224,18 +224,6 @@ function bindLocTree() {
   search.addEventListener('input', apply);
 }
 
-function showFlashToast() {
-  const f = document.querySelector('main .flash, #updates .flash, #updates .pill.warn');
-  if (!f) return;
-  const text = (f.textContent || '').replace(/\s+/g, ' ').trim();
-  if (!text) return;
-  const t = document.createElement('div');
-  t.className = 'ba-toast';
-  t.setAttribute('role', 'status');
-  t.textContent = text;
-  document.body.appendChild(t);
-}
-
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('device-charts');
   if (el) loadSeries(el.dataset.id);
@@ -243,5 +231,4 @@ document.addEventListener('DOMContentLoaded', () => {
   bindIdfPan();
   bindTemplateFill();
   bindLocTree();
-  showFlashToast();
 });

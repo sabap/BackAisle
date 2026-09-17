@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.5] - 2026-09-17
+
+- Admin Check for updates: remove the sticky nav overlay toast. In-page banner matches ColdAisle (transparent green when current, transparent blue when an update is available, transparent red on error)
+
 ## [0.5.4] - 2026-09-17
 
 - Check for updates no longer stops at the first missing jsDelivr patch tag (a 404 on 0.5.2 hid 0.5.3)

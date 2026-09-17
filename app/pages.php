@@ -639,6 +639,7 @@ function page_device(PDO $db, array $user): void {
 function page_admin(PDO $db, array $user): void {
     ba_require_admin();
     $updMsg = '';
+    $updFlash = 'ok';
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['updates_save'])) {
         BackAisleUpdate::saveConfig([
             'enabled' => isset($_POST['updates_enabled']),
@@ -656,18 +657,23 @@ function page_admin(PDO $db, array $user): void {
             ba_audit($db, 'update_check', 'system', $updStatus['latest'] ?? null, $updStatus['error'] ?? ($updStatus['source'] ?? ''));
             if (!empty($updStatus['update_available'])) {
                 $updMsg = 'Update available: v' . ($updStatus['latest'] ?? '') . ' (you have v' . ($updStatus['current'] ?? '') . ').';
+                $updFlash = 'info';
             } elseif (!empty($updStatus['ok'])) {
                 $updMsg = 'Checked: you are on v' . ($updStatus['current'] ?? '') .
                     (!empty($updStatus['latest']) ? (', latest is v' . $updStatus['latest']) : '') .
                     (!empty($updStatus['source']) ? (' via ' . $updStatus['source']) : '') . '.';
+                $updFlash = 'ok';
             } else {
                 $updMsg = (string)($updStatus['error'] ?? 'Could not check for updates.');
+                $updFlash = 'err';
             }
         } catch (Throwable $e) {
             $updMsg = $e->getMessage();
             $updStatus = ['ok' => false, 'error' => $e->getMessage()];
+            $updFlash = 'err';
         }
         $_SESSION['ba_flash'] = $updMsg;
+        $_SESSION['ba_flash_type'] = $updFlash;
         $_SESSION['ba_upd'] = $updStatus;
         header('Location: /admin.php?checked=1');
         exit;
@@ -680,6 +686,7 @@ function page_admin(PDO $db, array $user): void {
             $res = BackAisleUpdate::applyUpdate(trim((string)($_POST['target_version'] ?? '')) ?: null);
             ba_audit($db, 'update_apply', 'system', $res['version'] ?? null, $res['message'] ?? '');
             $_SESSION['ba_flash'] = $res['message'] ?? 'Updated.';
+            $_SESSION['ba_flash_type'] = 'ok';
             $_SESSION['ba_upd'] = [
                 'ok' => true,
                 'current' => $res['version'] ?? ba_version(),
@@ -689,6 +696,7 @@ function page_admin(PDO $db, array $user): void {
         } catch (Throwable $e) {
             ba_audit($db, 'update_apply_fail', 'system', null, $e->getMessage());
             $_SESSION['ba_flash'] = $e->getMessage();
+            $_SESSION['ba_flash_type'] = 'err';
             $_SESSION['ba_upd'] = ['ok' => false, 'error' => $e->getMessage()];
         }
         header('Location: /admin.php?updated=1');
@@ -699,16 +707,20 @@ function page_admin(PDO $db, array $user): void {
             $b = BackAisleUpdate::createRecoveryBackup();
             ba_audit($db, 'update_backup_now', 'system', null, basename($b['site_package']));
             $updMsg = 'Recovery backup created: '.basename($b['site_package']).' and '.basename($b['code_zip']).'.';
+            $updFlash = 'ok';
         } catch (Throwable $e) {
             $updMsg = $e->getMessage();
+            $updFlash = 'err';
         }
     }
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['install_ca'])) {
         try {
             $p = BackAisleUpdate::installCaBundle();
             $updMsg = 'CA bundle installed: '.$p;
+            $updFlash = 'ok';
         } catch (Throwable $e) {
             $updMsg = $e->getMessage();
+            $updFlash = 'err';
         }
     }
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['export_site_backup'])) {
@@ -721,8 +733,10 @@ function page_admin(PDO $db, array $user): void {
             ]);
             ba_audit($db, 'export_site_backup', 'system', null, basename($path));
             $updMsg = 'Site package written: '.basename($path).' ('.BackAisleBackup::formatBytes((int)filesize($path)).').';
+            $updFlash = 'ok';
         } catch (Throwable $e) {
             $updMsg = $e->getMessage();
+            $updFlash = 'err';
         }
     }
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['restore_site_backup'])) {
@@ -744,8 +758,10 @@ function page_admin(PDO $db, array $user): void {
             ]);
             ba_audit($db, 'restore_site_backup', 'system', null, basename($path));
             $updMsg = $res['message'];
+            $updFlash = 'ok';
         } catch (Throwable $e) {
             $updMsg = $e->getMessage();
+            $updFlash = 'err';
         }
     }
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['global_thresh'])) {
@@ -771,6 +787,10 @@ function page_admin(PDO $db, array $user): void {
         $updMsg = (string)$_SESSION['ba_flash'];
         unset($_SESSION['ba_flash']);
     }
+    if (!empty($_SESSION['ba_flash_type'])) {
+        $updFlash = (string)$_SESSION['ba_flash_type'];
+        unset($_SESSION['ba_flash_type']);
+    }
     if (!empty($_SESSION['ba_upd']) && is_array($_SESSION['ba_upd'])) {
         $updStatus = $_SESSION['ba_upd'];
         unset($_SESSION['ba_upd']);
@@ -783,7 +803,13 @@ function page_admin(PDO $db, array $user): void {
     try { $packages = BackAisleBackup::listPackages(); } catch (Throwable $e) { $packages = []; }
     $caPath = BackAisleUpdate::caBundlePath();
     ba_layout_start('Admin', 'admin');
-    if ($updMsg) echo '<div class="flash">'.h($updMsg).'</div>';
+    if ($updMsg) {
+        $flashCls = 'flash';
+        if (in_array($updFlash, ['ok', 'info', 'err'], true)) {
+            $flashCls .= ' ' . $updFlash;
+        }
+        echo '<div class="'.$flashCls.'">'.h($updMsg).'</div>';
+    }
     ?>
     <div class="grid2">
       <form method="post" class="card stack">
@@ -819,18 +845,18 @@ function page_admin(PDO $db, array $user): void {
         download use jsDelivr.</p>
       <?php if ($updStatus): ?>
         <?php if (!empty($updStatus['update_available'])): ?>
-          <div class="flash">Update available: v<?= h((string)$updStatus['latest']) ?> (you have v<?= h((string)$updStatus['current']) ?>)
+          <div class="flash info">Update available: v<?= h((string)$updStatus['latest']) ?> (you have v<?= h((string)$updStatus['current']) ?>)
             · <a href="<?= h((string)($updStatus['notes_url'] ?? BackAisleUpdate::changelogUrl())) ?>" target="_blank" rel="noopener">Release notes</a>
             <?php if (!empty($updStatus['notes'])): ?><pre class="update-notes"><?= h((string)$updStatus['notes']) ?></pre><?php endif; ?>
           </div>
         <?php elseif (!empty($updStatus['ok'])): ?>
-          <p class="muted">Up to date (v<?= h((string)$updStatus['current']) ?>).
-            <?php if (!empty($updStatus['latest'])): ?>Latest: v<?= h((string)$updStatus['latest']) ?>.<?php endif; ?>
+          <div class="flash ok">Up to date (v<?= h((string)$updStatus['current']) ?>).
+            <?php if (!empty($updStatus['latest'])): ?> Latest: v<?= h((string)$updStatus['latest']) ?>.<?php endif; ?>
             <?php if (!empty($updStatus['source'])): ?> Source: <?= h((string)$updStatus['source']) ?>.<?php endif; ?>
-            <?php if (!empty($updStatus['checked_at'])): ?>Last check: <?= h((string)$updStatus['checked_at']) ?><?= !empty($updStatus['cached']) ? ' (cached)' : '' ?><?php endif; ?>
-          </p>
+            <?php if (!empty($updStatus['checked_at'])): ?> Last check: <?= h((string)$updStatus['checked_at']) ?><?= !empty($updStatus['cached']) ? ' (cached)' : '' ?><?php endif; ?>
+          </div>
         <?php else: ?>
-          <p class="pill warn"><?= h((string)($updStatus['error'] ?? 'Could not check for updates.')) ?></p>
+          <div class="flash"><?= h((string)($updStatus['error'] ?? 'Could not check for updates.')) ?></div>
         <?php endif; ?>
       <?php endif; ?>
       <form method="post" action="/admin.php" class="stack" style="max-width:none">

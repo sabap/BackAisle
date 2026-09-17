@@ -103,22 +103,33 @@ h1 { font-size:1.2rem; margin:.2rem 0 1rem; }
 canvas { width:100%; height:140px; background:#0e141c; border-radius:6px; }
 .legend { font-size:.75rem; color:var(--muted); }
 .empty { color:var(--muted); padding:2rem; text-align:center; }
-.flash { background:#c9a227; color:#111; padding:.75rem 1rem; border-radius:6px; margin-bottom:1rem; font-weight:600; }
-.ba-toast {
-  position: fixed;
-  top: 16px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 9999;
-  background: #c9a227;
-  color: #111;
-  padding: 1rem 1.4rem;
+.flash {
+  padding: .75rem 1rem;
   border-radius: 8px;
-  font-weight: 700;
-  box-shadow: 0 8px 24px rgba(0,0,0,.45);
-  max-width: min(640px, 92vw);
-  text-align: center;
+  margin-bottom: 1rem;
+  border: 1px solid #f59e0b;
+  background: #713f1244;
+  color: #fde68a;
+  font-weight: 600;
 }
+.flash.ok {
+  background: #14532d44;
+  border-color: #22c55e;
+  color: #bbf7d0;
+}
+.flash.info {
+  background: #1e3a5f44;
+  border-color: #3b82f6;
+  color: #bfdbfe;
+}
+.flash.err {
+  background: #7f1d1d44;
+  border-color: #ef4444;
+  color: #fecaca;
+}
+.flash.ok a { color: #86efac; }
+.flash.info a { color: #93c5fd; }
+.flash.err a { color: #fecaca; }
 form.stack label { display:block; margin:.4rem 0 .15rem; color:var(--muted); font-size:.8rem; }
 form.stack { max-width:640px; }
 .btn.on { background:#2a5278; }
