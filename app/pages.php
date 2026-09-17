@@ -673,14 +673,26 @@ function page_admin(PDO $db, array $user): void {
         exit;
     }
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_apply'])) {
+        @ini_set('max_execution_time', '600');
+        @set_time_limit(600);
+        @ignore_user_abort(true);
         try {
             $res = BackAisleUpdate::applyUpdate(trim((string)($_POST['target_version'] ?? '')) ?: null);
             ba_audit($db, 'update_apply', 'system', $res['version'] ?? null, $res['message'] ?? '');
-            $updMsg = $res['message'] ?? 'Updated.';
+            $_SESSION['ba_flash'] = $res['message'] ?? 'Updated.';
+            $_SESSION['ba_upd'] = [
+                'ok' => true,
+                'current' => $res['version'] ?? ba_version(),
+                'latest' => $res['version'] ?? ba_version(),
+                'update_available' => false,
+            ];
         } catch (Throwable $e) {
-            $updMsg = $e->getMessage();
             ba_audit($db, 'update_apply_fail', 'system', null, $e->getMessage());
+            $_SESSION['ba_flash'] = $e->getMessage();
+            $_SESSION['ba_upd'] = ['ok' => false, 'error' => $e->getMessage()];
         }
+        header('Location: /admin.php?updated=1');
+        exit;
     }
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_backup_now'])) {
         try {
@@ -801,10 +813,10 @@ function page_admin(PDO $db, array $user): void {
     </div>
     <div class="card" id="updates">
       <h3>Updates <span class="muted">v<?= h(ba_version()) ?></span></h3>
-      <p class="muted">Checks public <a href="<?= h(BackAisleUpdate::githubUrl()) ?>" target="_blank" rel="noopener">sabap/BackAisle</a>
-        for newer versions, writes a full <code>backaisle-site_…</code> package (database + secrets + pictures)
-        and an application-files <code>backup_…</code> zip, then overlays the release and applies schema changes.
-        No GitHub token is required.</p>
+      <p class="muted">Same flow as ColdAisle: Check for updates, then Update. Writes a full
+        <code>backaisle-site_…</code> package and an application-files zip, overlays the release, keeps
+        <code>config.php</code> / SQL / php.ini. No GitHub token. If GitHub is blocked, the check and
+        download use jsDelivr.</p>
       <?php if ($updStatus): ?>
         <?php if (!empty($updStatus['update_available'])): ?>
           <div class="flash">Update available: v<?= h((string)$updStatus['latest']) ?> (you have v<?= h((string)$updStatus['current']) ?>)
@@ -836,7 +848,13 @@ function page_admin(PDO $db, array $user): void {
         <form method="post" action="/admin.php" onsubmit="return confirm('Create a recovery backup now? Writes a full site package and an application-files zip. Does not apply an update.');">
           <button type="submit" name="update_backup_now" value="1">Create recovery backup</button>
         </form>
-        <?php if ($updStatus && !empty($updStatus['update_available'])): ?>
+        <?php
+          $canApply = $updStatus
+              && empty($updStatus['error'])
+              && !empty($updStatus['latest'])
+              && version_compare((string)$updStatus['latest'], (string)($updStatus['current'] ?? ba_version()), '>');
+        ?>
+        <?php if ($canApply): ?>
           <form method="post" action="/admin.php" onsubmit="return confirm('Backup this install and update to v<?= h((string)$updStatus['latest']) ?>? The site may be briefly unavailable.');">
             <input type="hidden" name="target_version" value="<?= h((string)$updStatus['latest']) ?>">
             <button type="submit" name="update_apply" value="1">Update to v<?= h((string)$updStatus['latest']) ?></button>

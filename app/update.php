@@ -195,23 +195,54 @@ class BackAisleUpdate
         try {
             $extractDir = $tmpDir . DIRECTORY_SEPARATOR . 'extract';
             $sourceRoot = null;
+            $fetchErrors = [];
             try {
-                $zipFile = $tmpDir . DIRECTORY_SEPARATOR . 'release.zip';
-                $url = 'https://api.github.com/repos/' . rawurlencode(self::GITHUB_OWNER) . '/'
-                    . rawurlencode(self::GITHUB_REPO) . '/zipball/v' . rawurlencode($version);
-                self::githubDownload($url, $zipFile);
-                BackAisleBackup::extractZip($zipFile, $extractDir);
-                $sourceRoot = self::findExtractedRoot($extractDir);
-            } catch (Throwable $e) {
                 $jsDir = $tmpDir . DIRECTORY_SEPARATOR . 'jsd';
                 $sourceRoot = self::fetchJsDelivrTree($version, $jsDir);
+            } catch (Throwable $e) {
+                $fetchErrors[] = $e->getMessage();
+                try {
+                    $zipFile = $tmpDir . DIRECTORY_SEPARATOR . 'release.zip';
+                    $url = 'https://api.github.com/repos/' . rawurlencode(self::GITHUB_OWNER) . '/'
+                        . rawurlencode(self::GITHUB_REPO) . '/zipball/v' . rawurlencode($version);
+                    self::githubDownload($url, $zipFile);
+                    BackAisleBackup::extractZip($zipFile, $extractDir);
+                    $sourceRoot = self::findExtractedRoot($extractDir);
+                } catch (Throwable $e2) {
+                    $fetchErrors[] = $e2->getMessage();
+                }
             }
             if ($sourceRoot === null) {
-                throw new RuntimeException('Could not locate application root inside the release archive.');
+                throw new RuntimeException(
+                    'Could not download the release. ' . implode('; ', $fetchErrors)
+                );
+            }
+            $srcVer = self::parseSemver((string)@file_get_contents($sourceRoot . DIRECTORY_SEPARATOR . 'VERSION'));
+            if ($srcVer === null || version_compare($srcVer, $version, '<')) {
+                throw new RuntimeException(
+                    'Downloaded tree VERSION is ' . ($srcVer ?? 'missing') . ', expected ' . $version . '.'
+                );
             }
             $stats = self::applyTree($sourceRoot, BA_ROOT);
-            @file_put_contents(BA_ROOT . '/VERSION', $version . "\n");
-            self::applyPendingReplacements();
+            $verSrc = $sourceRoot . DIRECTORY_SEPARATOR . 'VERSION';
+            if (is_file($verSrc)) {
+                self::copyFileRobust($verSrc, BA_ROOT . DIRECTORY_SEPARATOR . 'VERSION');
+            } else {
+                @file_put_contents(BA_ROOT . DIRECTORY_SEPARATOR . 'VERSION', $version . "\n");
+            }
+            $pendingLeft = self::applyPendingReplacements();
+            if ($pendingLeft > 0) {
+                register_shutdown_function(static function (): void {
+                    try { self::applyPendingReplacements(); } catch (Throwable $e) { }
+                });
+            }
+            $onDisk = self::parseSemver((string)@file_get_contents(BA_ROOT . DIRECTORY_SEPARATOR . 'VERSION'));
+            if ($onDisk === null || version_compare($onDisk, $version, '<')) {
+                throw new RuntimeException(
+                    'Update copied files but VERSION on disk is ' . ($onDisk ?? 'missing')
+                    . ' (wanted ' . $version . '). Grant Modify on the site folder to the IIS app pool and click Update again.'
+                );
+            }
             try {
                 ba_ensure_infra_schema(ba_db(true));
                 $py = ba_python();
@@ -244,7 +275,11 @@ class BackAisleUpdate
             self::storeCache($fresh);
             $msg = "Updated from {$current} to {$version}. Site package: "
                 . basename($backup['site_package']) . '. App files: ' . basename($backup['code_zip'])
-                . " ({$stats['copied']} files).";
+                . " ({$stats['copied']} files";
+            if (($stats['deferred'] ?? 0) > 0 || $pendingLeft > 0) {
+                $msg .= ', some files finish on the next page load';
+            }
+            $msg .= ').';
             return [
                 'ok' => true,
                 'message' => $msg,
@@ -259,24 +294,76 @@ class BackAisleUpdate
 
     public static function applyPendingReplacements(): int
     {
+        $root = realpath(BA_ROOT);
+        if ($root === false) {
+            return 0;
+        }
         $left = 0;
         $flag = BA_ROOT . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'tmp' . DIRECTORY_SEPARATOR . self::PENDING_FLAG;
-        $it = new RecursiveIteratorIterator(
-            new RecursiveDirectoryIterator(BA_ROOT, FilesystemIterator::SKIP_DOTS)
-        );
-        foreach ($it as $file) {
-            $full = $file->getPathname();
-            if (!str_ends_with($full, self::PENDING_SUFFIX)) continue;
-            $dest = substr($full, 0, -strlen(self::PENDING_SUFFIX));
-            if (@rename($full, $dest) || (@copy($full, $dest) && @unlink($full))) {
-                continue;
+        try {
+            $it = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS),
+                RecursiveIteratorIterator::LEAVES_ONLY
+            );
+            foreach ($it as $file) {
+                $full = $file->getPathname();
+                if (!str_ends_with($full, self::PENDING_SUFFIX)) {
+                    continue;
+                }
+                $rel = str_replace('\\', '/', substr($full, strlen($root) + 1));
+                if (str_starts_with($rel, 'storage/') || str_starts_with($rel, '.git/')) {
+                    continue;
+                }
+                $dest = substr($full, 0, -strlen(self::PENDING_SUFFIX));
+                if (!self::promotePendingFile($full, $dest)) {
+                    $left++;
+                }
             }
-            $left++;
+        } catch (Throwable $e) {
+            return $left;
         }
         if ($left === 0 && is_file($flag)) {
             @unlink($flag);
         }
         return $left;
+    }
+
+    private static function promotePendingFile(string $pending, string $dest): bool
+    {
+        if (!is_file($pending)) {
+            return true;
+        }
+        $parent = dirname($dest);
+        if (!is_dir($parent)) {
+            @mkdir($parent, 0755, true);
+        }
+        if (is_file($dest)) {
+            @chmod($dest, 0666);
+            if (PHP_OS_FAMILY === 'Windows') {
+                @exec('attrib -R ' . escapeshellarg($dest) . ' 2>NUL');
+            }
+            if (@copy($pending, $dest)) {
+                @unlink($pending);
+                return true;
+            }
+            $bak = $dest . '.backaisle-bak';
+            @unlink($bak);
+            if (@rename($dest, $bak)) {
+                if (@rename($pending, $dest) || @copy($pending, $dest)) {
+                    @unlink($pending);
+                    @unlink($bak);
+                    return true;
+                }
+                @rename($bak, $dest);
+                return false;
+            }
+            return false;
+        }
+        if (@rename($pending, $dest) || @copy($pending, $dest)) {
+            @unlink($pending);
+            return true;
+        }
+        return false;
     }
 
     public static function aclHelpMessage(): string
@@ -344,7 +431,8 @@ class BackAisleUpdate
         foreach ([
             'data/', 'logs/', 'storage/backups/', 'storage/tmp/',
             '.git/', 'secrets.env', 'php.ini',
-            'public/assets/tpl/',
+            'config/config.php', 'config/collector.json',
+            'public/web.config', 'public/assets/tpl/',
         ] as $p) {
             if ($relNorm === rtrim($p, '/') || str_starts_with($relNorm, $p)) {
                 return true;
@@ -397,18 +485,19 @@ class BackAisleUpdate
             }
             $parent = dirname($target);
             if (!is_dir($parent)) @mkdir($parent, 0755, true);
-            $self = str_replace('\\', '/', (string)($_SERVER['SCRIPT_FILENAME'] ?? ''));
-            $tgtN = str_replace('\\', '/', $target);
-            if ($self !== '' && strcasecmp($self, $tgtN) === 0) {
+            if (self::isCurrentlyExecuting($target)) {
                 if (self::stagePending($full, $target)) {
                     $deferred++;
                     $copied++;
+                } else {
+                    throw new RuntimeException('Failed to stage active file: ' . $relNorm . '. ' . self::aclHelpMessage());
                 }
                 continue;
             }
-            if (@copy($full, $target)) {
+            $result = self::copyFileRobust($full, $target);
+            if ($result === 'ok') {
                 $copied++;
-            } elseif (self::stagePending($full, $target)) {
+            } elseif ($result === 'deferred') {
                 $copied++;
                 $deferred++;
             } else {
@@ -418,16 +507,84 @@ class BackAisleUpdate
         return ['copied' => $copied, 'skipped' => $skipped, 'deferred' => $deferred];
     }
 
+    private static function isCurrentlyExecuting(string $dest): bool
+    {
+        $script = (string)($_SERVER['SCRIPT_FILENAME'] ?? '');
+        if ($script === '') {
+            return false;
+        }
+        $a = realpath($dest);
+        $b = realpath($script);
+        if ($a && $b) {
+            return strcasecmp($a, $b) === 0;
+        }
+        return strcasecmp(str_replace('\\', '/', $dest), str_replace('\\', '/', $script)) === 0;
+    }
+
+    /** @return 'ok'|'deferred'|false */
+    private static function copyFileRobust(string $src, string $dest): string|false
+    {
+        if (!is_file($src) || !is_readable($src)) {
+            return false;
+        }
+        if (is_file($dest)) {
+            @chmod($dest, 0666);
+            if (PHP_OS_FAMILY === 'Windows') {
+                @exec('attrib -R ' . escapeshellarg($dest) . ' 2>NUL');
+            }
+        }
+        if (@copy($src, $dest)) {
+            $want = @filesize($src);
+            $got = @filesize($dest);
+            if ($want !== false && $got !== false && $got === $want) {
+                return 'ok';
+            }
+        }
+        $data = @file_get_contents($src);
+        if ($data !== false && @file_put_contents($dest, $data) !== false) {
+            return 'ok';
+        }
+        $tmp = $dest . '.upd.' . bin2hex(random_bytes(3));
+        $wroteTmp = $data !== false ? (@file_put_contents($tmp, $data) !== false) : @copy($src, $tmp);
+        if ($wroteTmp) {
+            if (!is_file($dest)) {
+                if (@rename($tmp, $dest) || @copy($tmp, $dest)) {
+                    @unlink($tmp);
+                    return 'ok';
+                }
+            } else {
+                $bak = $dest . '.backaisle-bak';
+                @unlink($bak);
+                if (@rename($dest, $bak)) {
+                    if (@rename($tmp, $dest) || @copy($tmp, $dest)) {
+                        @unlink($tmp);
+                        @unlink($bak);
+                        return 'ok';
+                    }
+                    @rename($bak, $dest);
+                }
+            }
+            @unlink($tmp);
+        }
+        if (self::stagePending($src, $dest)) {
+            return 'deferred';
+        }
+        return false;
+    }
+
     private static function stagePending(string $src, string $dest): bool
     {
         $pending = $dest . self::PENDING_SUFFIX;
-        if (!@copy($src, $pending)) {
-            return false;
+        @chmod($pending, 0666);
+        if (@copy($src, $pending) || (($data = @file_get_contents($src)) !== false && @file_put_contents($pending, $data) !== false)) {
+            $flagDir = BA_ROOT . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'tmp';
+            if (!is_dir($flagDir)) {
+                @mkdir($flagDir, 0775, true);
+            }
+            @file_put_contents($flagDir . DIRECTORY_SEPARATOR . self::PENDING_FLAG, '1');
+            return true;
         }
-        $flagDir = BA_ROOT . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'tmp';
-        if (!is_dir($flagDir)) @mkdir($flagDir, 0775, true);
-        @file_put_contents($flagDir . DIRECTORY_SEPARATOR . self::PENDING_FLAG, '1');
-        return true;
+        return false;
     }
 
     private static function zipAppTree(string $root, string $zipPath): int
@@ -584,6 +741,34 @@ class BackAisleUpdate
         $owner = rawurlencode(self::GITHUB_OWNER);
         $repo = rawurlencode(self::GITHUB_REPO);
         try {
+            $body = self::httpRequest(
+                'https://data.jsdelivr.com/v1/packages/gh/' . self::GITHUB_OWNER . '/' . self::GITHUB_REPO,
+                false,
+                false,
+                false,
+                15
+            );
+            $j = json_decode((string)$body, true);
+            if (is_array($j)) {
+                foreach ($j['versions'] ?? [] as $row) {
+                    $tv = is_array($row) ? (string)($row['version'] ?? '') : (string)$row;
+                    self::considerVersion($acc, $tv, 'jsdelivr');
+                }
+            }
+        } catch (Throwable $e) {
+            $errors[] = $e->getMessage();
+        }
+        try {
+            $mainVer = self::jsDelivrVersionFile('main');
+            self::considerVersion($acc, $mainVer, 'jsdelivr-main');
+        } catch (Throwable $e) {
+            $errors[] = $e->getMessage();
+        }
+        $probed = self::probeJsDelivrNewer($acc['tag'] ?? self::installedVersion());
+        if ($probed !== null) {
+            self::considerVersion($acc, $probed, 'jsdelivr-tag');
+        }
+        try {
             $release = self::githubGetJson("https://api.github.com/repos/{$owner}/{$repo}/releases/latest", true);
             if (is_array($release) && !empty($release['tag_name']) && empty($release['message'])) {
                 self::considerVersion(
@@ -611,34 +796,6 @@ class BackAisleUpdate
             }
         } catch (Throwable $e) {
             $errors[] = $e->getMessage();
-        }
-        try {
-            $body = self::httpRequest(
-                'https://data.jsdelivr.com/v1/packages/gh/' . self::GITHUB_OWNER . '/' . self::GITHUB_REPO,
-                false,
-                false,
-                false,
-                15
-            );
-            $j = json_decode((string)$body, true);
-            if (is_array($j)) {
-                foreach ($j['versions'] ?? [] as $row) {
-                    $tv = is_array($row) ? (string)($row['version'] ?? '') : (string)$row;
-                    self::considerVersion($acc, $tv, 'jsdelivr');
-                }
-            }
-        } catch (Throwable $e) {
-            $errors[] = $e->getMessage();
-        }
-        try {
-            $mainVer = self::jsDelivrVersionFile('main');
-            self::considerVersion($acc, $mainVer, 'jsdelivr-main');
-        } catch (Throwable $e) {
-            $errors[] = $e->getMessage();
-        }
-        $probed = self::probeJsDelivrNewer($acc['tag'] ?? self::installedVersion());
-        if ($probed !== null) {
-            self::considerVersion($acc, $probed, 'jsdelivr-tag');
         }
         if ($acc['tag'] === null) {
             throw new RuntimeException('Could not determine latest version. ' . implode('; ', $errors));
@@ -697,37 +854,98 @@ class BackAisleUpdate
         if (!is_dir($dest)) {
             @mkdir($dest, 0755, true);
         }
-        $n = 0;
+        $jobs = [];
+        $cdn = 'https://cdn.jsdelivr.net/gh/' . self::GITHUB_OWNER . '/' . self::GITHUB_REPO . '@' . rawurlencode($refUsed) . '/';
         foreach ($files as $rel) {
-            $url = 'https://cdn.jsdelivr.net/gh/' . self::GITHUB_OWNER . '/' . self::GITHUB_REPO . '@' . rawurlencode($refUsed) . '/' . $rel;
-            $out = $dest . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $rel);
-            $parent = dirname($out);
-            if (!is_dir($parent)) {
-                @mkdir($parent, 0755, true);
+            if (self::shouldPreserve($rel)) {
+                continue;
             }
-            try {
-                $body = self::httpRequest($url, true, false, false);
-                if ($body === null || $body === '') {
-                    continue;
-                }
-                if (@file_put_contents($out, $body) === false) {
-                    continue;
-                }
-                $n++;
-            } catch (Throwable $e) {
-                // skip one file
-            }
+            $jobs[] = ['rel' => $rel, 'url' => $cdn . str_replace(' ', '%20', $rel)];
         }
+        $n = self::downloadJsDelivrBatch($jobs, $dest);
         if ($n < 10) {
             throw new RuntimeException('jsDelivr fetched too few files (' . $n . ').');
+        }
+        foreach (['VERSION', 'public/index.php', 'app/update.php'] as $need) {
+            $p = $dest . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $need);
+            if (!is_file($p)) {
+                throw new RuntimeException('jsDelivr tree missing ' . $need);
+            }
         }
         $root = self::findExtractedRoot($dest);
         return $root ?? $dest;
     }
 
+    /** @param list<array{rel:string,url:string}> $jobs */
+    private static function downloadJsDelivrBatch(array $jobs, string $dest): int
+    {
+        $n = 0;
+        $sslVerify = !empty(self::config()['ssl_verify']);
+        $ca = self::caBundlePath();
+        $chunk = 8;
+        $total = count($jobs);
+        for ($i = 0; $i < $total; $i += $chunk) {
+            $batch = array_slice($jobs, $i, $chunk);
+            $mh = curl_multi_init();
+            if ($mh === false) {
+                throw new RuntimeException('curl_multi_init failed.');
+            }
+            $handles = [];
+            foreach ($batch as $job) {
+                $ch = curl_init($job['url']);
+                if ($ch === false) {
+                    continue;
+                }
+                $opts = [
+                    CURLOPT_RETURNTRANSFER => true,
+                    CURLOPT_FOLLOWLOCATION => true,
+                    CURLOPT_TIMEOUT => 60,
+                    CURLOPT_CONNECTTIMEOUT => 10,
+                    CURLOPT_HTTPHEADER => ['User-Agent: BackAisle-Updater'],
+                    CURLOPT_SSL_VERIFYPEER => $sslVerify,
+                    CURLOPT_SSL_VERIFYHOST => $sslVerify ? 2 : 0,
+                ];
+                if ($sslVerify && is_file($ca)) {
+                    $opts[CURLOPT_CAINFO] = $ca;
+                }
+                curl_setopt_array($ch, $opts);
+                curl_multi_add_handle($mh, $ch);
+                $handles[] = ['ch' => $ch, 'rel' => $job['rel']];
+            }
+            $running = 0;
+            do {
+                $mc = curl_multi_exec($mh, $running);
+                if ($running) {
+                    curl_multi_select($mh, 1.0);
+                }
+            } while ($running && $mc === CURLM_OK);
+            foreach ($handles as $item) {
+                $ch = $item['ch'];
+                $rel = $item['rel'];
+                $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                $body = curl_multi_getcontent($ch);
+                curl_multi_remove_handle($mh, $ch);
+                curl_close($ch);
+                if ($code < 200 || $code >= 300 || !is_string($body) || $body === '') {
+                    continue;
+                }
+                $out = $dest . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $rel);
+                $parent = dirname($out);
+                if (!is_dir($parent)) {
+                    @mkdir($parent, 0755, true);
+                }
+                if (@file_put_contents($out, $body) !== false) {
+                    $n++;
+                }
+            }
+            curl_multi_close($mh);
+        }
+        return $n;
+    }
+
     private static function githubGetJson(string $url, bool $allowNotFound): mixed
     {
-        $body = self::httpRequest($url, false, $allowNotFound, true);
+        $body = self::httpRequest($url, false, $allowNotFound, true, 8);
         if ($body === null) return null;
         if (self::isHtmlPayload($body)) {
             throw new RuntimeException('GitHub API returned a web page (proxy).');
