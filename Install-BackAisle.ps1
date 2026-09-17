@@ -303,9 +303,6 @@ try {
     if ($RegisterCollectorTask) { $prereqArgs.RegisterCollectorTask = $true }
     if ($SkipHttps) { $prereqArgs.SkipHttps = $true }
     & $prereq @prereqArgs
-    if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) {
-        throw "Install-BackAisle-Prereqs.ps1 exited $LASTEXITCODE"
-    }
     Write-Host ''
     $next = if ($HttpPort -eq 80) { 'http://localhost/setup.php' } else { "http://localhost:${HttpPort}/setup.php" }
     Write-Host "  Next: $next" -ForegroundColor Green

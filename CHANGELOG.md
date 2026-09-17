@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.4.1] - 2026-09-17
+
+- Installer download fail-closed: refuse OpenDNS/HTML, jsDelivr first, zip magic-byte check. PowerShell_QC gate.
+
 ## [0.4.0] - 2026-09-17
 
 - Installer targets a fresh IIS **Default Web Site** on HTTP :80 and HTTPS :443 (self-signed cert if needed). App pool remains `BackAisle`. Files stay in `C:\inetpub\BackAisle`. No assumption that another product owns port 80.
