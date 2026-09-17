@@ -244,7 +244,7 @@ function page_fleet_writes(PDO $db, array $user): void {
       <h3>Templates (redacted preview)</h3>
       <?php if (!$templates) echo '<p class="muted">None yet.</p>'; ?>
       <ul><?php foreach ($templates as $t): ?>
-        <li><a href="/writes/template?id=<?= (int)$t['id'] ?>"><?= h($t['name']) ?></a> · <?= h($t['source_ip']) ?> · <?= h($t['pulled_at']) ?></li>
+        <li><a href="<?= h(ba_href('/writes/template?id='.(int)$t['id'])) ?>"><?= h($t['name']) ?></a> · <?= h($t['source_ip']) ?> · <?= h($t['pulled_at']) ?></li>
       <?php endforeach; ?></ul>
     </div>
 
@@ -253,7 +253,7 @@ function page_fleet_writes(PDO $db, array $user): void {
       <table><thead><tr><th>ID</th><th>Kind</th><th>Status</th><th>Sim</th><th>By</th><th>Started</th><th>Ended</th></tr></thead><tbody>
       <?php foreach ($jobs as $j): ?>
         <tr>
-          <td><a href="/writes/job?id=<?= (int)$j['id'] ?>"><?= (int)$j['id'] ?></a></td>
+          <td><a href="<?= h(ba_href('/writes/job?id='.(int)$j['id'])) ?>"><?= (int)$j['id'] ?></a></td>
           <td><?= h($j['kind']) ?></td>
           <td><?= h($j['status']) ?></td>
           <td><?= $j['simulate'] ? 'yes' : 'no' ?></td>

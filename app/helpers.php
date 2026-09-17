@@ -5,6 +5,41 @@ function h(?string $s): string {
     return htmlspecialchars((string)$s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 }
 
+/** Map app paths to real IIS files (no URL Rewrite). */
+function ba_href(string $pathAndQuery): string {
+    $hash = '';
+    $hpos = strpos($pathAndQuery, '#');
+    if ($hpos !== false) {
+        $hash = substr($pathAndQuery, $hpos);
+        $pathAndQuery = substr($pathAndQuery, 0, $hpos);
+    }
+    $qpos = strpos($pathAndQuery, '?');
+    $path = $qpos === false ? $pathAndQuery : substr($pathAndQuery, 0, $qpos);
+    $qs = $qpos === false ? '' : substr($pathAndQuery, $qpos);
+    $path = '/' . ltrim($path, '/');
+    $path = rtrim($path, '/') ?: '/';
+    $special = [
+        '/writes/template' => '/writes.php?view=template',
+        '/writes/job' => '/writes.php?view=job',
+        '/admin/backup-download' => '/admin.php?download=1',
+        '/' => '/index.php',
+        '/home' => '/home.php',
+        '/login' => '/login.php',
+        '/logout' => '/logout.php',
+    ];
+    if (isset($special[$path])) {
+        $base = $special[$path];
+        if ($qs !== '') {
+            $base .= (str_contains($base, '?') ? '&' : '?') . ltrim($qs, '?');
+        }
+        return $base . $hash;
+    }
+    if (str_ends_with($path, '.php')) {
+        return $path . $qs . $hash;
+    }
+    return $path . '.php' . $qs . $hash;
+}
+
 function ba_request_path(): string {
     foreach (['HTTP_X_ORIGINAL_URL', 'UNENCODED_URL', 'HTTP_URL'] as $k) {
         if (empty($_SERVER[$k])) {

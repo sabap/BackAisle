@@ -294,7 +294,7 @@ function page_fleet(PDO $db): void {
       <?php foreach ($rows as $r): $cls = ba_worst($r); ?>
         <tr class="<?= $cls ?>">
           <td class="pill"><?= $cls === 'st-ok' ? 'ok' : ($cls === 'st-batt' ? 'battery' : ($cls === 'st-down' ? 'down' : ($cls === 'st-hot' ? 'hot' : 'warn'))) ?></td>
-          <td><a href="/device?id=<?= (int)$r['id'] ?>"><?= h($r['group_name'] ?: ($r['building'] . ' / ' . $r['idf_closet'])) ?></a></td>
+          <td><a href="/device.php?id=<?= (int)$r['id'] ?>"><?= h($r['group_name'] ?: ($r['building'] . ' / ' . $r['idf_closet'])) ?></a></td>
           <td><?= h($r['hostname']) ?></td>
           <td><?= h($r['ip']) ?></td>
           <td><?= h(ba_output_text(isset($r['output_status']) ? (int)$r['output_status'] : null)) ?></td>
@@ -335,7 +335,7 @@ function page_climate(PDO $db): void {
         $pres = (int)($r['sensor_present'] ?? $r['sample_sensor'] ?? 0);
         $exp = (int)$r['sensor_expected'];
         echo '<tr class="'.h(ba_worst($r)).'">';
-        echo '<td><a href="/device?id='.(int)$r['id'].'">'.h($r['building'].' / '.$r['idf_closet']).'</a></td>';
+        echo '<td><a href="/device.php?id='.(int)$r['id'].'">'.h($r['building'].' / '.$r['idf_closet']).'</a></td>';
         if (!$exp) echo '<td class="muted">not expected</td><td>—</td><td>—</td>';
         elseif (!$pres) echo '<td class="pill warn">absent</td><td>—</td><td>—</td>';
         else {
@@ -343,7 +343,7 @@ function page_climate(PDO $db): void {
             echo '<td>'.($r['temp_f'] === null ? '<span class="muted">no reading</span>' : h(ba_fmt($r['temp_f'], '°F'))).'</td>';
             echo '<td>'.($r['humidity_pct'] === null ? '<span class="muted">no reading</span>' : h(ba_fmt($r['humidity_pct'], '%', 0))).'</td>';
         }
-        echo '<td><a href="/device?id='.(int)$r['id'].'">'.h($r['hostname'] ?: $r['ip']).'</a></td></tr>';
+        echo '<td><a href="/device.php?id='.(int)$r['id'].'">'.h($r['hostname'] ?: $r['ip']).'</a></td></tr>';
     }
     echo '</tbody></table>';
     ba_layout_end();
@@ -355,7 +355,7 @@ function page_batteries(PDO $db): void {
     echo '<h1>Battery fleet</h1><table><thead><tr><th>Closet</th><th>Host</th><th>Cap</th><th>Runtime</th><th>Status</th><th>Last replaced</th><th>Replace-by</th></tr></thead><tbody>';
     foreach ($rows as $r) {
         echo '<tr class="'.h(ba_worst($r)).'">';
-        echo '<td><a href="/device?id='.(int)$r['id'].'">'.h($r['idf_closet']).'</a></td>';
+        echo '<td><a href="/device.php?id='.(int)$r['id'].'">'.h($r['idf_closet']).'</a></td>';
         echo '<td>'.h($r['hostname']).'</td>';
         echo '<td>'.h(ba_fmt($r['capacity_pct']??null,'%',0)).'</td>';
         echo '<td>'.h(ba_fmt($r['runtime_min']??null,'min',0)).'</td>';
@@ -379,7 +379,7 @@ function page_alerts(PDO $db, array $user): void {
             $db->prepare("UPDATE alerts SET status='cleared', cleared_at=datetime('now') WHERE id=?")->execute([$id]);
             ba_audit($db, 'clear_alert', 'alert', (string)$id);
         }
-        header('Location: /alerts');
+        header('Location: ' . ba_href('/alerts'));
         exit;
     }
     $rows = $db->query("SELECT a.*, d.hostname, d.ip, d.idf_closet FROM alerts a JOIN devices d ON d.id=a.device_id WHERE a.status IN ('open','acked') ORDER BY a.opened_at DESC")->fetchAll();
@@ -390,7 +390,7 @@ function page_alerts(PDO $db, array $user): void {
         echo '<table><thead><tr><th>Opened</th><th>Sev</th><th>Closet</th><th>Code</th><th>Message</th><th></th></tr></thead><tbody>';
         foreach ($rows as $r) {
             echo '<tr><td>'.h($r['opened_at']).'</td><td class="pill '.($r['severity']==='crit'?'batt':'warn').'">'.h($r['severity']).'</td>';
-            echo '<td><a href="/device?id='.(int)$r['device_id'].'">'.h($r['idf_closet']).'</a></td>';
+            echo '<td><a href="/device.php?id='.(int)$r['device_id'].'">'.h($r['idf_closet']).'</a></td>';
             echo '<td>'.h($r['code']).'</td><td>'.h($r['message']).'</td><td>';
             if ($user['role']==='admin') {
                 echo '<form method="post" style="display:inline">';
@@ -432,7 +432,7 @@ function page_devices(PDO $db, array $user): void {
                 ]);
             ba_audit($db, 'add_device', 'device', $ip);
         }
-        header('Location: /devices');
+        header('Location: ' . ba_href('/devices'));
         exit;
     }
     $rows = $db->query("SELECT * FROM devices ORDER BY is_simulated, building, idf_closet")->fetchAll();
@@ -459,14 +459,14 @@ function page_devices(PDO $db, array $user): void {
     foreach ($rows as $r) {
         $u = $r['position_u'] ? ('U'.(int)$r['position_u']) : '';
         echo '<tr><td>'.h(ba_kind_label($r['kind'] ?? 'ups')).'</td>';
-        echo '<td><a href="/device?id='.(int)$r['id'].'">'.h($r['ip'] ?: '—').'</a></td><td>'.h($r['hostname']).'</td><td>'.h($r['model']).'</td>';
+        echo '<td><a href="/device.php?id='.(int)$r['id'].'">'.h($r['ip'] ?: '—').'</a></td><td>'.h($r['hostname']).'</td><td>'.h($r['model']).'</td>';
         echo '<td>';
         if (!empty($r['template_id']) && isset($tplNames[(int)$r['template_id']])) {
-            echo '<a href="/templates?id='.(int)$r['template_id'].'">'.h($tplNames[(int)$r['template_id']]).'</a>';
+            echo '<a href="'.h(ba_href('/templates?id='.(int)$r['template_id'])).'">'.h($tplNames[(int)$r['template_id']]).'</a>';
         } else echo '—';
         echo '</td><td>'.h($r['serial']).'</td><td>'.h($r['building'].' / '.$r['idf_closet']).'</td>';
         echo '<td>';
-        if (!empty($r['rack_id'])) echo '<a href="/rack?id='.(int)$r['rack_id'].'">'.h(($r['rack'] ?: 'rack').' '.$u).'</a>';
+        if (!empty($r['rack_id'])) echo '<a href="'.h(ba_href('/rack?id='.(int)$r['rack_id'])).'">'.h(($r['rack'] ?: 'rack').' '.$u).'</a>';
         else echo h($r['rack'] ?: '—');
         echo '</td></tr>';
     }
@@ -513,10 +513,10 @@ function page_device(PDO $db, array $user): void {
                 ba_apply_template($db, $id, $tid);
                 ba_audit($db, 'apply_template', 'device', (string)$id, (string)$tid);
             } catch (Throwable $e) {
-                header('Location: /device?id='.$id.'&err='.rawurlencode($e->getMessage()));
+                header('Location: ' . ba_href('/device?id='.$id.'&err='.rawurlencode($e->getMessage())));
                 exit;
             }
-            header('Location: /device?id='.$id);
+            header('Location: ' . ba_href('/device?id='.$id));
             exit;
         }
         if (isset($_POST['thresh'])) {
@@ -526,7 +526,7 @@ function page_device(PDO $db, array $user): void {
                     (float)$_POST['temp_high_f'], (float)$_POST['temp_low_f'], (int)$_POST['humidity_high'], (int)$_POST['humidity_low'], (int)$_POST['poll_fail_count']]);
             ba_audit($db, 'update_thresholds', 'device', (string)$id, json_encode($_POST));
         }
-        header('Location: /device?id='.$id);
+        header('Location: ' . ba_href('/device?id='.$id));
         exit;
     }
     $th = $db->prepare("SELECT * FROM thresholds WHERE (scope='device' AND device_id=?) OR scope='global' ORDER BY CASE scope WHEN 'device' THEN 1 ELSE 0 END DESC LIMIT 1");
@@ -551,7 +551,7 @@ function page_device(PDO $db, array $user): void {
     </div>
     <p class="muted">Closet <?= h($r['site'].' / '.$r['building'].' / '.$r['idf_closet']) ?>
       <?php if (!empty($r['rack_id'])): ?>
-        · <a href="/rack?id=<?= (int)$r['rack_id'] ?>">rack <?= h($r['rack']) ?> U<?= (int)$r['position_u'] ?></a>
+        · <a href="<?= h(ba_href('/rack?id='.(int)$r['rack_id'])) ?>">rack <?= h($r['rack']) ?> U<?= (int)$r['position_u'] ?></a>
       <?php endif; ?>
       · <?= h(ba_kind_label($r['kind'] ?? 'ups')) ?>
       · comm <?= h($r['comm_state'] ?: 'unknown') ?> · last ok <?= h($r['last_success'] ?: 'never') ?> · SNMP name <?= h($r['snmp_name']) ?> · fw <?= h($r['firmware']) ?></p>
@@ -647,13 +647,13 @@ function page_admin(PDO $db, array $user): void {
             'ssl_verify' => isset($_POST['updates_ssl_verify']),
         ]);
         ba_audit($db, 'updates_save', 'system', null);
-        header('Location: /admin#updates');
+        header('Location: ' . ba_href('/admin#updates'));
         exit;
     }
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_check'])) {
         BackAisleUpdate::checkForUpdate(true);
         ba_audit($db, 'update_check', 'system', null);
-        header('Location: /admin#updates');
+        header('Location: ' . ba_href('/admin#updates'));
         exit;
     }
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_apply'])) {
@@ -725,7 +725,7 @@ function page_admin(PDO $db, array $user): void {
             ->execute([(int)$_POST['on_battery_minutes'], (int)$_POST['capacity_low'], (int)$_POST['runtime_low_min'],
                 (float)$_POST['temp_high_f'], (float)$_POST['temp_low_f'], (int)$_POST['humidity_high'], (int)$_POST['humidity_low'], (int)$_POST['poll_fail_count']]);
         ba_audit($db, 'update_global_thresholds', 'thresholds', 'global');
-        header('Location: /admin');
+        header('Location: ' . ba_href('/admin'));
         exit;
     }
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['new_user'])) {
@@ -733,7 +733,7 @@ function page_admin(PDO $db, array $user): void {
         $role = ($_POST['role'] ?? '') === 'admin' ? 'admin' : 'viewer';
         $db->prepare('INSERT INTO users (username, password_hash, role) VALUES (?,?,?)')->execute([trim($_POST['username']??''), $hash, $role]);
         ba_audit($db, 'create_user', 'user', $_POST['username'] ?? '');
-        header('Location: /admin');
+        header('Location: ' . ba_href('/admin'));
         exit;
     }
     $thr = $db->query("SELECT * FROM thresholds WHERE scope='global'")->fetch() ?: [];
@@ -857,7 +857,7 @@ function page_admin(PDO $db, array $user): void {
             <td><?= h($p['kind']) ?></td>
             <td><?= h(BackAisleBackup::formatBytes($p['bytes'])) ?></td>
             <td><?= h(date('Y-m-d H:i', $p['mtime'])) ?></td>
-            <td><a href="/admin/backup-download?file=<?= h(rawurlencode($p['name'])) ?>">download</a></td>
+            <td><a href="<?= h(ba_href('/admin/backup-download?file='.rawurlencode($p['name']))) ?>">download</a></td>
           </tr>
         <?php endforeach; ?>
         </tbody>

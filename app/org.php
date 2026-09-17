@@ -41,7 +41,7 @@ function ba_group_path(PDO $db, ?int $id): string {
 
 function page_org(PDO $db, array $user): void {
     ba_require_admin();
-    $tab = $_GET['tab'] ?? 'groups';
+    $tab = $_POST['tab'] ?? $_GET['tab'] ?? 'groups';
     $msg = '';
     $groups = ba_groups($db);
 
@@ -208,7 +208,7 @@ PY);
     $tabs = ['groups'=>'Groups','snmp'=>'SNMPv3 profiles','configs'=>'Config profiles','import'=>'PowerPanel import','ldap'=>'LDAPS','certs'=>'SSL/TLS certs'];
     echo '<nav class="filters">';
     foreach ($tabs as $k=>$lab) {
-        echo '<a class="btn '.($tab===$k?'on':'').'" href="/org?tab='.$k.'">'.h($lab).'</a> ';
+        echo '<a class="btn '.($tab===$k?'on':'').'" href="'.h(ba_href('/org?tab='.$k)).'">'.h($lab).'</a> ';
     }
     echo '</nav>';
 
@@ -224,7 +224,7 @@ PY);
                 $n = $db->prepare('SELECT COUNT(*) c FROM devices WHERE group_id=?');
                 $n->execute([$g['id']]);
                 echo '<div style="margin:.25rem 0 0 '.strlen($prefix)*8 .'px">'.h($prefix.$g['name']).' <span class="muted">'.$n->fetch()['c'].' units · hold '.$g['alert_hold_sec'].'s</span> ';
-                echo '<a href="/idfs?group='.(int)$g['id'].'">racks</a> ';
+                echo '<a href="'.h(ba_href('/idfs?group='.(int)$g['id'])).'">racks</a> ';
                 echo '<form method="post" style="display:inline"><input type="hidden" name="act" value="del_group"><input type="hidden" name="id" value="'.(int)$g['id'].'"><button>remove</button></form></div>';
                 $walk((int)$g['id'], $prefix.'— ');
             }
@@ -263,7 +263,7 @@ PY);
         echo '<div class="card"><h3>Config profiles</h3><p class="muted">Pulled RMCARD YYYY_MM_DD_HHMM.txt files. Clone more from Fleet writes.</p><table><thead><tr><th>Name</th><th>Source</th><th>When</th><th></th></tr></thead><tbody>';
         foreach ($db->query('SELECT * FROM config_templates ORDER BY id DESC') as $t) {
             echo '<tr><td>'.h($t['name']).($t['is_default']?' <span class="muted">default</span>':'').'</td><td>'.h($t['source_ip']).'</td><td>'.h($t['pulled_at']).'</td><td>';
-            echo '<a href="/writes/template?id='.(int)$t['id'].'">preview</a> ';
+            echo '<a href="'.h(ba_href('/writes/template?id='.(int)$t['id'])).'">preview</a> ';
             echo '<form method="post" style="display:inline"><input type="hidden" name="act" value="mark_default_cfg"><input type="hidden" name="id" value="'.(int)$t['id'].'"><button>set default</button></form></td></tr>';
         }
         echo '</tbody></table></div>';
@@ -284,9 +284,10 @@ PY);
     }
 
     if ($tab === 'import') {
-        echo '<form method="post" enctype="multipart/form-data" class="card stack"><h3>Import PowerPanel site</h3>';
+        echo '<form method="post" action="/org.php?tab=import" enctype="multipart/form-data" class="card stack"><h3>Import PowerPanel site</h3>';
         echo '<p class="muted">Accepts PowerPanel Business <code>profile.zip</code> (DbGroup, DbDevice, DbSNMPSetting). Nested groups preserved. Existing IPs are updated in place, not duplicated.</p>';
         echo '<input type="file" name="zip" accept=".zip" required>';
+        echo '<input type="hidden" name="tab" value="import">';
         echo '<input type="hidden" name="act" value="import_pp"><button>Import</button></form>';
     }
 
@@ -370,7 +371,7 @@ function page_battery_report(PDO $db): void {
                 elseif ($dd <= (clone $today)->modify('+90 days')) $cls = 'st-warn';
             } catch (Throwable $e) {}
         }
-        echo '<tr class="'.$cls.'"><td>'.h($due ?: '—').'</td><td><a href="/device?id='.(int)$r['id'].'">'.h($r['hostname']).'</a></td><td>'.h($r['ip']).'</td><td>'.h($r['group_name'] ?: '—').'</td><td>'.h($last ?: '—').'</td><td>'.h($r['warranty_replace_by'] ?: '—').'</td><td>'.h($age).'</td></tr>';
+        echo '<tr class="'.$cls.'"><td>'.h($due ?: '—').'</td><td><a href="'.h(ba_href('/device?id='.(int)$r['id'])).'">'.h($r['hostname']).'</a></td><td>'.h($r['ip']).'</td><td>'.h($r['group_name'] ?: '—').'</td><td>'.h($last ?: '—').'</td><td>'.h($r['warranty_replace_by'] ?: '—').'</td><td>'.h($age).'</td></tr>';
     }
     echo '</tbody></table>';
     ba_layout_end();

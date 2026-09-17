@@ -120,7 +120,7 @@ function page_templates(PDO $db, array $user): void {
                     }
                 }
                 ba_audit($db, $tid ? 'save_template' : 'add_template', 'device_template', (string)$tid);
-                header('Location: /templates?id='.$tid);
+                header('Location: ' . ba_href('/templates?id='.$tid));
                 exit;
             } elseif ($act === 'deactivate') {
                 $tid = (int)$_POST['id'];
@@ -135,7 +135,7 @@ function page_templates(PDO $db, array $user): void {
             } elseif ($act === 'apply') {
                 ba_apply_template($db, (int)$_POST['device_id'], (int)$_POST['template_id']);
                 ba_audit($db, 'apply_template', 'device', (string)$_POST['device_id']);
-                header('Location: /device?id='.(int)$_POST['device_id']);
+                header('Location: ' . ba_href('/device?id='.(int)$_POST['device_id']));
                 exit;
             }
         } catch (Throwable $e) {
@@ -152,7 +152,7 @@ function page_templates(PDO $db, array $user): void {
         }
         ba_layout_start($tpl ? ('Template: '.$tpl['model']) : 'New template', 'templates');
         if ($msg) echo '<div class="flash">'.h($msg).'</div>';
-        echo '<p class="muted"><a href="/templates">All templates</a></p>';
+        echo '<p class="muted"><a href="/templates.php">All templates</a></p>';
         echo '<h1>'.h($tpl ? $tpl['model'] : 'New device template').'</h1>';
         echo '<p class="muted">Catalog entry for IDF gear. Apply it to a UPS, switch, or patch panel to fill model, U height, and ports.</p>';
         if ($admin) {
@@ -193,7 +193,7 @@ function page_templates(PDO $db, array $user): void {
             else {
                 echo '<table><thead><tr><th>Host</th><th>IP</th><th>Kind</th></tr></thead><tbody>';
                 foreach ($devs as $d) {
-                    echo '<tr><td><a href="/device?id='.(int)$d['id'].'">'.h($d['hostname'] ?: $d['ip']).'</a></td><td>'.h($d['ip']).'</td><td>'.h(ba_kind_label($d['kind'])).'</td></tr>';
+                    echo '<tr><td><a href="/device.php?id='.(int)$d['id'].'">'.h($d['hostname'] ?: $d['ip']).'</a></td><td>'.h($d['ip']).'</td><td>'.h(ba_kind_label($d['kind'])).'</td></tr>';
                 }
                 echo '</tbody></table>';
             }
@@ -208,12 +208,12 @@ function page_templates(PDO $db, array $user): void {
     if ($msg) echo '<div class="flash">'.h($msg).'</div>';
     echo '<h1>Device templates</h1>';
     echo '<p class="muted">Reusable models for IDF racks — UPS, switches, and patch panels. Apply a template to fill U height, manufacturer, model, and ports.</p>';
-    if ($admin) echo '<p><a class="btn" href="/templates?action=new">+ New template</a></p>';
+    if ($admin) echo '<p><a class="btn" href="/templates.php?action=new">+ New template</a></p>';
     echo '<table><thead><tr><th>Kind</th><th>Manufacturer</th><th>Model</th><th>U</th><th>Face</th><th>Ports</th><th>VA</th><th></th></tr></thead><tbody>';
     foreach ($rows as $t) {
         $dim = !(int)$t['is_active'] ? ' class="muted"' : '';
         echo '<tr'.$dim.'><td>'.h(ba_kind_label($t['kind'])).'</td><td>'.h($t['manufacturer']).'</td>';
-        echo '<td><a href="/templates?id='.(int)$t['id'].'">'.h($t['model']).'</a></td>';
+        echo '<td><a href="/templates.php?id='.(int)$t['id'].'">'.h($t['model']).'</a></td>';
         echo '<td>'.(int)$t['u_height'].'</td><td>'.h($t['face']).'</td><td>'.h((string)($t['port_count'] ?? '—')).'</td>';
         echo '<td>'.h($t['va_rating'] !== null ? (string)(int)$t['va_rating'] : '—').'</td><td>';
         if ($admin) {

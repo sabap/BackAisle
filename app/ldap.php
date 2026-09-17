@@ -11,6 +11,16 @@ function ba_setting(PDO $db, string $k, string $default = ''): string {
 }
 
 function ba_set_setting(PDO $db, string $k, string $v): void {
+    if (ba_db_driver() === 'sqlsrv') {
+        $st = $db->prepare('UPDATE settings SET v=? WHERE k=?');
+        $st->execute([$v, $k]);
+        $chk = $db->prepare('SELECT COUNT(*) FROM settings WHERE k=?');
+        $chk->execute([$k]);
+        if ((int)$chk->fetchColumn() === 0) {
+            $db->prepare('INSERT INTO settings (k,v) VALUES (?,?)')->execute([$k, $v]);
+        }
+        return;
+    }
     $db->prepare('INSERT INTO settings (k,v) VALUES (?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v')->execute([$k, $v]);
 }
 

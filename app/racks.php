@@ -302,7 +302,7 @@ function page_idfs(PDO $db, array $user): void {
         $maxU = 1;
         foreach ($racks as $rk) $maxU = max($maxU, (int)$rk['u_height']);
         echo '<div class="dash-hero"><div>';
-        echo '<p class="muted"><a href="/idfs">Locations</a> / '.h(ba_group_path($db, $gid)).'</p>';
+        echo '<p class="muted"><a href="'.h(ba_href('/idfs')).'">Locations</a> / '.h(ba_group_path($db, $gid)).'</p>';
         echo '<h1>'.h($g['name']).'</h1>';
         echo '<p class="muted">Click an empty U to place a UPS, switch, or patch panel. U1 is the bottom of the rack.</p>';
         echo '</div></div>';
@@ -317,10 +317,10 @@ function page_idfs(PDO $db, array $user): void {
                 }
                 $pct = (int)$rk['u_height'] ? round(100 * $used / (int)$rk['u_height']) : 0;
                 echo '<div class="idf-row-cab">';
-                echo '<div class="idf-row-head"><a href="/rack?id='.(int)$rk['id'].'"><strong>'.h($rk['name']).'</strong></a>';
+                echo '<div class="idf-row-head"><a href="/rack.php?id='.(int)$rk['id'].'"><strong>'.h($rk['name']).'</strong></a>';
                 echo '<span class="muted">'.(int)$rk['u_height'].'U · '.$used.'U used · '.$pct.'%</span></div>';
                 ba_render_elevation($rk, $devs, 'front', true, $admin);
-                echo '<div class="idf-row-foot"><a href="/rack?id='.(int)$rk['id'].'">open rack</a>';
+                echo '<div class="idf-row-foot"><a href="/rack.php?id='.(int)$rk['id'].'">open rack</a>';
                 if ($admin) {
                     echo '<form method="post" class="inline" onsubmit="return confirm(\'Remove this rack?\')">';
                     echo '<input type="hidden" name="act" value="del_rack"><input type="hidden" name="rack_id" value="'.(int)$rk['id'].'">';
@@ -564,7 +564,7 @@ function page_rack(PDO $db, array $user): void {
         </p>
       </div>
       <div class="idf-cab-actions">
-        <a class="btn" href="/idfs?group=<?= (int)$rack['group_id'] ?>">← All racks</a>
+        <a class="btn" href="<?= h(ba_href('/idfs?group='.(int)$rack['group_id'])) ?>">All racks</a>
         <?php if ($admin): ?>
           <a class="btn" href="#place">+ Device</a>
         <?php endif; ?>
