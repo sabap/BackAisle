@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.4.5] - 2026-09-17
+
+- Admin update check shows a result on the same page; if GitHub is blocked it uses jsDelivr for version and apply
+
 ## [0.4.4] - 2026-09-17
 
 - Edit SNMPv3 profiles; bulk-assign a profile to a location (or all UPS); templates can carry an SNMPv3 profile

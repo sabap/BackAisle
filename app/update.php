@@ -73,57 +73,24 @@ class BackAisleUpdate
                 return $cached;
             }
         }
-        $owner = rawurlencode((string)$cfg['github_owner']);
-        $repo = rawurlencode((string)$cfg['github_repo']);
         try {
-            $release = self::githubGetJson("https://api.github.com/repos/{$owner}/{$repo}/releases/latest", true);
-            $tag = null;
-            $name = null;
-            $html = null;
-            $notes = null;
-            $published = null;
-            if (is_array($release) && !empty($release['tag_name']) && empty($release['message'])) {
-                $tag = ltrim((string)$release['tag_name'], 'vV');
-                $name = (string)($release['name'] ?? $release['tag_name']);
-                $html = (string)($release['html_url'] ?? '');
-                $notes = trim((string)($release['body'] ?? ''));
-                $published = (string)($release['published_at'] ?? $release['created_at'] ?? '');
-            } else {
-                $tags = self::githubGetJson("https://api.github.com/repos/{$owner}/{$repo}/tags?per_page=30", false);
-                if (!is_array($tags) || isset($tags['message'])) {
-                    $msg = is_array($tags) ? (string)($tags['message'] ?? 'GitHub API error') : 'GitHub API error';
-                    throw new RuntimeException($msg);
-                }
-                $best = null;
-                foreach ($tags as $t) {
-                    if (!is_array($t) || empty($t['name'])) continue;
-                    $tv = ltrim((string)$t['name'], 'vV');
-                    if (!preg_match('/^\d+\.\d+/', $tv)) continue;
-                    if ($best === null || version_compare($tv, $best, '>')) {
-                        $best = $tv;
-                        $name = (string)$t['name'];
-                    }
-                }
-                if ($best === null) {
-                    throw new RuntimeException('No version tags found on the repository. Push a tag like v0.1.0 first.');
-                }
-                $tag = $best;
-                $html = self::githubUrl() . '/releases/tag/v' . rawurlencode($tag);
-            }
+            $remote = self::resolveRemoteLatest();
+            $tag = (string)$remote['tag'];
             $result = [
                 'ok' => true,
                 'current' => $current,
                 'latest' => $tag,
-                'update_available' => version_compare((string)$tag, $current, '>'),
-                'release_name' => $name,
-                'html_url' => $html,
+                'update_available' => version_compare($tag, $current, '>'),
+                'release_name' => $remote['name'],
+                'html_url' => $remote['html'],
                 'notes_url' => self::changelogUrl(),
-                'notes' => $notes !== '' ? $notes : null,
-                'published_at' => $published,
+                'notes' => $remote['notes'],
+                'published_at' => $remote['published'],
                 'checked_at' => $now,
                 'cached' => false,
+                'source' => $remote['source'],
             ];
-            self::storeCache($result);
+            try { self::storeCache($result); } catch (Throwable $e) { /* still return the check */ }
             return $result;
         } catch (Throwable $e) {
             $result = self::statusBase($current, $now) + [
@@ -131,7 +98,7 @@ class BackAisleUpdate
                 'error' => $e->getMessage(),
                 'notes_url' => self::changelogUrl(),
             ];
-            self::storeCache($result);
+            try { self::storeCache($result); } catch (Throwable $e2) { }
             return $result;
         }
     }
@@ -226,13 +193,19 @@ class BackAisleUpdate
         $backup = self::createRecoveryBackup();
         $tmpDir = self::makeWorkDir('upd');
         try {
-            $zipFile = $tmpDir . DIRECTORY_SEPARATOR . 'release.zip';
-            $url = 'https://api.github.com/repos/' . rawurlencode(self::GITHUB_OWNER) . '/'
-                . rawurlencode(self::GITHUB_REPO) . '/zipball/v' . rawurlencode($version);
-            self::githubDownload($url, $zipFile);
             $extractDir = $tmpDir . DIRECTORY_SEPARATOR . 'extract';
-            BackAisleBackup::extractZip($zipFile, $extractDir);
-            $sourceRoot = self::findExtractedRoot($extractDir);
+            $sourceRoot = null;
+            try {
+                $zipFile = $tmpDir . DIRECTORY_SEPARATOR . 'release.zip';
+                $url = 'https://api.github.com/repos/' . rawurlencode(self::GITHUB_OWNER) . '/'
+                    . rawurlencode(self::GITHUB_REPO) . '/zipball/v' . rawurlencode($version);
+                self::githubDownload($url, $zipFile);
+                BackAisleBackup::extractZip($zipFile, $extractDir);
+                $sourceRoot = self::findExtractedRoot($extractDir);
+            } catch (Throwable $e) {
+                $jsDir = $tmpDir . DIRECTORY_SEPARATOR . 'jsd';
+                $sourceRoot = self::fetchJsDelivrTree($version, $jsDir);
+            }
             if ($sourceRoot === null) {
                 throw new RuntimeException('Could not locate application root inside the release archive.');
             }
@@ -502,25 +475,204 @@ class BackAisleUpdate
         return null;
     }
 
+    /** @return array{tag:string,name:string,html:?string,notes:?string,published:?string,source:string} */
+    private static function resolveRemoteLatest(): array
+    {
+        $errors = [];
+        $owner = rawurlencode(self::GITHUB_OWNER);
+        $repo = rawurlencode(self::GITHUB_REPO);
+        try {
+            $release = self::githubGetJson("https://api.github.com/repos/{$owner}/{$repo}/releases/latest", true);
+            if (is_array($release) && !empty($release['tag_name']) && empty($release['message'])) {
+                $tag = ltrim((string)$release['tag_name'], 'vV');
+                return [
+                    'tag' => $tag,
+                    'name' => (string)($release['name'] ?? $release['tag_name']),
+                    'html' => (string)($release['html_url'] ?? ''),
+                    'notes' => trim((string)($release['body'] ?? '')) ?: null,
+                    'published' => (string)($release['published_at'] ?? $release['created_at'] ?? ''),
+                    'source' => 'github',
+                ];
+            }
+        } catch (Throwable $e) {
+            $errors[] = $e->getMessage();
+        }
+        try {
+            $tags = self::githubGetJson("https://api.github.com/repos/{$owner}/{$repo}/tags?per_page=30", false);
+            if (is_array($tags) && empty($tags['message'])) {
+                $best = null;
+                $name = null;
+                foreach ($tags as $t) {
+                    if (!is_array($t) || empty($t['name'])) {
+                        continue;
+                    }
+                    $tv = ltrim((string)$t['name'], 'vV');
+                    if (!preg_match('/^\d+\.\d+/', $tv)) {
+                        continue;
+                    }
+                    if ($best === null || version_compare($tv, $best, '>')) {
+                        $best = $tv;
+                        $name = (string)$t['name'];
+                    }
+                }
+                if ($best !== null) {
+                    return [
+                        'tag' => $best,
+                        'name' => (string)$name,
+                        'html' => self::githubUrl() . '/releases/tag/v' . rawurlencode($best),
+                        'notes' => null,
+                        'published' => null,
+                        'source' => 'github-tags',
+                    ];
+                }
+            }
+        } catch (Throwable $e) {
+            $errors[] = $e->getMessage();
+        }
+        $body = self::httpRequest('https://data.jsdelivr.com/v1/packages/gh/' . self::GITHUB_OWNER . '/' . self::GITHUB_REPO, false, false, false);
+        $j = json_decode((string)$body, true);
+        $best = null;
+        if (is_array($j)) {
+            foreach ($j['versions'] ?? [] as $row) {
+                $tv = ltrim((string)(is_array($row) ? ($row['version'] ?? '') : $row), 'vV');
+                if (!preg_match('/^\d+\.\d+/', $tv)) {
+                    continue;
+                }
+                if ($best === null || version_compare($tv, $best, '>')) {
+                    $best = $tv;
+                }
+            }
+        }
+        if ($best === null) {
+            $ver = trim((string)self::httpRequest('https://cdn.jsdelivr.net/gh/' . self::GITHUB_OWNER . '/' . self::GITHUB_REPO . '@main/VERSION', false, false, false));
+            $ver = ltrim($ver, "vV \t\r\n");
+            if (preg_match('/^\d+\.\d+/', $ver)) {
+                $best = $ver;
+            }
+        }
+        if ($best === null) {
+            throw new RuntimeException('Could not determine latest version. ' . implode('; ', $errors));
+        }
+        return [
+            'tag' => $best,
+            'name' => 'v' . $best,
+            'html' => self::githubUrl() . '/releases/tag/v' . rawurlencode($best),
+            'notes' => null,
+            'published' => null,
+            'source' => 'jsdelivr',
+        ];
+    }
+
+    private static function flattenJsDelivrFiles(array $node, string $prefix = ''): array
+    {
+        $out = [];
+        foreach ($node['files'] ?? [] as $f) {
+            if (!is_array($f)) {
+                continue;
+            }
+            $name = (string)($f['name'] ?? '');
+            $p = $prefix === '' ? $name : $prefix . '/' . $name;
+            if (preg_match('#^\.(git|grok)(/|$)#', $p)) {
+                continue;
+            }
+            if (($f['type'] ?? '') === 'file') {
+                $out[] = $p;
+            } elseif (!empty($f['files']) && is_array($f['files'])) {
+                $out = array_merge($out, self::flattenJsDelivrFiles($f, $p));
+            }
+        }
+        return $out;
+    }
+
+    private static function fetchJsDelivrTree(string $version, string $dest): string
+    {
+        $version = ltrim($version, 'vV');
+        $errors = [];
+        $meta = null;
+        $refUsed = null;
+        foreach ([$version, 'v' . $version] as $ref) {
+            try {
+                $url = 'https://data.jsdelivr.com/v1/packages/gh/' . self::GITHUB_OWNER . '/' . self::GITHUB_REPO . '@' . rawurlencode($ref);
+                $body = self::httpRequest($url, false, false, false);
+                $j = json_decode((string)$body, true);
+                if (is_array($j) && !empty($j['files'])) {
+                    $meta = $j;
+                    $refUsed = $ref;
+                    break;
+                }
+            } catch (Throwable $e) {
+                $errors[] = $e->getMessage();
+            }
+        }
+        if ($meta === null || $refUsed === null) {
+            throw new RuntimeException('jsDelivr package list failed. ' . implode('; ', $errors));
+        }
+        $files = self::flattenJsDelivrFiles($meta);
+        if (count($files) < 10) {
+            throw new RuntimeException('jsDelivr file list too small.');
+        }
+        if (!is_dir($dest)) {
+            @mkdir($dest, 0755, true);
+        }
+        $n = 0;
+        foreach ($files as $rel) {
+            $url = 'https://cdn.jsdelivr.net/gh/' . self::GITHUB_OWNER . '/' . self::GITHUB_REPO . '@' . rawurlencode($refUsed) . '/' . $rel;
+            $out = $dest . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $rel);
+            $parent = dirname($out);
+            if (!is_dir($parent)) {
+                @mkdir($parent, 0755, true);
+            }
+            try {
+                $body = self::httpRequest($url, true, false, false);
+                if ($body === null || $body === '') {
+                    continue;
+                }
+                if (@file_put_contents($out, $body) === false) {
+                    continue;
+                }
+                $n++;
+            } catch (Throwable $e) {
+                // skip one file
+            }
+        }
+        if ($n < 10) {
+            throw new RuntimeException('jsDelivr fetched too few files (' . $n . ').');
+        }
+        $root = self::findExtractedRoot($dest);
+        return $root ?? $dest;
+    }
+
     private static function githubGetJson(string $url, bool $allowNotFound): mixed
     {
-        $body = self::httpRequest($url, false, $allowNotFound);
+        $body = self::httpRequest($url, false, $allowNotFound, true);
         if ($body === null) return null;
+        if (self::isHtmlPayload($body)) {
+            throw new RuntimeException('GitHub API returned a web page (proxy).');
+        }
         return json_decode($body, true);
     }
 
     private static function githubDownload(string $url, string $dest): void
     {
-        $body = self::httpRequest($url, true, false);
+        $body = self::httpRequest($url, true, false, true);
         if ($body === null || $body === '') {
             throw new RuntimeException('Empty download from GitHub.');
+        }
+        if (strlen($body) >= 2 && $body[0] === '<' ) {
+            throw new RuntimeException('GitHub zip download was a web page (proxy).');
         }
         if (@file_put_contents($dest, $body) === false) {
             throw new RuntimeException('Could not write release zip.');
         }
     }
 
-    private static function httpRequest(string $url, bool $binary, bool $allowNotFound): ?string
+    private static function isHtmlPayload(string $body): bool
+    {
+        $t = ltrim($body, "\xEF\xBB\xBF \t\r\n");
+        return (bool)preg_match('/^(<!DOCTYPE|<html)/i', $t);
+    }
+
+    private static function httpRequest(string $url, bool $binary, bool $allowNotFound, bool $githubApi = true): ?string
     {
         if (!function_exists('curl_init')) {
             throw new RuntimeException('PHP cURL extension is required for updates.');
@@ -530,10 +682,12 @@ class BackAisleUpdate
             throw new RuntimeException('curl_init failed.');
         }
         $headers = [
-            'Accept: application/vnd.github+json',
             'User-Agent: BackAisle-Updater',
-            'X-GitHub-Api-Version: 2022-11-28',
         ];
+        if ($githubApi) {
+            $headers[] = 'Accept: application/vnd.github+json';
+            $headers[] = 'X-GitHub-Api-Version: 2022-11-28';
+        }
         $sslVerify = !empty(self::config()['ssl_verify']);
         $opts = [
             CURLOPT_RETURNTRANSFER => true,
@@ -559,8 +713,12 @@ class BackAisleUpdate
             return null;
         }
         if ($code < 200 || $code >= 300) {
-            throw new RuntimeException('GitHub HTTP ' . $code);
+            throw new RuntimeException('HTTP ' . $code . ' from ' . $url);
         }
-        return (string)$body;
+        $body = (string)$body;
+        if (!$binary && self::isHtmlPayload($body)) {
+            throw new RuntimeException('Received a web page instead of data (proxy).');
+        }
+        return $body;
     }
 }

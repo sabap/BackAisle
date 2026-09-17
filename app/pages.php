@@ -651,10 +651,22 @@ function page_admin(PDO $db, array $user): void {
         exit;
     }
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_check'])) {
-        BackAisleUpdate::checkForUpdate(true);
-        ba_audit($db, 'update_check', 'system', null);
-        header('Location: ' . ba_href('/admin#updates'));
-        exit;
+        try {
+            $updStatus = BackAisleUpdate::checkForUpdate(true);
+            ba_audit($db, 'update_check', 'system', $updStatus['latest'] ?? null, $updStatus['error'] ?? ($updStatus['source'] ?? ''));
+            if (!empty($updStatus['update_available'])) {
+                $updMsg = 'Update available: v' . ($updStatus['latest'] ?? '') . ' (you have v' . ($updStatus['current'] ?? '') . ').';
+            } elseif (!empty($updStatus['ok'])) {
+                $updMsg = 'Checked: you are on v' . ($updStatus['current'] ?? '') .
+                    (!empty($updStatus['latest']) ? (', latest is v' . $updStatus['latest']) : '') .
+                    (!empty($updStatus['source']) ? (' via ' . $updStatus['source']) : '') . '.';
+            } else {
+                $updMsg = (string)($updStatus['error'] ?? 'Could not check for updates.');
+            }
+        } catch (Throwable $e) {
+            $updMsg = $e->getMessage();
+            $updStatus = ['ok' => false, 'error' => $e->getMessage()];
+        }
     }
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_apply'])) {
         try {
@@ -740,7 +752,9 @@ function page_admin(PDO $db, array $user): void {
     $users = $db->query('SELECT id, username, role, created_at FROM users ORDER BY username')->fetchAll();
     $audit = $db->query('SELECT * FROM audit_log ORDER BY id DESC LIMIT 80')->fetchAll();
     $updCfg = BackAisleUpdate::config();
-    $updStatus = $updCfg['auto_check'] ? BackAisleUpdate::checkForUpdate(false) : BackAisleUpdate::cachedStatus();
+    if (!isset($updStatus)) {
+        $updStatus = $updCfg['auto_check'] ? BackAisleUpdate::checkForUpdate(false) : BackAisleUpdate::cachedStatus();
+    }
     $packages = [];
     try { $packages = BackAisleBackup::listPackages(); } catch (Throwable $e) { $packages = []; }
     $caPath = BackAisleUpdate::caBundlePath();
@@ -787,13 +801,15 @@ function page_admin(PDO $db, array $user): void {
           </div>
         <?php elseif (!empty($updStatus['ok'])): ?>
           <p class="muted">Up to date (v<?= h((string)$updStatus['current']) ?>).
+            <?php if (!empty($updStatus['latest'])): ?>Latest: v<?= h((string)$updStatus['latest']) ?>.<?php endif; ?>
+            <?php if (!empty($updStatus['source'])): ?> Source: <?= h((string)$updStatus['source']) ?>.<?php endif; ?>
             <?php if (!empty($updStatus['checked_at'])): ?>Last check: <?= h((string)$updStatus['checked_at']) ?><?= !empty($updStatus['cached']) ? ' (cached)' : '' ?><?php endif; ?>
           </p>
         <?php else: ?>
           <p class="pill warn"><?= h((string)($updStatus['error'] ?? 'Could not check for updates.')) ?></p>
         <?php endif; ?>
       <?php endif; ?>
-      <form method="post" class="stack" style="max-width:none">
+      <form method="post" action="/admin.php" class="stack" style="max-width:none">
         <label><input type="checkbox" name="updates_enabled" value="1" <?= !empty($updCfg['enabled'])?'checked':'' ?>> Enable update checks</label>
         <label><input type="checkbox" name="updates_auto_check" value="1" <?= !empty($updCfg['auto_check'])?'checked':'' ?>> Auto-check when opening Admin</label>
         <label>Check interval (hours)</label>
@@ -803,15 +819,15 @@ function page_admin(PDO $db, array $user): void {
         <button name="updates_save" value="1">Save update settings</button>
       </form>
       <div class="filters" style="margin-top:.8rem">
-        <form method="post"><button name="install_ca" value="1">Install CA certificates</button></form>
-        <form method="post"><button name="update_check" value="1">Check for updates</button></form>
-        <form method="post" onsubmit="return confirm('Create a recovery backup now? Writes a full site package and an application-files zip. Does not apply an update.');">
-          <button name="update_backup_now" value="1">Create recovery backup</button>
+        <form method="post" action="/admin.php"><button type="submit" name="install_ca" value="1">Install CA certificates</button></form>
+        <form method="post" action="/admin.php"><button type="submit" name="update_check" value="1">Check for updates</button></form>
+        <form method="post" action="/admin.php" onsubmit="return confirm('Create a recovery backup now? Writes a full site package and an application-files zip. Does not apply an update.');">
+          <button type="submit" name="update_backup_now" value="1">Create recovery backup</button>
         </form>
         <?php if ($updStatus && !empty($updStatus['update_available'])): ?>
-          <form method="post" onsubmit="return confirm('Backup this install and update to v<?= h((string)$updStatus['latest']) ?>? The site may be briefly unavailable.');">
+          <form method="post" action="/admin.php" onsubmit="return confirm('Backup this install and update to v<?= h((string)$updStatus['latest']) ?>? The site may be briefly unavailable.');">
             <input type="hidden" name="target_version" value="<?= h((string)$updStatus['latest']) ?>">
-            <button name="update_apply" value="1">Update to v<?= h((string)$updStatus['latest']) ?></button>
+            <button type="submit" name="update_apply" value="1">Update to v<?= h((string)$updStatus['latest']) ?></button>
           </form>
         <?php endif; ?>
       </div>
