@@ -667,6 +667,10 @@ function page_admin(PDO $db, array $user): void {
             $updMsg = $e->getMessage();
             $updStatus = ['ok' => false, 'error' => $e->getMessage()];
         }
+        $_SESSION['ba_flash'] = $updMsg;
+        $_SESSION['ba_upd'] = $updStatus;
+        header('Location: /admin.php?checked=1');
+        exit;
     }
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_apply'])) {
         try {
@@ -751,6 +755,14 @@ function page_admin(PDO $db, array $user): void {
     $thr = $db->query("SELECT * FROM thresholds WHERE scope='global'")->fetch() ?: [];
     $users = $db->query('SELECT id, username, role, created_at FROM users ORDER BY username')->fetchAll();
     $audit = $db->query('SELECT * FROM audit_log ORDER BY id DESC LIMIT 80')->fetchAll();
+    if (!empty($_SESSION['ba_flash'])) {
+        $updMsg = (string)$_SESSION['ba_flash'];
+        unset($_SESSION['ba_flash']);
+    }
+    if (!empty($_SESSION['ba_upd']) && is_array($_SESSION['ba_upd'])) {
+        $updStatus = $_SESSION['ba_upd'];
+        unset($_SESSION['ba_upd']);
+    }
     $updCfg = BackAisleUpdate::config();
     if (!isset($updStatus)) {
         $updStatus = $updCfg['auto_check'] ? BackAisleUpdate::checkForUpdate(false) : BackAisleUpdate::cachedStatus();

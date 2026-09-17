@@ -7,7 +7,7 @@
 [CmdletBinding()]
 param(
     [string]$SiteRoot = 'C:\inetpub\BackAisle',
-    [string]$Ref = 'main',
+    [string]$Ref = 'latest',
     [string]$Owner = 'sabap',
     [string]$Repo = 'BackAisle',
     [string]$PoolName = 'BackAisle'
@@ -99,7 +99,48 @@ Write-Host ''
 $work = Join-Path $env:TEMP ("BackAisle-update-{0}" -f [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $work | Out-Null
 $got = $false
-foreach ($tryRef in @($Ref, 'main')) {
+$tryRefs = New-Object System.Collections.Generic.List[string]
+[void]$tryRefs.Add('v0.4.7')
+[void]$tryRefs.Add('0.4.7')
+if ($Ref -and $Ref -ne 'latest' -and $Ref -ne 'main') {
+    [void]$tryRefs.Add($Ref)
+    $nv = $Ref -replace '^[vV]', ''
+    [void]$tryRefs.Add($nv)
+    [void]$tryRefs.Add('v' + $nv)
+}
+try {
+    Write-Step 'Resolving latest version on jsDelivr (not cached @main)'
+    $pkgFile = Join-Path $work 'pkg.json'
+    Invoke-BaGet -Uri "https://data.jsdelivr.com/v1/packages/gh/$Owner/$Repo" -OutFile $pkgFile -MinBytes 20
+    $pkg = Get-Content -LiteralPath $pkgFile -Raw -Encoding UTF8 | ConvertFrom-Json
+    $best = $null
+    foreach ($row in @($pkg.versions)) {
+        $tv = [string]$row.version
+        if ($tv -notmatch '^\d+\.\d+') { continue }
+        if ($null -eq $best) { $best = $tv }
+        else {
+            try {
+                if ([version]$tv -gt [version]$best) { $best = $tv }
+            } catch {
+                if ($tv -gt $best) { $best = $tv }
+            }
+        }
+    }
+    if ($best) {
+        Write-Ok "jsDelivr latest package version: $best"
+        [void]$tryRefs.Add($best)
+        [void]$tryRefs.Add('v' + $best)
+    }
+} catch {
+    Write-Warn $_.Exception.Message
+}
+[void]$tryRefs.Add('main')
+$seen = @{}
+$ordered = @()
+foreach ($r in $tryRefs) {
+    if ($r -and -not $seen.ContainsKey($r)) { $seen[$r] = $true; $ordered += $r }
+}
+foreach ($tryRef in $ordered) {
     try {
         Write-Step "File list from jsDelivr @$tryRef"
         $api = "https://data.jsdelivr.com/v1/packages/gh/$Owner/$Repo@$tryRef"

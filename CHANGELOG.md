@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.4.7] - 2026-09-17
+
+- Production overlay uses the latest jsDelivr **version tag** (not cached @main). Admin check shows a yellow toast and a flash banner.
+
 ## [0.4.6] - 2026-09-17
 
 - Production overlay: `scripts/Update-BackAisle.ps1` pulls application files from jsDelivr without wiping the database, config, or php.ini

@@ -17,7 +17,7 @@ function ba_layout_start(string $title, string $nav = 'fleet'): void {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title><?= h($title) ?> · BackAisle</title>
-  <link rel="stylesheet" href="/assets/app.css?v=loctree1">
+  <link rel="stylesheet" href="/assets/app.css?v=toast1">
 </head>
 <body>
 <header class="top">
@@ -58,5 +58,5 @@ function ba_layout_start(string $title, string $nav = 'fleet'): void {
 
 function ba_layout_end(): void {
     echo '</main><footer class="site-foot">BackAisle v'.h(ba_version()).' · <a href="https://github.com/sabap/BackAisle" target="_blank" rel="noopener">GitHub</a></footer>';
-    echo '<script src="/assets/app.js?v=loctree1"></script></body></html>';
+    echo '<script src="/assets/app.js?v=toast1"></script></body></html>';
 }
