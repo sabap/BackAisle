@@ -260,10 +260,21 @@ if ($nowVer) {
 
 try {
     Import-Module WebAdministration
-    Restart-WebAppPool -Name $PoolName
-    Write-Ok "Restarted app pool $PoolName"
+    $poolState = [string](Get-WebAppPoolState -Name $PoolName).Value
+    if ($poolState -eq 'Stopped') {
+        Start-WebAppPool -Name $PoolName
+        Write-Ok "Started app pool $PoolName"
+    } else {
+        Restart-WebAppPool -Name $PoolName
+        Write-Ok "Restarted app pool $PoolName"
+    }
 } catch {
-    throw "Files copied but IIS pool '$PoolName' did not restart: $($_.Exception.Message). Recycle the BackAisle pool in IIS Manager."
+    try {
+        Start-WebAppPool -Name $PoolName
+        Write-Ok "Started app pool $PoolName after copy"
+    } catch {
+        throw "Files are on disk but the IIS pool '$PoolName' is not running. In IIS Manager open Application Pools, select BackAisle, click Start."
+    }
 }
 Write-Host ''
 Write-Host '  Production overlay finished. Open http://localhost/admin.php and http://localhost/home.php' -ForegroundColor Green
