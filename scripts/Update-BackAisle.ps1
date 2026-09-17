@@ -7,8 +7,8 @@
 [CmdletBinding()]
 param(
     [string]$SiteRoot = 'C:\inetpub\BackAisle',
-    [string]$Ref = 'v0.4.8',
-    [string]$MinVersion = '0.4.8',
+    [string]$Ref = 'v0.4.9',
+    [string]$MinVersion = '0.4.9',
     [string]$Owner = 'sabap',
     [string]$Repo = 'BackAisle',
     [string]$PoolName = 'BackAisle'
@@ -101,10 +101,10 @@ $work = Join-Path $env:TEMP ("BackAisle-update-{0}" -f [guid]::NewGuid().ToStrin
 New-Item -ItemType Directory -Force -Path $work | Out-Null
 $got = $false
 $tryRefs = New-Object System.Collections.Generic.List[string]
+[void]$tryRefs.Add('v0.4.9')
+[void]$tryRefs.Add('0.4.9')
 [void]$tryRefs.Add('v0.4.8')
 [void]$tryRefs.Add('0.4.8')
-[void]$tryRefs.Add('v0.4.7')
-[void]$tryRefs.Add('0.4.7')
 if ($Ref -and $Ref -ne 'latest' -and $Ref -ne 'main') {
     [void]$tryRefs.Add($Ref)
     $nv = $Ref -replace '^[vV]', ''
@@ -177,17 +177,48 @@ foreach ($tryRef in $ordered) {
         }
         Write-Ok "Fetched $n files @$tryRef"
         Write-Step "Overlay onto $SiteRoot (preserving data, config.php, collector.json, php.ini, secrets, logs)"
-        Get-ChildItem -Path $src -Recurse -File -Force | ForEach-Object {
-            $rel = $_.FullName.Substring($src.Length).TrimStart('\', '/')
-            $relFwd = $rel -replace '\\', '/'
+        try {
+            Import-Module WebAdministration
+            $st = (Get-WebAppPoolState -Name $PoolName).Value
+            if ($st -ne 'Stopped') {
+                Write-Host '    Stopping app pool so PHP files can be replaced'
+                Stop-WebAppPool -Name $PoolName
+                $w = 0
+                while ($w -lt 15 -and (Get-WebAppPoolState -Name $PoolName).Value -ne 'Stopped') {
+                    Start-Sleep -Seconds 1
+                    $w++
+                }
+            }
+        } catch {
+            Write-Warn "Could not stop pool $PoolName : $($_.Exception.Message)"
+        }
+        $srcRoot = (Get-Item -LiteralPath $src).FullName.TrimEnd('\')
+        $copied = 0
+        Get-ChildItem -LiteralPath $srcRoot -Recurse -File -Force | ForEach-Object {
+            $full = $_.FullName
+            if (-not $full.StartsWith($srcRoot, [StringComparison]::OrdinalIgnoreCase)) {
+                $full = (Get-Item -LiteralPath $_.FullName).FullName
+            }
+            if ($full.Length -le $srcRoot.Length) { return }
+            $rel = $full.Substring($srcRoot.Length).TrimStart('\')
+            $relFwd = ($rel -replace '\\', '/')
             if (Test-PreserveRel $relFwd) { return }
             $target = Join-Path $SiteRoot $rel
             $td = Split-Path -Parent $target
-            if ($td -and -not (Test-Path $td)) {
+            if ($td -and -not (Test-Path -LiteralPath $td)) {
                 New-Item -ItemType Directory -Force -Path $td | Out-Null
             }
-            Copy-Item -LiteralPath $_.FullName -Destination $target -Force
+            if (Test-Path -LiteralPath $target) {
+                $item = Get-Item -LiteralPath $target -Force
+                if ($item.IsReadOnly) { $item.IsReadOnly = $false }
+            }
+            [IO.File]::Copy($full, $target, $true)
+            $copied++
+            if ($relFwd -eq 'VERSION' -or $relFwd -eq 'app/pages.php') {
+                Write-Host ("    wrote {0}" -f $target)
+            }
         }
+        Write-Ok "Wrote $copied files into $SiteRoot"
         $got = $true
         break
     } catch {

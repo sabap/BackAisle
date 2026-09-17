@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.4.9] - 2026-09-17
+
+- Overlay stops the IIS app pool, copies with [IO.File]::Copy, and verifies VERSION on disk (fixes silent no-op when PHP files were in use)
+
 ## [0.4.8] - 2026-09-17
 
 - Overlay refuses a jsDelivr tree older than 0.4.8 (stops @main from leaving production on 0.4.3)
