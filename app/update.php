@@ -197,17 +197,17 @@ class BackAisleUpdate
             $sourceRoot = null;
             $fetchErrors = [];
             try {
-                $jsDir = $tmpDir . DIRECTORY_SEPARATOR . 'jsd';
-                $sourceRoot = self::fetchJsDelivrTree($version, $jsDir);
+                $zipFile = $tmpDir . DIRECTORY_SEPARATOR . 'release.zip';
+                $url = 'https://api.github.com/repos/' . rawurlencode(self::GITHUB_OWNER) . '/'
+                    . rawurlencode(self::GITHUB_REPO) . '/zipball/v' . rawurlencode($version);
+                self::githubDownload($url, $zipFile);
+                BackAisleBackup::extractZip($zipFile, $extractDir);
+                $sourceRoot = self::findExtractedRoot($extractDir);
             } catch (Throwable $e) {
                 $fetchErrors[] = $e->getMessage();
                 try {
-                    $zipFile = $tmpDir . DIRECTORY_SEPARATOR . 'release.zip';
-                    $url = 'https://api.github.com/repos/' . rawurlencode(self::GITHUB_OWNER) . '/'
-                        . rawurlencode(self::GITHUB_REPO) . '/zipball/v' . rawurlencode($version);
-                    self::githubDownload($url, $zipFile);
-                    BackAisleBackup::extractZip($zipFile, $extractDir);
-                    $sourceRoot = self::findExtractedRoot($extractDir);
+                    $jsDir = $tmpDir . DIRECTORY_SEPARATOR . 'jsd';
+                    $sourceRoot = self::fetchJsDelivrTree($version, $jsDir);
                 } catch (Throwable $e2) {
                     $fetchErrors[] = $e2->getMessage();
                 }
@@ -760,6 +760,43 @@ class BackAisleUpdate
         $owner = rawurlencode(self::GITHUB_OWNER);
         $repo = rawurlencode(self::GITHUB_REPO);
         try {
+            $release = self::githubGetJson("https://api.github.com/repos/{$owner}/{$repo}/releases/latest", true);
+            if (is_array($release) && !empty($release['tag_name']) && empty($release['message'])) {
+                $tag = ltrim((string)$release['tag_name'], 'vV');
+                return [
+                    'tag' => $tag,
+                    'name' => (string)($release['name'] ?? $release['tag_name']),
+                    'html' => (string)($release['html_url'] ?? ''),
+                    'notes' => trim((string)($release['body'] ?? '')) ?: null,
+                    'published' => (string)($release['published_at'] ?? $release['created_at'] ?? ''),
+                    'source' => 'github',
+                ];
+            }
+        } catch (Throwable $e) {
+            $errors[] = $e->getMessage();
+        }
+        try {
+            $tags = self::githubGetJson("https://api.github.com/repos/{$owner}/{$repo}/tags?per_page=30", false);
+            if (!is_array($tags) || isset($tags['message'])) {
+                $msg = is_array($tags) ? (string)($tags['message'] ?? 'GitHub API error') : 'GitHub API error';
+                throw new RuntimeException($msg);
+            }
+            if ($tags !== [] && function_exists('array_is_list') && !array_is_list($tags)) {
+                throw new RuntimeException('Unexpected tags response from GitHub.');
+            }
+            foreach ($tags as $t) {
+                if (!is_array($t) || empty($t['name'])) {
+                    continue;
+                }
+                self::considerVersion($acc, (string)$t['name'], 'github-tags');
+            }
+            if ($acc['tag'] !== null) {
+                return $acc;
+            }
+        } catch (Throwable $e) {
+            $errors[] = $e->getMessage();
+        }
+        try {
             $body = self::httpRequest(
                 'https://data.jsdelivr.com/v1/packages/gh/' . self::GITHUB_OWNER . '/' . self::GITHUB_REPO,
                 false,
@@ -777,45 +814,10 @@ class BackAisleUpdate
         } catch (Throwable $e) {
             $errors[] = $e->getMessage();
         }
-        try {
-            $mainVer = self::jsDelivrVersionFile('main');
-            self::considerVersion($acc, $mainVer, 'jsdelivr-main');
-        } catch (Throwable $e) {
-            $errors[] = $e->getMessage();
-        }
         $floor = $acc['tag'] ?? self::installedVersion();
         $probed = self::probeJsDelivrNewer($floor);
         if ($probed !== null && ($floor === null || version_compare($probed, $floor, '>'))) {
             self::considerVersion($acc, $probed, 'jsdelivr-tag');
-        }
-        try {
-            $release = self::githubGetJson("https://api.github.com/repos/{$owner}/{$repo}/releases/latest", true);
-            if (is_array($release) && !empty($release['tag_name']) && empty($release['message'])) {
-                self::considerVersion(
-                    $acc,
-                    (string)$release['tag_name'],
-                    'github',
-                    (string)($release['name'] ?? $release['tag_name']),
-                    (string)($release['html_url'] ?? ''),
-                    trim((string)($release['body'] ?? '')) ?: null,
-                    (string)($release['published_at'] ?? $release['created_at'] ?? '')
-                );
-            }
-        } catch (Throwable $e) {
-            $errors[] = $e->getMessage();
-        }
-        try {
-            $tags = self::githubGetJson("https://api.github.com/repos/{$owner}/{$repo}/tags?per_page=30", false);
-            if (is_array($tags) && empty($tags['message'])) {
-                foreach ($tags as $t) {
-                    if (!is_array($t) || empty($t['name'])) {
-                        continue;
-                    }
-                    self::considerVersion($acc, (string)$t['name'], 'github-tags');
-                }
-            }
-        } catch (Throwable $e) {
-            $errors[] = $e->getMessage();
         }
         if ($acc['tag'] === null) {
             throw new RuntimeException('Could not determine latest version. ' . implode('; ', $errors));
@@ -965,7 +967,7 @@ class BackAisleUpdate
 
     private static function githubGetJson(string $url, bool $allowNotFound): mixed
     {
-        $body = self::httpRequest($url, false, $allowNotFound, true, 8);
+        $body = self::httpRequest($url, false, $allowNotFound, true);
         if ($body === null) return null;
         if (self::isHtmlPayload($body)) {
             throw new RuntimeException('GitHub API returned a web page (proxy).');

@@ -656,15 +656,14 @@ function page_admin(PDO $db, array $user): void {
             $updStatus = BackAisleUpdate::checkForUpdate(true);
             ba_audit($db, 'update_check', 'system', $updStatus['latest'] ?? null, $updStatus['error'] ?? ($updStatus['source'] ?? ''));
             if (!empty($updStatus['update_available'])) {
-                $updMsg = 'Update available: v' . ($updStatus['latest'] ?? '') . ' (you have v' . ($updStatus['current'] ?? '') . ').';
-                $updFlash = 'info';
+                $updMsg = 'Update available: v' . ($updStatus['latest'] ?? '?')
+                    . ' (you have v' . ($updStatus['current'] ?? '?') . ').';
+                $updFlash = 'ok';
             } elseif (!empty($updStatus['ok'])) {
-                $updMsg = 'Checked: you are on v' . ($updStatus['current'] ?? '') .
-                    (!empty($updStatus['latest']) ? (', latest is v' . $updStatus['latest']) : '') .
-                    (!empty($updStatus['source']) ? (' via ' . $updStatus['source']) : '') . '.';
+                $updMsg = 'You are on the latest version (v' . ($updStatus['current'] ?? '?') . ').';
                 $updFlash = 'ok';
             } else {
-                $updMsg = (string)($updStatus['error'] ?? 'Could not check for updates.');
+                $updMsg = (string)($updStatus['error'] ?? 'Update check failed.');
                 $updFlash = 'err';
             }
         } catch (Throwable $e) {

@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.6] - 2026-09-17
+
+- Check for updates uses GitHub releases/tags first (same as ColdAisle). jsDelivr is only a fallback if GitHub fails.
+
 ## [0.5.5] - 2026-09-17
 
 - Admin Check for updates: remove the sticky nav overlay toast. In-page banner matches ColdAisle (transparent green when current, transparent blue when an update is available, transparent red on error)
