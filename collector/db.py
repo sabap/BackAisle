@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
 from pathlib import Path
@@ -10,11 +11,20 @@ CONFIG_JSON = Path(r"C:\inetpub\BackAisle\config\collector.json")
 
 
 def load_app_config() -> dict:
-    if CONFIG_JSON.is_file():
+    paths = [
+        Path(os.environ["BACKAISLE_COLLECTOR_JSON"]) if os.environ.get("BACKAISLE_COLLECTOR_JSON") else None,
+        Path(__file__).resolve().parent.parent / "config" / "collector.json",
+        CONFIG_JSON,
+    ]
+    for p in paths:
+        if p is None or not p.is_file():
+            continue
         try:
-            return json.loads(CONFIG_JSON.read_text(encoding="utf-8"))
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and data:
+                return data
         except Exception:
-            pass
+            continue
     return {"driver": "sqlite", "path": str(DB_PATH)}
 
 
@@ -356,52 +366,92 @@ def last_id(con) -> int:
     return int(con.execute("SELECT last_insert_rowid()").fetchone()[0])
 
 
-def _odbc_brace(value: str) -> str:
-    """ODBC connection-string literal; allows ; { } and other punctuation in passwords."""
-    return "{" + str(value).replace("}", "}}") + "}"
+def _odbc_quote(value: str, always: bool = False) -> str:
+    """Quote an ODBC connection-string value. Brace only when required (spaces, ; { } =)."""
+    s = str(value)
+    if always or any(c in s for c in ";={}[]") or s != s.strip():
+        return "{" + s.replace("}", "}}") + "}"
+    return s
+
+
+def _sqlsrv_connect_raw(pyodbc_mod, dsn: str):
+    return pyodbc_mod.connect(dsn, timeout=5, autocommit=True)
 
 
 def connect(path: Path | None = None):
     cfg = load_app_config()
     if (cfg.get("driver") or "sqlite").lower() in ("sqlsrv", "sqlserver"):
         import pyodbc
-        enc = "yes" if cfg.get("encrypt") else "no"
-        trust = "yes" if cfg.get("trust_server_certificate", True) else "no"
-        drv = cfg.get("odbc_driver") or "ODBC Driver 18 for SQL Server"
-        server = cfg.get("host") or "localhost"
+
+        host = str(cfg.get("host") or "localhost").strip() or "localhost"
         port = int(cfg.get("port") or 1433)
-        if port != 1433:
-            server = f"{server},{port}"
-        dbn = cfg.get("database") or "BackAisle"
+        dbn = str(cfg.get("database") or "BackAisle")
         user = str(cfg.get("username") or "")
         pwd = str(cfg.get("password") or "")
-        parts = [
-            f"DRIVER={_odbc_brace(drv)}",
-            f"SERVER={_odbc_brace(server)}",
-            f"DATABASE={_odbc_brace(dbn)}",
-            f"Encrypt={enc}",
-            f"TrustServerCertificate={trust}",
-        ]
-        if user:
-            parts.append(f"UID={_odbc_brace(user)}")
-            parts.append(f"PWD={_odbc_brace(pwd)}")
-        else:
-            parts.append("Trusted_Connection=yes")
-        dsn = ";".join(parts)
+        enc_cfg = "yes" if cfg.get("encrypt") else "no"
+        trust_cfg = "yes" if cfg.get("trust_server_certificate") else "no"
+        configured_drv = str(cfg.get("odbc_driver") or "ODBC Driver 18 for SQL Server")
+
+        installed = []
         try:
-            raw = pyodbc.connect(dsn, timeout=30, autocommit=True)
-        except Exception as e:
-            drivers = []
-            try:
-                drivers = list(pyodbc.drivers())
-            except Exception:
-                pass
-            raise RuntimeError(
-                "SQL Server (pyodbc) connect failed: %s. Drivers installed: %s. "
-                "Setup import now uses PHP/PDO; collector still needs this connection as SYSTEM."
-                % (e, drivers)
-            ) from e
-        return SqlSrvConn(raw)
+            installed = list(pyodbc.drivers())
+        except Exception:
+            pass
+        php_server = host if ("\\" in host or "," in host or port == 1433) else f"{host},{port}"
+        tcp_server = host if ("," in host or "\\" in host) else f"tcp:{host},{port}"
+        attempts = [
+            (configured_drv, php_server, enc_cfg, trust_cfg),
+            (configured_drv, php_server, "yes", "yes"),
+            (configured_drv, tcp_server, "yes", "yes"),
+        ]
+        if host.lower() in ("localhost", "127.0.0.1", "(local)", "."):
+            attempts.append((configured_drv, f"tcp:127.0.0.1,{port}", "yes", "yes"))
+        if "ODBC Driver 17 for SQL Server" in installed:
+            attempts.append(("ODBC Driver 17 for SQL Server", tcp_server, "yes", "yes"))
+            attempts.append(("ODBC Driver 17 for SQL Server", php_server, enc_cfg, trust_cfg))
+
+        if user:
+            if any(c in pwd for c in ";={}[]") or pwd != pwd.strip():
+                pwd_vals = [_odbc_quote(pwd, True)]
+            else:
+                pwd_vals = [pwd]
+        else:
+            pwd_vals = [None]
+
+        seen = set()
+        errors = []
+        for drv, server, enc, trust in attempts:
+            key = (drv, server, enc, trust)
+            if key in seen:
+                continue
+            seen.add(key)
+            if installed and drv not in installed:
+                continue
+            for pwd_val in pwd_vals:
+                parts = [
+                    f"DRIVER={_odbc_quote(drv, True)}",
+                    f"SERVER={server}",
+                    f"DATABASE={_odbc_quote(dbn)}",
+                    f"Encrypt={enc}",
+                    f"TrustServerCertificate={trust}",
+                    "LoginTimeout=8",
+                ]
+                if user:
+                    parts.append(f"UID={_odbc_quote(user)}")
+                    parts.append(f"PWD={pwd_val}")
+                else:
+                    parts.append("Trusted_Connection=yes")
+                dsn = ";".join(parts)
+                try:
+                    raw = _sqlsrv_connect_raw(pyodbc, dsn)
+                    return SqlSrvConn(raw)
+                except Exception as e:
+                    errors.append("%s server=%s enc=%s trust=%s: %s" % (drv, server, enc, trust, e))
+        raise RuntimeError(
+            "SQL Server (pyodbc) connect failed. PHP uses PDO with the same SQL login; "
+            "the collector uses ODBC from this Windows account. Last errors: %s. Drivers installed: %s."
+            % (errors[-6:] if errors else ["no attempt"], installed)
+        )
     p = Path(cfg.get("path") or path or DB_PATH)
     p.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(str(p), timeout=30)

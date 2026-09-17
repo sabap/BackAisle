@@ -146,6 +146,9 @@ function ba_python(): string {
 
 /** @param list<string> $args */
 function ba_python_run(array $args, ?string $cwd = null): array {
+    if (function_exists('ba_sync_collector_json')) {
+        try { ba_sync_collector_json(); } catch (Throwable $e) { /* poll still tries existing collector.json */ }
+    }
     $py = ba_python();
     if ($py === '') {
         return ['code' => 127, 'stdout' => '', 'stderr' => 'python.exe not found (Microsoft Store stub is ignored). Install Python 3.12 from python.org.'];

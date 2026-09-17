@@ -8,7 +8,7 @@
 param(
     [string]$SiteRoot = 'C:\inetpub\BackAisle',
     [string]$Ref = 'latest',
-    [string]$MinVersion = '0.5.1',
+    [string]$MinVersion = '0.5.2',
     [string]$Owner = 'sabap',
     [string]$Repo = 'BackAisle',
     [string]$PoolName = 'BackAisle'
@@ -128,6 +128,7 @@ function Add-BaVer([string]$s) {
     if ($v) { $verHash[$v] = $true }
 }
 
+Add-BaVer '0.5.2'
 Add-BaVer '0.5.1'
 Add-BaVer '0.5.0'
 Add-BaVer '0.4.9'
@@ -158,7 +159,7 @@ try {
 }
 
 $floor = Get-BaSemver $MinVersion
-if (-not $floor) { $floor = '0.5.1' }
+if (-not $floor) { $floor = '0.5.2' }
 foreach ($v in @($verHash.Keys)) {
     try {
         if ([version]$v -gt [version]$floor) { $floor = $v }

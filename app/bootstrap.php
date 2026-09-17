@@ -56,6 +56,16 @@ function ba_write_config(array $cfg): void {
     if (@file_put_contents($path, $php) === false) {
         throw new RuntimeException('Could not write config/config.php.');
     }
+    ba_sync_collector_json($cfg);
+}
+
+function ba_sync_collector_json(?array $cfg = null): void
+{
+    $cfg = $cfg ?? ba_config();
+    $dir = BA_ROOT . DIRECTORY_SEPARATOR . 'config';
+    if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
+        return;
+    }
     $json = [
         'driver' => $cfg['db']['driver'] ?? 'sqlite',
         'path' => $cfg['db']['path'] ?? BA_DB,
@@ -68,7 +78,12 @@ function ba_write_config(array $cfg): void {
         'trust_server_certificate' => !empty($cfg['db']['trust_server_certificate']),
         'odbc_driver' => $cfg['db']['odbc_driver'] ?? 'ODBC Driver 18 for SQL Server',
     ];
-    @file_put_contents($dir . DIRECTORY_SEPARATOR . 'collector.json', json_encode($json, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+    $data = json_encode($json, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    if ($data === false) {
+        return;
+    }
+    $path = $dir . DIRECTORY_SEPARATOR . 'collector.json';
+    @file_put_contents($path, $data);
 }
 
 function ba_secrets(): array {

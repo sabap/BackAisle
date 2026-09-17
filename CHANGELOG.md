@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.2] - 2026-09-17
+
+- Collector SQL Server (pyodbc) matches PHP/PDO: do not brace SERVER, retry Encrypt/Trust and TCP, refresh collector.json before a poll from Admin
+
 ## [0.5.1] - 2026-09-17
 
 - Admin Check for updates probes jsDelivr `VERSION` at newer git tags (does not stop at a stale jsDelivr catalog, cached `@main`, or GitHub latest alone)
