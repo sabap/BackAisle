@@ -50,9 +50,10 @@ function ba_apply_template(PDO $db, int $deviceId, int $templateId): void {
     }
     $ports = $tpl['port_count'] !== null && $tpl['port_count'] !== '' ? (int)$tpl['port_count'] : $dev['port_count'];
     $va = $tpl['va_rating'] !== null && $tpl['va_rating'] !== '' ? (float)$tpl['va_rating'] : $dev['va_rating'];
+    $sid = !empty($tpl['snmp_profile_id']) ? (int)$tpl['snmp_profile_id'] : ($dev['snmp_profile_id'] ?? null);
     $db->prepare(
-        'UPDATE devices SET template_id=?, kind=?, model=?, manufacturer=?, u_height=?, face=?, port_count=?, va_rating=?, updated_at=datetime(\'now\') WHERE id=?'
-    )->execute([$templateId, $kind, $tpl['model'], $tpl['manufacturer'], $uh, $face, $ports, $va, $deviceId]);
+        'UPDATE devices SET template_id=?, kind=?, model=?, manufacturer=?, u_height=?, face=?, port_count=?, va_rating=?, snmp_profile_id=?, updated_at=datetime(\'now\') WHERE id=?'
+    )->execute([$templateId, $kind, $tpl['model'], $tpl['manufacturer'], $uh, $face, $ports, $va, $sid ?: null, $deviceId]);
 }
 
 function ba_tpl_save_picture(int $id, string $field, array $file): ?string {
@@ -71,6 +72,7 @@ function ba_tpl_save_picture(int $id, string $field, array $file): ?string {
 }
 
 function page_templates(PDO $db, array $user): void {
+    ba_ensure_column($db, 'device_templates', 'snmp_profile_id', 'INT NULL');
     $admin = ($user['role'] ?? '') === 'admin';
     $id = (int)($_GET['id'] ?? 0);
     $action = $_GET['action'] ?? '';
@@ -98,15 +100,16 @@ function page_templates(PDO $db, array $user): void {
                     ($_POST['watts'] ?? '') === '' ? null : (float)$_POST['watts'],
                     ($_POST['weight_kg'] ?? '') === '' ? null : (float)$_POST['weight_kg'],
                     trim($_POST['notes'] ?? ''),
+                    ($_POST['snmp_profile_id'] ?? '') === '' ? null : (int)$_POST['snmp_profile_id'],
                 ];
                 if ($tid) {
                     $row[] = $tid;
                     $db->prepare(
-                        'UPDATE device_templates SET manufacturer=?, model=?, kind=?, u_height=?, face=?, port_count=?, va_rating=?, watts=?, weight_kg=?, notes=?, updated_at=datetime(\'now\') WHERE id=?'
+                        'UPDATE device_templates SET manufacturer=?, model=?, kind=?, u_height=?, face=?, port_count=?, va_rating=?, watts=?, weight_kg=?, notes=?, snmp_profile_id=?, updated_at=datetime(\'now\') WHERE id=?'
                     )->execute($row);
                 } else {
                     $db->prepare(
-                        'INSERT INTO device_templates (manufacturer, model, kind, u_height, face, port_count, va_rating, watts, weight_kg, notes) VALUES (?,?,?,?,?,?,?,?,?,?)'
+                        'INSERT INTO device_templates (manufacturer, model, kind, u_height, face, port_count, va_rating, watts, weight_kg, notes, snmp_profile_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
                     )->execute($row);
                     $tid = (int)$db->lastInsertId();
                 }
@@ -174,6 +177,13 @@ function page_templates(PDO $db, array $user): void {
             echo '<label>Watts</label><input type="number" name="watts" step="0.1" value="'.h((string)($tpl['watts'] ?? '')).'">';
             echo '<label>Weight (kg)</label><input type="number" name="weight_kg" step="0.01" value="'.h((string)($tpl['weight_kg'] ?? '')).'">';
             echo '<label>Notes</label><textarea name="notes">'.h($tpl['notes'] ?? '').'</textarea>';
+            echo '<label>SNMPv3 profile (applied to devices using this template)</label><select name="snmp_profile_id"><option value="">(none)</option>';
+            $curSid = (int)($tpl['snmp_profile_id'] ?? 0);
+            foreach ($db->query('SELECT id, name FROM snmp_profiles ORDER BY name') as $sp) {
+                $sel = $curSid === (int)$sp['id'] ? ' selected' : '';
+                echo '<option value="'.(int)$sp['id'].'"'.$sel.'>'.h($sp['name']).'</option>';
+            }
+            echo '</select>';
             echo '<label>Front picture</label><input type="file" name="front_picture" accept="image/jpeg,image/png,image/webp">';
             if (!empty($tpl['front_picture'])) {
                 echo '<p><img class="idf-tpl-preview" src="'.h($tpl['front_picture']).'" alt="front"> <label><input type="checkbox" name="clear_front_picture"> clear</label></p>';

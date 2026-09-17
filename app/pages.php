@@ -215,7 +215,7 @@ function page_dashboard(PDO $db): void {
         <tr><td colspan="9" class="muted">No IDFs match.</td></tr>
       <?php endif; ?>
       <?php foreach ($idfs as $row):
-          $href = $row['group_id'] ? '/idfs?group='.(int)$row['group_id'] : '/idfs';
+          $href = $row['group_id'] ? ba_href('/idfs?group='.(int)$row['group_id']) : ba_href('/idfs');
           $st = $row['worst'] === 'st-ok' ? 'ok' : ($row['worst'] === 'st-batt' ? 'battery' : ($row['worst'] === 'st-down' ? 'down' : ($row['worst'] === 'st-hot' ? 'hot' : 'warn')));
       ?>
         <tr class="<?= h($row['worst']) ?>">

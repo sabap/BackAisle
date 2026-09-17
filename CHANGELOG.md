@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.4.4] - 2026-09-17
+
+- Edit SNMPv3 profiles; bulk-assign a profile to a location (or all UPS); templates can carry an SNMPv3 profile
+- PowerPanel import reads PascalCase JSON and nested groups (IDF closets)
+- IDF category links use /idfs.php (no more 404)
+
 ## [0.4.3] - 2026-09-17
 
 - Org tabs and other in-app links use `*.php` (PowerPanel import was 404 at `/org?tab=import`).

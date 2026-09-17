@@ -10,6 +10,16 @@ function ba_setting(PDO $db, string $k, string $default = ''): string {
     return $r ? (string)$r['v'] : $default;
 }
 
+function ba_ensure_column(PDO $db, string $table, string $col, string $spec): void {
+    $table = preg_replace('/[^a-zA-Z0-9_]/', '', $table) ?? $table;
+    $col = preg_replace('/[^a-zA-Z0-9_]/', '', $col) ?? $col;
+    if (ba_db_driver() === 'sqlsrv') {
+        $db->exec("IF COL_LENGTH('$table', '$col') IS NULL ALTER TABLE $table ADD $col $spec");
+        return;
+    }
+    ba_add_col($db, $table, $col, $spec);
+}
+
 function ba_set_setting(PDO $db, string $k, string $v): void {
     if (ba_db_driver() === 'sqlsrv') {
         $st = $db->prepare('UPDATE settings SET v=? WHERE k=?');

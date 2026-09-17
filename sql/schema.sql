@@ -186,6 +186,7 @@ CREATE TABLE device_templates (
   watts FLOAT NULL,
   weight_kg FLOAT NULL,
   notes NVARCHAR(MAX) NULL,
+  snmp_profile_id INT NULL,
   front_picture NVARCHAR(255) NULL,
   rear_picture NVARCHAR(255) NULL,
   is_active INT NOT NULL DEFAULT 1,

@@ -227,7 +227,7 @@ function ba_render_loc_tree(array $groups, ?int $parent, array $summaries, array
             echo '<details class="loc-branch" data-loc-id="'.$id.'" data-loc-name="'.h($needle).'"'.($depth === 0 ? ' open' : '').'>';
             echo '<summary class="loc-sum">';
             echo '<span class="loc-chev" aria-hidden="true"></span>';
-            echo '<span class="loc-title">'.h($g['name']).'</span>';
+            echo '<span class="loc-title"><a href="'.h(ba_href('/idfs?group='.$id)).'">'.h($g['name']).'</a></span>';
             echo '<span class="loc-badge">'.(int)$sum['leaves'].' closet'.(((int)$sum['leaves']===1)?'':'s').'</span>';
             echo '<span class="loc-meta">'.$meta.'</span>';
             echo '<span class="pill '.$st.'">'.h($stLab).'</span>';
@@ -235,7 +235,7 @@ function ba_render_loc_tree(array $groups, ?int $parent, array $summaries, array
             ba_render_loc_tree($groups, $id, $summaries, $memo, $depth + 1);
             echo '</div></details>';
         } else {
-            $href = '/idfs?group='.$id;
+            $href = ba_href('/idfs?group='.$id);
             echo '<a class="loc-leaf '.h((string)$sum['worst']).'" href="'.h($href).'" data-loc-name="'.h($needle).'">';
             echo '<span class="loc-title">'.h($g['name']).'</span>';
             echo '<span class="loc-meta">'.$meta;
