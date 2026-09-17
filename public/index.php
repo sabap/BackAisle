@@ -9,6 +9,7 @@ require __DIR__ . '/../app/layout.php';
 require __DIR__ . '/../app/pages.php';
 require __DIR__ . '/../app/writes.php';
 require __DIR__ . '/../app/ldap.php';
+require __DIR__ . '/../app/import_pp.php';
 require __DIR__ . '/../app/org.php';
 require __DIR__ . '/../app/racks.php';
 require __DIR__ . '/../app/templates.php';

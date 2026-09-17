@@ -356,6 +356,11 @@ def last_id(con) -> int:
     return int(con.execute("SELECT last_insert_rowid()").fetchone()[0])
 
 
+def _odbc_brace(value: str) -> str:
+    """ODBC connection-string literal; allows ; { } and other punctuation in passwords."""
+    return "{" + str(value).replace("}", "}}") + "}"
+
+
 def connect(path: Path | None = None):
     cfg = load_app_config()
     if (cfg.get("driver") or "sqlite").lower() in ("sqlsrv", "sqlserver"):
@@ -368,12 +373,34 @@ def connect(path: Path | None = None):
         if port != 1433:
             server = f"{server},{port}"
         dbn = cfg.get("database") or "BackAisle"
-        raw = pyodbc.connect(
-            f"DRIVER={{{drv}}};SERVER={server};DATABASE={dbn};"
-            f"UID={cfg.get('username','')};PWD={cfg.get('password','')};"
-            f"Encrypt={enc};TrustServerCertificate={trust}",
-            timeout=30,
-        )
+        user = str(cfg.get("username") or "")
+        pwd = str(cfg.get("password") or "")
+        parts = [
+            f"DRIVER={_odbc_brace(drv)}",
+            f"SERVER={_odbc_brace(server)}",
+            f"DATABASE={_odbc_brace(dbn)}",
+            f"Encrypt={enc}",
+            f"TrustServerCertificate={trust}",
+        ]
+        if user:
+            parts.append(f"UID={_odbc_brace(user)}")
+            parts.append(f"PWD={_odbc_brace(pwd)}")
+        else:
+            parts.append("Trusted_Connection=yes")
+        dsn = ";".join(parts)
+        try:
+            raw = pyodbc.connect(dsn, timeout=30, autocommit=True)
+        except Exception as e:
+            drivers = []
+            try:
+                drivers = list(pyodbc.drivers())
+            except Exception:
+                pass
+            raise RuntimeError(
+                "SQL Server (pyodbc) connect failed: %s. Drivers installed: %s. "
+                "Setup import now uses PHP/PDO; collector still needs this connection as SYSTEM."
+                % (e, drivers)
+            ) from e
         return SqlSrvConn(raw)
     p = Path(cfg.get("path") or path or DB_PATH)
     p.parent.mkdir(parents=True, exist_ok=True)

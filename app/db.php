@@ -74,6 +74,7 @@ function ba_sqlsrv_dsn(array $db, bool $includeDatabase = true): string
 function ba_connect_sqlserver(array $db, bool $includeDatabase = true): PDO
 {
     $dsn = ba_sqlsrv_dsn($db, $includeDatabase);
+    // Username/password are PDO constructor args so ; { } & and other punctuation are allowed.
     $pdo = new BaPdo($dsn, (string)($db['username'] ?? ''), (string)($db['password'] ?? ''), [
         PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,

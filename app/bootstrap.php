@@ -68,7 +68,7 @@ function ba_write_config(array $cfg): void {
         'trust_server_certificate' => !empty($cfg['db']['trust_server_certificate']),
         'odbc_driver' => $cfg['db']['odbc_driver'] ?? 'ODBC Driver 18 for SQL Server',
     ];
-    @file_put_contents($dir . DIRECTORY_SEPARATOR . 'collector.json', json_encode($json, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+    @file_put_contents($dir . DIRECTORY_SEPARATOR . 'collector.json', json_encode($json, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
 }
 
 function ba_secrets(): array {

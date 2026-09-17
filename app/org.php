@@ -88,15 +88,13 @@ function page_org(PDO $db, array $user): void {
                 if (empty($_FILES['zip']['tmp_name'])) throw new RuntimeException('Choose a profile.zip');
                 $dest = sys_get_temp_dir().DIRECTORY_SEPARATOR.'pp_'.bin2hex(random_bytes(4)).'.zip';
                 if (!move_uploaded_file($_FILES['zip']['tmp_name'], $dest)) throw new RuntimeException('upload failed');
-                $code = 'import sys,json; sys.path.insert(0, r"C:\\inetpub\\BackAisle\\collector"); from import_powerpanel import import_zip; print(json.dumps(import_zip(sys.argv[1])))';
-                $run = ba_python_run(['-c', $code, $dest]);
-                @unlink($dest);
-                if ($run['code'] !== 0) {
-                    $detail = trim($run['stderr'] . "\n" . $run['stdout']);
-                    throw new RuntimeException('import failed: ' . ($detail !== '' ? $detail : 'exit ' . $run['code']));
+                try {
+                    $stats = ba_import_powerpanel_zip($db, $dest);
+                } finally {
+                    @unlink($dest);
                 }
-                $msg = 'Imported ' . trim($run['stdout']);
-                ba_audit($db, 'import_powerpanel', 'import', null, trim($run['stdout']));
+                $msg = 'Imported ' . json_encode($stats);
+                ba_audit($db, 'import_powerpanel', 'import', null, $msg);
             } elseif ($act === 'add_default') {
                 $ip = trim($_POST['ip'] ?? '');
                 if (!filter_var($ip, FILTER_VALIDATE_IP)) throw new RuntimeException('Bad IP');

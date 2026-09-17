@@ -16,6 +16,7 @@ require __DIR__ . '/../app/db.php';
 require __DIR__ . '/../app/helpers.php';
 require __DIR__ . '/../app/ldap.php';
 require __DIR__ . '/../app/backup.php';
+require __DIR__ . '/../app/import_pp.php';
 
 if (ba_is_installed() && !isset($_GET['force'])) {
     header('Location: /');
@@ -243,14 +244,12 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && isset($_POST['action']))
                 if (!move_uploaded_file($file['tmp_name'], $dest)) {
                     throw new RuntimeException('Could not store profile.zip.');
                 }
-                $code = 'import sys,json; sys.path.insert(0, r"' . BA_ROOT . '\\collector"); from import_powerpanel import import_zip; print(json.dumps(import_zip(sys.argv[1])))';
-                $run = ba_python_run(['-c', $code, $dest]);
-                @unlink($dest);
-                if ($run['code'] !== 0) {
-                    $detail = trim($run['stderr'] . "\n" . $run['stdout']);
-                    throw new RuntimeException('PowerPanel import failed: ' . ($detail !== '' ? $detail : 'exit ' . $run['code']));
+                try {
+                    $stats = ba_import_powerpanel_zip($pdo, $dest);
+                } finally {
+                    @unlink($dest);
                 }
-                $success[] = 'PowerPanel import: ' . trim($run['stdout']);
+                $success[] = 'PowerPanel import: ' . json_encode($stats);
             }
             $step = 4;
         } catch (Throwable $e) {
@@ -329,8 +328,8 @@ $steps = [1 => 'Welcome', 2 => 'Database', 3 => 'Site data', 4 => 'Done'];
         <label>SQL host</label><input name="sql_host" value="<?= h($form['sql_host']) ?>">
         <label>Port</label><input name="sql_port" value="<?= h($form['sql_port']) ?>">
         <label>Database name</label><input name="sql_database" value="<?= h($form['sql_database']) ?>">
-        <label>SQL login</label><input name="sql_username" value="<?= h($form['sql_username']) ?>">
-        <label>Password</label><input type="password" name="sql_password" value="<?= h($form['sql_password']) ?>">
+        <label>SQL login</label><input name="sql_username" value="<?= h($form['sql_username']) ?>" autocomplete="off">
+        <label>Password (punctuation allowed)</label><input type="password" name="sql_password" value="<?= h($form['sql_password']) ?>" autocomplete="new-password">
         <label>ODBC driver</label><input name="odbc_driver" value="<?= h($form['odbc_driver']) ?>">
         <label><input type="checkbox" name="create_database" value="1" <?= $form['create_database']?'checked':'' ?>> Create database if it does not exist</label>
         <label><input type="checkbox" name="sql_encrypt" value="1" <?= $form['sql_encrypt']?'checked':'' ?>> Encrypt connection</label>
