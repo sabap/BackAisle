@@ -52,6 +52,7 @@ New-Item -ItemType Directory -Force -Path $dir | Out-Null
 Set-Location $dir
 $out = Join-Path $dir 'Install-BackAisle.ps1'
 $urls = @(
+  'https://cdn.jsdelivr.net/gh/sabap/BackAisle@v0.5.1/Install-BackAisle.ps1',
   'https://cdn.jsdelivr.net/gh/sabap/BackAisle@v0.5.0/Install-BackAisle.ps1',
   'https://cdn.jsdelivr.net/gh/sabap/BackAisle@main/Install-BackAisle.ps1'
 )
@@ -116,6 +117,7 @@ New-Item -ItemType Directory -Force -Path $dir | Out-Null
 Set-Location $dir
 $out = Join-Path $dir 'Update-BackAisle.ps1'
 $urls = @(
+  'https://cdn.jsdelivr.net/gh/sabap/BackAisle@v0.5.1/scripts/Update-BackAisle.ps1',
   'https://cdn.jsdelivr.net/gh/sabap/BackAisle@v0.5.0/scripts/Update-BackAisle.ps1',
   'https://cdn.jsdelivr.net/gh/sabap/BackAisle@main/scripts/Update-BackAisle.ps1'
 )
@@ -140,7 +142,7 @@ $text = [Text.Encoding]::UTF8.GetString($b, $skip, $b.Length - $skip)
 [IO.File]::WriteAllText($out, $text, $utf8bom)
 Get-Content $out -TotalCount 1
 Set-ExecutionPolicy Bypass -Scope Process -Force
-& $out -SiteRoot 'C:\inetpub\BackAisle' -Ref v0.5.0
+& $out -SiteRoot 'C:\inetpub\BackAisle' -Ref v0.5.1 -MinVersion 0.5.1
 ```
 
 Admin → **Updates** can also check [sabap/BackAisle](https://github.com/sabap/BackAisle) from the browser (jsDelivr if GitHub is blocked). Applying an update:

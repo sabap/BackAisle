@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.5.1] - 2026-09-17
+
+- Admin Check for updates probes jsDelivr `VERSION` at newer git tags (does not stop at a stale jsDelivr catalog, cached `@main`, or GitHub latest alone)
+- Overlay tries newest jsDelivr version first (no longer applies 0.4.9 when a newer tag exists)
+
 ## [0.5.0] - 2026-09-17
 
 - SNMP page: poller status, Windows tasks, scheduled devices, poll one / poll selected / poll all, add to schedule

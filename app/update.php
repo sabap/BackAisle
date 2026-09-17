@@ -475,24 +475,126 @@ class BackAisleUpdate
         return null;
     }
 
+    private static function parseSemver(string $raw): ?string
+    {
+        $tv = ltrim(trim($raw), "vV \t\r\n");
+        if (!preg_match('/^(\d+\.\d+(?:\.\d+)?)/', $tv, $m)) {
+            return null;
+        }
+        return $m[1];
+    }
+
+    /**
+     * @param array{tag:?string,name:string,html:?string,notes:?string,published:?string,source:string} $acc
+     */
+    private static function considerVersion(array &$acc, ?string $raw, string $source, ?string $name = null, ?string $html = null, ?string $notes = null, ?string $published = null): void
+    {
+        if ($raw === null || $raw === '') {
+            return;
+        }
+        $tv = self::parseSemver($raw);
+        if ($tv === null) {
+            return;
+        }
+        if ($acc['tag'] !== null && version_compare($tv, $acc['tag'], '<=')) {
+            return;
+        }
+        $acc['tag'] = $tv;
+        $acc['source'] = $source;
+        $acc['name'] = $name !== null && $name !== '' ? $name : ('v' . $tv);
+        $acc['html'] = $html !== null && $html !== '' ? $html : (self::githubUrl() . '/releases/tag/v' . rawurlencode($tv));
+        $acc['notes'] = $notes;
+        $acc['published'] = $published;
+    }
+
+    private static function jsDelivrVersionFile(string $ref): ?string
+    {
+        $url = 'https://cdn.jsdelivr.net/gh/' . self::GITHUB_OWNER . '/' . self::GITHUB_REPO
+            . '@' . rawurlencode($ref) . '/VERSION';
+        try {
+            $body = self::httpRequest($url, false, true, false, 10);
+        } catch (Throwable $e) {
+            return null;
+        }
+        if ($body === null || $body === '') {
+            return null;
+        }
+        return self::parseSemver($body);
+    }
+
+    /** Walk patch/minor tags on jsDelivr so a lagging versions[] catalog cannot hide a GitHub tag. */
+    private static function probeJsDelivrNewer(?string $floor): ?string
+    {
+        $parts = [0, 0, 0];
+        if ($floor !== null && preg_match('/^(\d+)\.(\d+)(?:\.(\d+))?$/', $floor, $m)) {
+            $parts = [(int)$m[1], (int)$m[2], (int)($m[3] ?? 0)];
+        }
+        $best = $floor;
+        $probes = 0;
+        $max = 16;
+        $try = function (string $ver) use (&$best, &$probes, $max): bool {
+            if ($probes >= $max) {
+                return false;
+            }
+            $probes++;
+            $got = self::jsDelivrVersionFile('v' . $ver);
+            if ($got === null && $probes < $max) {
+                $probes++;
+                $got = self::jsDelivrVersionFile($ver);
+            }
+            if ($got === null) {
+                return false;
+            }
+            if ($best === null || version_compare($got, $best, '>')) {
+                $best = $got;
+            }
+            return true;
+        };
+        for ($p = $parts[2] + 1; $p <= $parts[2] + 8; $p++) {
+            if (!$try($parts[0] . '.' . $parts[1] . '.' . $p)) {
+                break;
+            }
+        }
+        for ($mi = 1; $mi <= 3; $mi++) {
+            $minor = $parts[1] + $mi;
+            if ($try($parts[0] . '.' . $minor . '.0')) {
+                for ($p = 1; $p <= 8; $p++) {
+                    if (!$try($parts[0] . '.' . $minor . '.' . $p)) {
+                        break;
+                    }
+                }
+            }
+        }
+        $try(($parts[0] + 1) . '.0.0');
+        return $best;
+    }
+
     /** @return array{tag:string,name:string,html:?string,notes:?string,published:?string,source:string} */
     private static function resolveRemoteLatest(): array
     {
         $errors = [];
+        $acc = [
+            'tag' => null,
+            'name' => '',
+            'html' => null,
+            'notes' => null,
+            'published' => null,
+            'source' => 'jsdelivr',
+        ];
         $owner = rawurlencode(self::GITHUB_OWNER);
         $repo = rawurlencode(self::GITHUB_REPO);
         try {
             $release = self::githubGetJson("https://api.github.com/repos/{$owner}/{$repo}/releases/latest", true);
             if (is_array($release) && !empty($release['tag_name']) && empty($release['message'])) {
-                $tag = ltrim((string)$release['tag_name'], 'vV');
-                return [
-                    'tag' => $tag,
-                    'name' => (string)($release['name'] ?? $release['tag_name']),
-                    'html' => (string)($release['html_url'] ?? ''),
-                    'notes' => trim((string)($release['body'] ?? '')) ?: null,
-                    'published' => (string)($release['published_at'] ?? $release['created_at'] ?? ''),
-                    'source' => 'github',
-                ];
+                self::considerVersion(
+                    $acc,
+                    (string)$release['tag_name'],
+                    'github',
+                    (string)($release['name'] ?? $release['tag_name']),
+                    (string)($release['html_url'] ?? ''),
+                    trim((string)($release['body'] ?? '')) ?: null,
+                    (string)($release['published_at'] ?? $release['created_at'] ?? '')
+                );
             }
         } catch (Throwable $e) {
             $errors[] = $e->getMessage();
@@ -500,67 +602,48 @@ class BackAisleUpdate
         try {
             $tags = self::githubGetJson("https://api.github.com/repos/{$owner}/{$repo}/tags?per_page=30", false);
             if (is_array($tags) && empty($tags['message'])) {
-                $best = null;
-                $name = null;
                 foreach ($tags as $t) {
                     if (!is_array($t) || empty($t['name'])) {
                         continue;
                     }
-                    $tv = ltrim((string)$t['name'], 'vV');
-                    if (!preg_match('/^\d+\.\d+/', $tv)) {
-                        continue;
-                    }
-                    if ($best === null || version_compare($tv, $best, '>')) {
-                        $best = $tv;
-                        $name = (string)$t['name'];
-                    }
-                }
-                if ($best !== null) {
-                    return [
-                        'tag' => $best,
-                        'name' => (string)$name,
-                        'html' => self::githubUrl() . '/releases/tag/v' . rawurlencode($best),
-                        'notes' => null,
-                        'published' => null,
-                        'source' => 'github-tags',
-                    ];
+                    self::considerVersion($acc, (string)$t['name'], 'github-tags');
                 }
             }
         } catch (Throwable $e) {
             $errors[] = $e->getMessage();
         }
-        $body = self::httpRequest('https://data.jsdelivr.com/v1/packages/gh/' . self::GITHUB_OWNER . '/' . self::GITHUB_REPO, false, false, false);
-        $j = json_decode((string)$body, true);
-        $best = null;
-        if (is_array($j)) {
-            foreach ($j['versions'] ?? [] as $row) {
-                $tv = ltrim((string)(is_array($row) ? ($row['version'] ?? '') : $row), 'vV');
-                if (!preg_match('/^\d+\.\d+/', $tv)) {
-                    continue;
-                }
-                if ($best === null || version_compare($tv, $best, '>')) {
-                    $best = $tv;
+        try {
+            $body = self::httpRequest(
+                'https://data.jsdelivr.com/v1/packages/gh/' . self::GITHUB_OWNER . '/' . self::GITHUB_REPO,
+                false,
+                false,
+                false,
+                15
+            );
+            $j = json_decode((string)$body, true);
+            if (is_array($j)) {
+                foreach ($j['versions'] ?? [] as $row) {
+                    $tv = is_array($row) ? (string)($row['version'] ?? '') : (string)$row;
+                    self::considerVersion($acc, $tv, 'jsdelivr');
                 }
             }
+        } catch (Throwable $e) {
+            $errors[] = $e->getMessage();
         }
-        if ($best === null) {
-            $ver = trim((string)self::httpRequest('https://cdn.jsdelivr.net/gh/' . self::GITHUB_OWNER . '/' . self::GITHUB_REPO . '@main/VERSION', false, false, false));
-            $ver = ltrim($ver, "vV \t\r\n");
-            if (preg_match('/^\d+\.\d+/', $ver)) {
-                $best = $ver;
-            }
+        try {
+            $mainVer = self::jsDelivrVersionFile('main');
+            self::considerVersion($acc, $mainVer, 'jsdelivr-main');
+        } catch (Throwable $e) {
+            $errors[] = $e->getMessage();
         }
-        if ($best === null) {
+        $probed = self::probeJsDelivrNewer($acc['tag'] ?? self::installedVersion());
+        if ($probed !== null) {
+            self::considerVersion($acc, $probed, 'jsdelivr-tag');
+        }
+        if ($acc['tag'] === null) {
             throw new RuntimeException('Could not determine latest version. ' . implode('; ', $errors));
         }
-        return [
-            'tag' => $best,
-            'name' => 'v' . $best,
-            'html' => self::githubUrl() . '/releases/tag/v' . rawurlencode($best),
-            'notes' => null,
-            'published' => null,
-            'source' => 'jsdelivr',
-        ];
+        return $acc;
     }
 
     private static function flattenJsDelivrFiles(array $node, string $prefix = ''): array
@@ -672,7 +755,7 @@ class BackAisleUpdate
         return (bool)preg_match('/^(<!DOCTYPE|<html)/i', $t);
     }
 
-    private static function httpRequest(string $url, bool $binary, bool $allowNotFound, bool $githubApi = true): ?string
+    private static function httpRequest(string $url, bool $binary, bool $allowNotFound, bool $githubApi = true, int $timeoutSec = 0): ?string
     {
         if (!function_exists('curl_init')) {
             throw new RuntimeException('PHP cURL extension is required for updates.');
@@ -689,10 +772,12 @@ class BackAisleUpdate
             $headers[] = 'X-GitHub-Api-Version: 2022-11-28';
         }
         $sslVerify = !empty(self::config()['ssl_verify']);
+        $timeout = $timeoutSec > 0 ? $timeoutSec : ($binary ? 300 : 45);
         $opts = [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_TIMEOUT => $binary ? 300 : 45,
+            CURLOPT_CONNECTTIMEOUT => min(15, $timeout),
+            CURLOPT_TIMEOUT => $timeout,
             CURLOPT_HTTPHEADER => $headers,
             CURLOPT_SSL_VERIFYPEER => $sslVerify,
             CURLOPT_SSL_VERIFYHOST => $sslVerify ? 2 : 0,
