@@ -7,7 +7,7 @@ function ba_pid_running(int $pid): bool
         return false;
     }
     $out = [];
-    @exec('tasklist /FI "PID eq ' . $pid . '" /NH 2>NUL', $out);
+    @exec('cmd /c tasklist /FI "PID eq ' . $pid . '" /NH 2>nul', $out);
     return str_contains(implode("\n", $out), (string)$pid);
 }
 
@@ -15,7 +15,7 @@ function ba_schtask_info(string $name): array
 {
     $out = [];
     $code = 0;
-    @exec('schtasks /Query /TN ' . escapeshellarg($name) . ' /FO LIST /V 2>&1', $out, $code);
+    @exec('cmd /c schtasks /Query /TN ' . escapeshellarg($name) . ' /FO LIST /V 2>nul', $out, $code);
     $text = implode("\n", $out);
     $info = [
         'name' => $name,
@@ -194,24 +194,33 @@ function page_snmp(PDO $db, array $user): void
     }
 
     $st = ba_collector_status();
-    $scheduled = $db->query(
-        "SELECT d.id, d.ip, d.hostname, d.kind, d.enabled, d.snmp_profile_id, sp.name AS profile_name,
-                ps.last_success, ps.last_attempt, ps.comm_state, ps.consecutive_failures, s.capacity_pct, s.temp_f, s.load_pct
-         FROM devices d
-         LEFT JOIN snmp_profiles sp ON sp.id=d.snmp_profile_id
-         LEFT JOIN poll_state ps ON ps.device_id=d.id
-         LEFT JOIN samples s ON s.id = (SELECT id FROM samples WHERE device_id=d.id ORDER BY ts DESC LIMIT 1)
-         WHERE d.enabled=1
-         ORDER BY d.hostname, d.ip"
-    )->fetchAll();
-    $unscheduled = $db->query(
-        "SELECT d.id, d.ip, d.hostname, d.kind, d.snmp_profile_id, sp.name AS profile_name, ps.last_success, ps.comm_state
-         FROM devices d
-         LEFT JOIN snmp_profiles sp ON sp.id=d.snmp_profile_id
-         LEFT JOIN poll_state ps ON ps.device_id=d.id
-         WHERE IFNULL(d.enabled,0)=0 AND IFNULL(d.kind,'ups')='ups'
-         ORDER BY d.hostname, d.ip"
-    )->fetchAll();
+    $sampleJoin = ba_db_driver() === 'sqlsrv'
+        ? "LEFT JOIN samples s ON s.id = (SELECT TOP 1 s2.id FROM samples s2 WHERE s2.device_id=d.id ORDER BY s2.ts DESC)"
+        : "LEFT JOIN samples s ON s.id = (SELECT s2.id FROM samples s2 WHERE s2.device_id=d.id ORDER BY s2.ts DESC LIMIT 1)";
+    $scheduled = [];
+    $unscheduled = [];
+    try {
+        $scheduled = $db->query(
+            "SELECT d.id, d.ip, d.hostname, d.kind, d.enabled, d.snmp_profile_id, sp.name AS profile_name,
+                    ps.last_success, ps.last_attempt, ps.comm_state, ps.consecutive_failures, s.capacity_pct, s.temp_f, s.load_pct
+             FROM devices d
+             LEFT JOIN snmp_profiles sp ON sp.id=d.snmp_profile_id
+             LEFT JOIN poll_state ps ON ps.device_id=d.id
+             $sampleJoin
+             WHERE d.enabled=1
+             ORDER BY d.hostname, d.ip"
+        )->fetchAll();
+        $unscheduled = $db->query(
+            "SELECT d.id, d.ip, d.hostname, d.kind, d.snmp_profile_id, sp.name AS profile_name, ps.last_success, ps.comm_state
+             FROM devices d
+             LEFT JOIN snmp_profiles sp ON sp.id=d.snmp_profile_id
+             LEFT JOIN poll_state ps ON ps.device_id=d.id
+             WHERE IFNULL(d.enabled,0)=0 AND IFNULL(d.kind,'ups')='ups'
+             ORDER BY d.hostname, d.ip"
+        )->fetchAll();
+    } catch (Throwable $e) {
+        $msg = trim($msg . ' Device list failed: ' . $e->getMessage());
+    }
 
     ba_layout_start('SNMP', 'snmp');
     if ($msg) {
@@ -222,7 +231,7 @@ function page_snmp(PDO $db, array $user): void
 
     echo '<div class="grid2">';
     echo '<div class="card"><h3>Poller</h3>';
-    echo '<p><span class="pill '.$st['cls'].'">'.h($st['label']).'</span> PID '.((int)$st['pid'] ?: '—').'</p>';
+    echo '<p><span class="pill '.$st['cls'].'">'.h($st['label']).'</span> PID '.((int)$st['pid'] ?: '-').'</p>';
     echo '<p class="muted">'.h($st['detail']).'</p>';
     if (!empty($st['heartbeat']['at'])) {
         echo '<p class="muted">Heartbeat at '.h((string)$st['heartbeat']['at']).' UTC</p>';
@@ -232,7 +241,7 @@ function page_snmp(PDO $db, array $user): void
     foreach (['collector_task' => 'BackAisleCollector', 'watch_task' => 'Watch', 'writer_task' => 'Writer'] as $k => $lab) {
         $t = $st[$k];
         echo '<tr><td>'.h($lab).'</td><td>'.h($t['ok'] ? ($t['status'] ?: 'registered') : 'not readable / missing').'</td>';
-        echo '<td>'.h($t['last'] ?: '—').'</td><td>'.h($t['next'] ?: '—').'</td></tr>';
+        echo '<td>'.h($t['last'] ?: '-').'</td><td>'.h($t['next'] ?: '-').'</td></tr>';
     }
     echo '</tbody></table>';
     if (!$st['collector_task']['ok']) {

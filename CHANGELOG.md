@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.8] - 2026-09-17
+
+- SNMP page: do not write Task Scheduler stderr into IIS FastCGI (empty HTTP 500). SQL Server uses TOP instead of LIMIT for last sample.
+
 ## [0.5.7] - 2026-09-17
 
 - Collector SQL connect: use the same config.php credentials PHP uses (writable runtime JSON), ODBC after connect not autocommit-in-connect, brace PWD, try SqlPassword and the legacy SQL Server driver. Connect before loading pysnmp/cryptography.
