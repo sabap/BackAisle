@@ -18,14 +18,14 @@
            - Install ODBC Driver 18 for SQL Server
            - Install URL Rewrite
            - Install Python 3.12+ and pip packages
-           - Create IIS site BackAisle on port 8080 (never Default Web Site)
+           - Point IIS Default Web Site at C:\inetpub\BackAisle\public
+           - Bind HTTP :80 and HTTPS :443 (self-signed cert if needed)
       5. Optionally register collector/writer scheduled tasks
-      6. Opens the web setup wizard (setup.php)
+      6. Opens the web setup wizard (http://localhost/setup.php)
 
     What this script does NOT do:
       - Install SQL Server (use Express/Standard or SQLite in the wizard)
       - Create the database or admin user (use setup.php)
-      - Modify ColdAisle / Default Web Site / port 80
 
     This file is ASCII + UTF-8 BOM so Windows PowerShell 5.1 can parse it.
     Some networks intercept raw.githubusercontent.com (HTML interstitial) or
@@ -45,10 +45,10 @@
     Application root. Default C:\inetpub\BackAisle
 
 .PARAMETER HttpPort
-    IIS binding. Default 8080
+    HTTP port for Default Web Site. Default 80.
 
 .PARAMETER OpenSetup
-    Open http://localhost:8080/setup.php when finished.
+    Open http://localhost/setup.php when finished.
 
 .PARAMETER RegisterCollectorTask
     Register Task Scheduler jobs for collector.py / writer.py as SYSTEM.
@@ -57,7 +57,10 @@
 param(
     [string]$Version = '',
     [string]$SiteRoot = 'C:\inetpub\BackAisle',
-    [int]$HttpPort = 8080,
+    [int]$HttpPort = 80,
+    [int]$HttpsPort = 443,
+    [string]$SiteName = 'Default Web Site',
+    [switch]$SkipHttps,
     [string]$PhpVersion = '8.3.33',
     [string]$PhpInstallPath = 'C:\PHP',
     [string]$GitHubOwner = 'sabap',
@@ -241,7 +244,7 @@ Ensure-Tls12
 Write-Host ''
 Write-Host '  BackAisle installer (public GitHub release)' -ForegroundColor White
 Write-Host '  https://github.com/sabap/BackAisle' -ForegroundColor DarkGray
-Write-Host '  Does not modify Default Web Site or ColdAisle.' -ForegroundColor DarkGray
+Write-Host '  IIS Default Web Site on port 80 (fresh-server install).' -ForegroundColor DarkGray
 Write-Host ''
 
 $work = Join-Path $env:TEMP ("BackAisle-install-{0}" -f [guid]::NewGuid().ToString('N'))
@@ -261,6 +264,8 @@ try {
         PhpInstallPath   = $PhpInstallPath
         SiteRoot         = $SiteRoot
         HttpPort         = $HttpPort
+        HttpsPort        = $HttpsPort
+        SiteName         = $SiteName
         DeploySource     = $appRoot
     }
     if ($SkipOdbc) { $prereqArgs.SkipOdbc = $true }
@@ -269,12 +274,14 @@ try {
     if ($Force) { $prereqArgs.Force = $true }
     if ($OpenSetup) { $prereqArgs.OpenSetup = $true }
     if ($RegisterCollectorTask) { $prereqArgs.RegisterCollectorTask = $true }
+    if ($SkipHttps) { $prereqArgs.SkipHttps = $true }
     & $prereq @prereqArgs
     if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) {
         throw "Install-BackAisle-Prereqs.ps1 exited $LASTEXITCODE"
     }
     Write-Host ''
-    Write-Host "  Next: http://localhost:$HttpPort/setup.php" -ForegroundColor Green
+    $next = if ($HttpPort -eq 80) { 'http://localhost/setup.php' } else { "http://localhost:${HttpPort}/setup.php" }
+    Write-Host "  Next: $next" -ForegroundColor Green
     Write-Host '  Choose SQLite or SQL Server, then Fresh install, Restore backup, or PowerPanel import.'
 }
 finally {

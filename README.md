@@ -2,7 +2,7 @@
 
 Campus IDF infrastructure: network racks, UPS monitoring, and closet climate. **Not ColdAisle** (data center DCIM) and **not PowerPanel**.
 
-BackAisle is a separate IIS site, app pool, and folder. It does not load ColdAisle files or schema.
+BackAisle installs as the IIS **Default Web Site** (ports 80 and 443) with its own app pool and folder (`C:\inetpub\BackAisle`). It does not load ColdAisle files or schema.
 
 ## What it does
 
@@ -20,7 +20,7 @@ No VM/OS shutdown. No SNMPv1. No SET/write to the UPS except optional admin batt
 
 | Item | Value |
 |---|---|
-| IIS site | **BackAisle** (own site + app pool) |
+| IIS site | **Default Web Site** on **:80** and **:443** (app pool `BackAisle`) |
 | Files | `C:\inetpub\BackAisle` |
 | Secrets | `C:\ProgramData\BackAisle\secrets.env` (see `secrets.env.example`) |
 | Database | SQLite `C:\inetpub\BackAisle\data\backaisle.db` (WAL) |
@@ -52,7 +52,7 @@ Set-Location $dir
 $out = Join-Path $dir 'Install-BackAisle.ps1'
 $urls = @(
   'https://github.com/sabap/BackAisle/releases/latest/download/Install-BackAisle.ps1',
-  'https://cdn.jsdelivr.net/gh/sabap/BackAisle@v0.3.0/Install-BackAisle.ps1',
+  'https://cdn.jsdelivr.net/gh/sabap/BackAisle@v0.4.0/Install-BackAisle.ps1',
   'https://cdn.jsdelivr.net/gh/sabap/BackAisle@main/Install-BackAisle.ps1'
 )
 $ok = $false
@@ -85,12 +85,14 @@ Set-ExecutionPolicy Bypass -Scope Process -Force
 & C:\TEMP\BackAisle-src\Install-BackAisle.ps1 -OpenSetup -RegisterCollectorTask
 ```
 
-The installer:
+The installer (written for a **fresh IIS** server):
 
-1. Enables IIS FastCGI role services (does **not** change Default Web Site or port 80)
+1. Enables IIS FastCGI role services
 2. Installs VC++ Redistributable, PHP NTS, ODBC Driver 18, URL Rewrite, Python 3.12+ and pip packages
-3. Creates IIS site **BackAisle** on **:8080** with a site-local `php.ini`
-4. Opens **http://localhost:8080/setup.php**
+3. Points **Default Web Site** at `C:\inetpub\BackAisle\public`, pool **BackAisle**, HTTP **:80** and HTTPS **:443** (self-signed cert if none exists)
+4. Opens **http://localhost/setup.php**
+
+This does not assume another product is already using port 80. Files stay under `C:\inetpub\BackAisle` (not `wwwroot`). To skip TLS: `.\Install-BackAisle.ps1 -SkipHttps`.
 
 In the wizard, pick **SQLite** (no extra engine) or **SQL Server** (existing instance — this script does not install SQL Server), then:
 

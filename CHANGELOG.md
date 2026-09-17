@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.4.0] - 2026-09-17
+
+- Installer targets a fresh IIS **Default Web Site** on HTTP :80 and HTTPS :443 (self-signed cert if needed). App pool remains `BackAisle`. Files stay in `C:\inetpub\BackAisle`. No assumption that another product owns port 80.
+
 ## [0.3.2] - 2026-09-14
 
 - After login, redirect to /index.php (not /). Index errors are shown as text instead of a blank 500. Port 80 is optional via -HttpPort 80 when Default Web Site is unused.

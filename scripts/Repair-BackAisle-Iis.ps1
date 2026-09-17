@@ -1,10 +1,10 @@
 ﻿#Requires -RunAsAdministrator
-# Fix IIS/PHP 500 for BackAisle on :8080. ASCII. Safe to re-run.
+# Fix IIS/PHP for BackAisle on Default Web Site. ASCII. Safe to re-run.
 [CmdletBinding()]
 param(
     [string]$SiteRoot = 'C:\inetpub\BackAisle',
     [string]$PhpInstallPath = 'C:\PHP',
-    [string]$SiteName = 'BackAisle',
+    [string]$SiteName = 'Default Web Site',
     [string]$PoolName = 'BackAisle'
 )
 
@@ -104,12 +104,12 @@ Write-Host '==> setup.php CLI (first 30 lines)'
 & $phpExe -c $ini -d display_errors=1 (Join-Path $SiteRoot 'public\setup.php') 2>&1 | Select-Object -First 30
 
 Write-Host '==> HTTP'
-& curl.exe -sS -D - --max-time 15 "http://127.0.0.1:8080/health.php" -o -
+& curl.exe -sS -D - --max-time 15 "http://127.0.0.1/health.php" -o -
 Write-Host ''
-& curl.exe -sS -D - --max-time 15 "http://127.0.0.1:8080/setup.php" -o - | Select-Object -First 25
+& curl.exe -sS -D - --max-time 15 "http://127.0.0.1/setup.php" -o - | Select-Object -First 25
 
 Write-Host '==> php-error.log (tail)'
 $log = Join-Path $logDir 'php-error.log'
 if (Test-Path $log) { Get-Content $log -Tail 40 } else { Write-Host '    (no log yet)' }
 
-Write-Host '==> Done. Open http://localhost:8080/setup.php'
+Write-Host '==> Done. Open http://localhost/setup.php'

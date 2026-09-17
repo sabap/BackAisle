@@ -10,8 +10,9 @@
     - ODBC Driver 18 for SQL Server (setup wizard)
     - IIS URL Rewrite
     - Python 3.12+ and pip packages (pysnmp, cryptography, paramiko, pyodbc)
-    - IIS site **BackAisle** (default port 8080 so Default Web Site / ColdAisle can keep :80; pass -HttpPort 80 when :80 is free)
-    - NTFS grants for the BackAisle app pool
+    - IIS **Default Web Site** on port 80 (and 443 with a self-signed cert if HTTPS is available)
+    - Dedicated app pool **BackAisle** (no .NET runtime)
+    - NTFS grants for that app pool
 
     Does NOT install SQL Server. Use setup.php to connect SQLite or an existing SQL instance.
 
@@ -25,7 +26,10 @@
     Application root. Default C:\inetpub\BackAisle
 
 .PARAMETER HttpPort
-    IIS site port. Default 8080 so another site can own :80. Use 80 when this server has no site on :80.
+    HTTP port for Default Web Site. Default 80.
+
+.PARAMETER HttpsPort
+    HTTPS port. Default 443. A self-signed certificate is created if none exists. Pass -SkipHttps to skip.
 
 .PARAMETER DeploySource
     Source tree to copy. Default: parent of this script.
@@ -37,9 +41,11 @@ param(
     [string]$PhpVersion = '8.3.33',
     [string]$PhpInstallPath = 'C:\PHP',
     [string]$SiteRoot = 'C:\inetpub\BackAisle',
-    [int]$HttpPort = 8080,
-    [string]$SiteName = 'BackAisle',
+    [int]$HttpPort = 80,
+    [int]$HttpsPort = 443,
+    [string]$SiteName = 'Default Web Site',
     [string]$PoolName = 'BackAisle',
+    [switch]$SkipHttps,
     [string]$DeploySource = '',
     [switch]$SkipOdbc,
     [switch]$SkipUrlRewrite,
@@ -553,16 +559,83 @@ function Grant-BaAcl {
     }
 }
 
+function Ensure-SiteBinding {
+    param([string]$Name, [string]$Protocol, [int]$Port)
+    $want = "*:${Port}:"
+    foreach ($b in @(Get-WebBinding -Name $Name -ErrorAction SilentlyContinue)) {
+        if ($b.protocol -eq $Protocol -and [string]$b.bindingInformation -eq $want) { return }
+    }
+    New-WebBinding -Name $Name -Protocol $Protocol -Port $Port -IPAddress '*' | Out-Null
+    Write-Ok "Binding $Protocol *:${Port}:"
+}
+
+function Clear-PortBindings {
+    param([int]$Port, [string]$KeepSite)
+    Get-Website | Where-Object { $_.Name -ne $KeepSite } | ForEach-Object {
+        $n = $_.Name
+        foreach ($b in @(Get-WebBinding -Name $n -ErrorAction SilentlyContinue)) {
+            if ([string]$b.bindingInformation -match ":${Port}:") {
+                Write-Warn "Removing $n $($b.protocol) $($b.bindingInformation) so '$KeepSite' can use :$Port"
+                Remove-WebBinding -Name $n -BindingInformation $b.bindingInformation -Protocol $b.protocol -ErrorAction SilentlyContinue
+            }
+        }
+    }
+}
+
+function Ensure-HttpsBinding {
+    param([string]$Name, [int]$Port)
+    if ($SkipHttps -or $Port -le 0) { return }
+    try {
+        $cert = Get-ChildItem Cert:\LocalMachine\My -ErrorAction SilentlyContinue |
+            Where-Object { $_.FriendlyName -eq 'BackAisle' -and $_.NotAfter -gt (Get-Date) } |
+            Select-Object -First 1
+        if (-not $cert) {
+            $cert = New-SelfSignedCertificate -DnsName 'localhost', $env:COMPUTERNAME `
+                -CertStoreLocation 'Cert:\LocalMachine\My' -FriendlyName 'BackAisle' `
+                -NotAfter (Get-Date).AddYears(5)
+            Write-Ok "Created self-signed TLS certificate (CN=localhost)"
+        }
+        Ensure-SiteBinding -Name $Name -Protocol https -Port $Port
+        $sslPath = "IIS:\SslBindings\0.0.0.0!$Port"
+        if (Test-Path $sslPath) {
+            $cur = Get-Item $sslPath
+            if ([string]$cur.Thumbprint -ne [string]$cert.Thumbprint) {
+                Remove-Item $sslPath -Force
+            }
+        }
+        if (-not (Test-Path $sslPath)) {
+            New-Item $sslPath -Thumbprint $cert.Thumbprint | Out-Null
+        }
+        Write-Ok "https://localhost/ on :$Port"
+    } catch {
+        Write-Warn "HTTPS :$Port not bound ($($_.Exception.Message)). http://localhost/ still works."
+    }
+}
+
+function Ensure-FirewallPort([int]$Port, [string]$DisplayName) {
+    try {
+        if (-not (Get-NetFirewallRule -DisplayName $DisplayName -ErrorAction SilentlyContinue)) {
+            New-NetFirewallRule -DisplayName $DisplayName -Direction Inbound -Protocol TCP -LocalPort $Port -Action Allow | Out-Null
+            Write-Ok "Firewall allow TCP $Port"
+        }
+    } catch { }
+}
+
 function Install-BackAisleSite([string]$IniPath) {
-    Write-Step "IIS site $SiteName on :$HttpPort (does not change Default Web Site)"
+    Write-Step "IIS Default Web Site on :$HttpPort (app pool $PoolName)"
     Import-Module WebAdministration -ErrorAction Stop
     $public = Join-Path $SiteRoot 'public'
+    if (-not (Test-Path $public)) {
+        throw "Missing $public - deploy files first"
+    }
+
     if (-not (Test-Path "IIS:\AppPools\$PoolName")) {
         New-WebAppPool -Name $PoolName | Out-Null
     }
     Set-ItemProperty "IIS:\AppPools\$PoolName" -Name managedRuntimeVersion -Value ''
     Set-ItemProperty "IIS:\AppPools\$PoolName" -Name managedPipelineMode -Value Integrated
     Set-ItemProperty "IIS:\AppPools\$PoolName" -Name processModel.identityType -Value ApplicationPoolIdentity
+
     $phpCgi = Join-Path $PhpInstallPath 'php-cgi.exe'
     $phpArgsQuoted = "-c `"$IniPath`""
     $phpArgsPlain = "-c $IniPath"
@@ -583,13 +656,8 @@ function Install-BackAisleSite([string]$IniPath) {
             activityTimeout = 180
             requestTimeout = 180
         }
-        Write-Ok 'Registered site-local FastCGI (-c php.ini)'
+        Write-Ok 'Registered FastCGI (-c site php.ini)'
     }
-    $appcmd = Join-Path $env:windir 'system32\inetsrv\appcmd.exe'
-    if (Test-Path $appcmd) {
-        & $appcmd unlock config /section:system.webServer/handlers | Out-Null
-    }
-    $sitePath = "IIS:\Sites\$SiteName"
     try {
         Get-WebConfiguration -Filter 'system.webServer/fastCgi/application' |
             Where-Object { $_.fullPath -like '*php-cgi.exe' } |
@@ -598,21 +666,44 @@ function Install-BackAisleSite([string]$IniPath) {
                 Set-WebConfigurationProperty -Filter $filter -Name stderrMode -Value IgnoreAndReturn200 -ErrorAction SilentlyContinue
             }
     } catch { }
+
+    $appcmd = Join-Path $env:windir 'system32\inetsrv\appcmd.exe'
+    if (Test-Path $appcmd) {
+        & $appcmd unlock config /section:system.webServer/handlers | Out-Null
+    }
+
+    $legacy = Get-Website | Where-Object { $_.Name -eq 'BackAisle' }
+    if ($legacy -and $SiteName -ne 'BackAisle') {
+        try { Stop-Website -Name 'BackAisle' } catch { }
+        Remove-Website -Name 'BackAisle' -ErrorAction SilentlyContinue
+        Write-Ok 'Removed leftover site named BackAisle (old :8080 install)'
+    }
+
+    Clear-PortBindings -Port $HttpPort -KeepSite $SiteName
+    if (-not $SkipHttps) { Clear-PortBindings -Port $HttpsPort -KeepSite $SiteName }
+
     $existing = Get-Website | Where-Object { $_.Name -eq $SiteName }
     if (-not $existing) {
         New-Website -Name $SiteName -Port $HttpPort -PhysicalPath $public -ApplicationPool $PoolName | Out-Null
+        Write-Ok "Created IIS site '$SiteName'"
     } else {
         Set-ItemProperty "IIS:\Sites\$SiteName" -Name physicalPath -Value $public
         Set-ItemProperty "IIS:\Sites\$SiteName" -Name applicationPool -Value $PoolName
+        Write-Ok "Reconfigured '$SiteName' -> $public (pool $PoolName)"
     }
+    Ensure-SiteBinding -Name $SiteName -Protocol http -Port $HttpPort
+    Ensure-HttpsBinding -Name $SiteName -Port $HttpsPort
+    Ensure-FirewallPort -Port $HttpPort -DisplayName 'BackAisle HTTP'
+    if (-not $SkipHttps) { Ensure-FirewallPort -Port $HttpsPort -DisplayName 'BackAisle HTTPS' }
+
     Write-SiteWebConfig
+    $sitePath = "IIS:\Sites\$SiteName"
     foreach ($hn in @('PHP_BackAisle','PHP_via_FastCGI')) {
         Remove-WebHandler -Name $hn -PSPath $sitePath -ErrorAction SilentlyContinue
     }
     New-WebHandler -Name 'PHP_BackAisle' -PSPath $sitePath -Path '*.php' -Verb '*' -Modules FastCgiModule -ScriptProcessor "$phpCgi|$phpArgs" -ResourceType Either -RequiredAccess Script | Out-Null
     Write-Ok "PHP handler $phpCgi|$phpArgs"
-    # Virtual account exists after the pool is created/started. Never grant the bare
-    # pool name (icacls "BackAisle:..." cannot map a SID).
+
     try { Start-WebAppPool $PoolName } catch { }
     $poolId = "IIS APPPOOL\$PoolName"
     $identities = @($poolId, 'NT AUTHORITY\IUSR', 'IIS_IUSRS')
@@ -620,14 +711,14 @@ function Install-BackAisleSite([string]$IniPath) {
         Grant-BaAcl -Path $SiteRoot -Identity $id -Rights 'M'
         Grant-BaAcl -Path 'C:\ProgramData\BackAisle' -Identity $id -Rights 'M'
     }
-    foreach ($p in @('data','logs','storage','config')) {
+    foreach ($p in @('data','logs','storage','config','data\sessions')) {
         $full = Join-Path $SiteRoot $p
         if (-not (Test-Path $full)) { New-Item -ItemType Directory -Path $full -Force | Out-Null }
         foreach ($id in $identities) { Grant-BaAcl -Path $full -Identity $id -Rights 'M' }
     }
     Write-Ok "NTFS Modify granted to $($identities -join ', ')"
     try { Start-Website $SiteName } catch { Write-Warn "Start-Website: $($_.Exception.Message)" }
-    Write-Ok "Site $SiteName listening on :$HttpPort"
+    Write-Ok "http://localhost/setup.php  (site '$SiteName', pool $PoolName)"
 }
 
 # ---- main ----
@@ -638,7 +729,7 @@ if (-not $DeploySource) { $DeploySource = Split-Path (Split-Path $PSCommandPath 
 Write-Host ''
 Write-Host '  BackAisle platform installer' -ForegroundColor White
 Write-Host '  https://github.com/sabap/BackAisle' -ForegroundColor DarkGray
-Write-Host '  Does not modify Default Web Site or ColdAisle.' -ForegroundColor DarkGray
+Write-Host '  Uses IIS Default Web Site on port 80 (443 if TLS is enabled).' -ForegroundColor DarkGray
 Write-Host ''
 
 Install-IisFeatures
@@ -659,23 +750,21 @@ if ($RegisterCollectorTask) {
     }
 }
 
-$setupUrl = "http://localhost:$HttpPort/setup.php"
+$setupUrl = if ($HttpPort -eq 80) { 'http://localhost/setup.php' } else { "http://localhost:${HttpPort}/setup.php" }
 Write-Host ''
 Write-Host '================================================================' -ForegroundColor Green
 Write-Host '  BackAisle platform install finished' -ForegroundColor Green
 Write-Host '================================================================' -ForegroundColor Green
 Write-Host @"
 
-  Site:     $SiteRoot
-  IIS:      $SiteName :$HttpPort  (pool $PoolName)
+  Files:    $SiteRoot
+  IIS:      $SiteName   HTTP :$HttpPort   HTTPS :$HttpsPort
+  Pool:     $PoolName
   PHP:      $PhpInstallPath  (ini $ini)
   Next:     $setupUrl
-            - Connect SQLite or SQL Server
-            - Restore a site backup, or
-            - Import a PowerPanel profile.zip
+            SQLite or SQL Server, then Fresh / Restore / PowerPanel import
 
-  SQL Server is NOT installed by this script.
-  Default Web Site / port 80 is unchanged.
+  SQL Server is not installed by this script.
 
 "@
 if ($OpenSetup) {
