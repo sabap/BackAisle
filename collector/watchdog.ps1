@@ -7,7 +7,10 @@ if (-not $py -or $py -match '(?i)\\WindowsApps\\' -or -not (Test-Path -LiteralPa
         "$env:LocalAppData\Programs\Python\Python312\python.exe",
         'C:\Python312\python.exe'
     )) {
-        if ($c -and (Test-Path -LiteralPath $c)) { $py = $c; break }
+        if ($c -and (Test-Path -LiteralPath $c)) {
+            $item = Get-Item -LiteralPath $c -ErrorAction SilentlyContinue
+            if ($item -and $item.Length -ge 2048) { $py = $c; break }
+        }
     }
 }
 if (-not $py) {

@@ -92,6 +92,18 @@ try {
         }
 } catch { }
 
+$appcmd = Join-Path $env:windir 'system32\inetsrv\appcmd.exe'
+if (Test-Path $appcmd) {
+    $oldEa = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { & $appcmd unlock config /section:system.webServer/handlers 2>$null | Out-Null } catch { }
+    finally { $ErrorActionPreference = $oldEa }
+}
+foreach ($hn in @('PHP_BackAisle','PHP_via_FastCGI')) {
+    Remove-WebHandler -Name $hn -PSPath "IIS:\Sites\$SiteName" -ErrorAction SilentlyContinue
+}
+New-WebHandler -Name PHP_BackAisle -PSPath "IIS:\Sites\$SiteName" -Path '*.php' -Verb '*' -Modules FastCgiModule -ScriptProcessor "$phpCgi|$phpArgs" -ResourceType Either -RequiredAccess Script -ErrorAction SilentlyContinue | Out-Null
+
 try { Restart-WebAppPool $PoolName } catch { Start-WebAppPool $PoolName }
 Start-Website $SiteName -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 2

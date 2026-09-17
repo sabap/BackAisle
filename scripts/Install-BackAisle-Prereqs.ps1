@@ -76,7 +76,7 @@ function Ensure-Tls12 {
         [Net.ServicePointManager]::SecurityProtocol = `
             [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     } catch { }
-    try { [Net.ServicePointManager]::CheckCertificateRevocationList = $false } catch { }
+    # curl retries with --ssl-no-revoke; do not disable CRL checks globally.
 }
 
 function Test-CommandExists([string]$Name) {
@@ -132,7 +132,7 @@ function Download-File {
         [switch]$RequireZip
     )
     Ensure-Tls12
-    try { [Net.ServicePointManager]::CheckCertificateRevocationList = $false } catch { }
+    # curl retries with --ssl-no-revoke; do not disable CRL checks globally.
     Write-Host "    Downloading: $Uri"
     if ((Test-DownloadedFile -Path $OutFile -MinBytes $MinBytes -RequireZip:$RequireZip) -and -not $Force) {
         Write-Ok "Already present: $OutFile"
@@ -669,7 +669,10 @@ function Install-BackAisleSite([string]$IniPath) {
 
     $appcmd = Join-Path $env:windir 'system32\inetsrv\appcmd.exe'
     if (Test-Path $appcmd) {
-        & $appcmd unlock config /section:system.webServer/handlers | Out-Null
+        $oldEa = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try { & $appcmd unlock config /section:system.webServer/handlers 2>$null | Out-Null } catch { }
+        finally { $ErrorActionPreference = $oldEa }
     }
 
     $legacy = Get-Website | Where-Object { $_.Name -eq 'BackAisle' }

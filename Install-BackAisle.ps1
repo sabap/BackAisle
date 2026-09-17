@@ -32,11 +32,7 @@
     fail GitHub TLS revocation checks (CRYPT_E_NO_REVOCATION_CHECK). Prefer
     the GitHub release asset or jsDelivr, and pass --ssl-no-revoke to curl.
 
-      $out = Join-Path $env:TEMP 'Install-BackAisle.ps1'
-      curl.exe -fsSL --ssl-no-revoke -o $out https://github.com/sabap/BackAisle/releases/latest/download/Install-BackAisle.ps1
-      Get-Content $out -TotalCount 1   # must be: #Requires -RunAsAdministrator
-      Set-ExecutionPolicy Bypass -Scope Process -Force
-      & $out -OpenSetup
+      See README.md install paste (jsDelivr first; refuse HTML; require #Requires).
 
 .PARAMETER Version
     Tag without/with v (e.g. 0.2.1) or branch main. Default: latest GitHub Release / tag.
@@ -94,11 +90,26 @@ function Ensure-Tls12 {
         [Net.ServicePointManager]::SecurityProtocol = `
             [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     } catch { }
-    try { [Net.ServicePointManager]::CheckCertificateRevocationList = $false } catch { }
+    # CRL disable is not used; curl retries with --ssl-no-revoke instead.
+}
+
+function Test-BaPayload {
+    param([string]$Path, [int]$MinBytes = 64, [switch]$RequireZip)
+    if (-not (Test-Path -LiteralPath $Path)) { return $false }
+    $len = (Get-Item -LiteralPath $Path).Length
+    if ($len -lt $MinBytes) { return $false }
+    $fs = [IO.File]::OpenRead($Path)
+    try {
+        $b = New-Object byte[] 4
+        $n = $fs.Read($b, 0, 4)
+        if ($n -ge 1 -and $b[0] -eq 0x3C) { return $false }
+        if ($RequireZip) { return ($n -ge 2 -and $b[0] -eq 0x50 -and $b[1] -eq 0x4B) }
+        return $true
+    } finally { $fs.Close() }
 }
 
 function Invoke-BaDownload {
-    param([string]$Uri, [string]$OutFile, [int]$MinBytes = 64)
+    param([string]$Uri, [string]$OutFile, [int]$MinBytes = 64, [switch]$RequireZip)
     Ensure-Tls12
     $dir = Split-Path -Parent $OutFile
     if ($dir -and -not (Test-Path $dir)) {
@@ -116,7 +127,7 @@ function Invoke-BaDownload {
             $err = Join-Path $env:TEMP ('ba-curl-{0}.err' -f [guid]::NewGuid().ToString('N'))
             try {
                 $p = Start-Process -FilePath 'curl.exe' -ArgumentList $curlArgs -Wait -PassThru -NoNewWindow -RedirectStandardError $err
-                if ($p.ExitCode -eq 0 -and (Test-Path -LiteralPath $OutFile) -and ((Get-Item -LiteralPath $OutFile).Length -ge $MinBytes)) {
+                if ($p.ExitCode -eq 0 -and (Test-BaPayload -Path $OutFile -MinBytes $MinBytes -RequireZip:$RequireZip)) {
                     $ok = $true
                     break
                 }
@@ -127,14 +138,12 @@ function Invoke-BaDownload {
     if (-not $ok) {
         try {
             Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing -Headers @{ 'User-Agent' = $ua }
-            if ((Test-Path -LiteralPath $OutFile) -and ((Get-Item -LiteralPath $OutFile).Length -ge $MinBytes)) {
-                $ok = $true
-            }
+            if (Test-BaPayload -Path $OutFile -MinBytes $MinBytes -RequireZip:$RequireZip) { $ok = $true }
         } catch {
             Write-Warn $_.Exception.Message
         }
     }
-    if (-not $ok) { throw "Download failed: $Uri" }
+    if (-not $ok) { throw "Download failed or was not a real file (proxy HTML?): $Uri" }
 }
 
 function Get-GitHubJson([string]$Url) {
@@ -221,14 +230,32 @@ function Download-Release {
     foreach ($zipUrl in $urls) {
         try {
             Write-Host "    Trying $zipUrl"
-            Invoke-BaDownload -Uri $zipUrl -OutFile $zipPath -MinBytes 1000
+            Invoke-BaDownload -Uri $zipUrl -OutFile $zipPath -MinBytes 1000 -RequireZip
             $got = $true
             break
         } catch {
             Write-Warn $_.Exception.Message
         }
     }
-    if (-not $got) { throw "Could not download $Owner/$Repo $label zip" }
+    if (-not $got) {
+        $cloneDir = Join-Path $WorkRoot 'clone'
+        Write-Warn 'Zip download failed (proxy HTML?). Trying git clone.'
+        $old = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $branch = if ($label -match '^(main|master)$') { $label } else { $label }
+            & git.exe clone --depth 1 --branch $branch "https://github.com/$Owner/$Repo.git" $cloneDir 2>$null
+            if ($LASTEXITCODE -ne 0 -or -not (Test-Path $cloneDir)) {
+                & git.exe clone --depth 1 "https://github.com/$Owner/$Repo.git" $cloneDir 2>$null
+            }
+        } finally { $ErrorActionPreference = $old }
+        $appRoot = Find-AppRoot $cloneDir
+        if ($appRoot) {
+            Write-Ok "Cloned $appRoot"
+            return $appRoot
+        }
+        throw "Could not download $Owner/$Repo $label. This network is replacing GitHub with a web page. Copy the BackAisle folder onto this server and run scripts\Install-BackAisle-Prereqs.ps1"
+    }
     Write-Ok ("Downloaded {0:N0} bytes" -f (Get-Item $zipPath).Length)
     if (Test-Path $extractRoot) { Remove-Item $extractRoot -Recurse -Force }
     New-Item -ItemType Directory -Path $extractRoot -Force | Out-Null

@@ -43,38 +43,40 @@ Some networks:
 - Fail GitHub TLS revocation checks (`CRYPT_E_NO_REVOCATION_CHECK` / curl 35) -- retry with `--ssl-no-revoke`
 - Use Windows PowerShell 5.1, which misparses UTF-8 em-dashes unless the file has a BOM
 
-Use `curl.exe --fail --ssl-no-revoke`, confirm the first line, then run:
+Use this paste in elevated PowerShell. It leaves System32, tries jsDelivr first (GitHub.com is often replaced with an OpenDNS HTML page), and **will not run** a download that is not a real script:
 
 ```powershell
+if ((Get-Location).Path -match '\\[Ww]indows\\[Ss]ystem32$') { Set-Location $env:TEMP }
 $dir = Join-Path $env:TEMP 'BackAisle-install'
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
 Set-Location $dir
 $out = Join-Path $dir 'Install-BackAisle.ps1'
 $urls = @(
-  'https://github.com/sabap/BackAisle/releases/latest/download/Install-BackAisle.ps1',
   'https://cdn.jsdelivr.net/gh/sabap/BackAisle@v0.4.0/Install-BackAisle.ps1',
   'https://cdn.jsdelivr.net/gh/sabap/BackAisle@main/Install-BackAisle.ps1'
 )
 $ok = $false
 foreach ($u in $urls) {
   Write-Host "Trying $u"
-  & curl.exe -fsSL --ssl-no-revoke --max-time 60 -o $out $u
+  cmd /c "curl.exe -fsSL --ssl-no-revoke --max-time 60 -o `"$out`" $u"
   if ($LASTEXITCODE -ne 0) { continue }
-  $head = Get-Content -LiteralPath $out -TotalCount 1 -Encoding UTF8
-  if ($head -match 'Requires') { $ok = $true; break }
-  Write-Host "Not a script (got: $head)"
+  if (-not (Test-Path $out)) { continue }
+  $b = [IO.File]::ReadAllBytes($out)
+  if ($b.Length -lt 200 -or $b[0] -eq 0x3C) { Write-Host 'Not a script (HTML or empty).'; continue }
+  $head = [Text.Encoding]::UTF8.GetString($b, 0, [Math]::Min(80, $b.Length))
+  if ($head -notmatch 'Requires') { Write-Host "Not a script (got: $head)"; continue }
+  $ok = $true
+  break
 }
-if (-not $ok) { throw 'Could not download Install-BackAisle.ps1. Clone https://github.com/sabap/BackAisle instead.' }
-# Windows PowerShell 5.1 needs a UTF-8 BOM to parse the file.
+if (-not $ok) { throw 'Could not download Install-BackAisle.ps1 (network returned a web page). Copy the BackAisle folder onto this server and run scripts\Install-BackAisle-Prereqs.ps1 from that folder.' }
 $utf8bom = New-Object System.Text.UTF8Encoding $true
-$bytes = [IO.File]::ReadAllBytes($out)
 $skip = 0
-if ($bytes.Length -ge 3 -and $bytes[0] -eq 239 -and $bytes[1] -eq 187 -and $bytes[2] -eq 191) { $skip = 3 }
-$text = [Text.Encoding]::UTF8.GetString($bytes, $skip, $bytes.Length - $skip)
+if ($b.Length -ge 3 -and $b[0] -eq 239 -and $b[1] -eq 187 -and $b[2] -eq 191) { $skip = 3 }
+$text = [Text.Encoding]::UTF8.GetString($b, $skip, $b.Length - $skip)
 [IO.File]::WriteAllText($out, $text, $utf8bom)
-Get-Content $out -TotalCount 3
+Get-Content $out -TotalCount 1
 Set-ExecutionPolicy Bypass -Scope Process -Force
-.\Install-BackAisle.ps1 -OpenSetup -RegisterCollectorTask
+& $out -OpenSetup -RegisterCollectorTask
 ```
 
 Or clone the repo and run the same script from disk:
