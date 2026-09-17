@@ -52,7 +52,7 @@ New-Item -ItemType Directory -Force -Path $dir | Out-Null
 Set-Location $dir
 $out = Join-Path $dir 'Install-BackAisle.ps1'
 $urls = @(
-  'https://cdn.jsdelivr.net/gh/sabap/BackAisle@v0.4.5/Install-BackAisle.ps1',
+  'https://cdn.jsdelivr.net/gh/sabap/BackAisle@v0.4.6/Install-BackAisle.ps1',
   'https://cdn.jsdelivr.net/gh/sabap/BackAisle@main/Install-BackAisle.ps1'
 )
 $ok = $false
@@ -106,7 +106,44 @@ Manual copy is still supported: place the tree under `C:\inetpub\BackAisle` and 
 
 ## Updates
 
-Admin → **Updates** checks [sabap/BackAisle](https://github.com/sabap/BackAisle). Applying an update:
+Do **not** delete the IIS site to pick up application fixes. Overlay files on the existing install (keeps SQL/SQLite, `config.php`, `collector.json`, `php.ini`, secrets, logs). Elevated PowerShell, not from `C:\Windows\system32`:
+
+```powershell
+if ((Get-Location).Path -match '\\[Ww]indows\\[Ss]ystem32$') { Set-Location $env:TEMP }
+$ErrorActionPreference = 'Stop'
+$dir = Join-Path $env:TEMP 'BackAisle-update'
+New-Item -ItemType Directory -Force -Path $dir | Out-Null
+Set-Location $dir
+$out = Join-Path $dir 'Update-BackAisle.ps1'
+$urls = @(
+  'https://cdn.jsdelivr.net/gh/sabap/BackAisle@v0.4.6/scripts/Update-BackAisle.ps1',
+  'https://cdn.jsdelivr.net/gh/sabap/BackAisle@main/scripts/Update-BackAisle.ps1'
+)
+$ok = $false
+foreach ($u in $urls) {
+  Write-Host "Trying $u"
+  cmd /c "curl.exe -fsSL --ssl-no-revoke --max-time 60 -o `"$out`" $u"
+  if ($LASTEXITCODE -ne 0) { continue }
+  if (-not (Test-Path $out)) { continue }
+  $b = [IO.File]::ReadAllBytes($out)
+  if ($b.Length -lt 200 -or ($b[0] -eq 0x3C -and $b[1] -ne 0x3F)) { Write-Host 'Not a script (HTML or empty).'; continue }
+  $head = [Text.Encoding]::UTF8.GetString($b, 0, [Math]::Min(80, $b.Length))
+  if ($head -notmatch 'Requires') { Write-Host "Not a script (got: $head)"; continue }
+  $ok = $true
+  break
+}
+if (-not $ok) { throw 'Could not download Update-BackAisle.ps1 (network returned a web page). Copy scripts\Update-BackAisle.ps1 onto this server and run it elevated.' }
+$utf8bom = New-Object System.Text.UTF8Encoding $true
+$skip = 0
+if ($b.Length -ge 3 -and $b[0] -eq 239 -and $b[1] -eq 187 -and $b[2] -eq 191) { $skip = 3 }
+$text = [Text.Encoding]::UTF8.GetString($b, $skip, $b.Length - $skip)
+[IO.File]::WriteAllText($out, $text, $utf8bom)
+Get-Content $out -TotalCount 1
+Set-ExecutionPolicy Bypass -Scope Process -Force
+& $out -SiteRoot 'C:\inetpub\BackAisle'
+```
+
+Admin → **Updates** can also check [sabap/BackAisle](https://github.com/sabap/BackAisle) from the browser (jsDelivr if GitHub is blocked). Applying an update:
 
 1. Writes a full **site package** (`backaisle-site_…zip` — database, secrets, pictures)
 2. Writes an **application-files** zip (`backup_…zip`)

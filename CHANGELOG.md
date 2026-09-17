@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.4.6] - 2026-09-17
+
+- Production overlay: `scripts/Update-BackAisle.ps1` pulls application files from jsDelivr without wiping the database, config, or php.ini
+
 ## [0.4.5] - 2026-09-17
 
 - Admin update check shows a result on the same page; if GitHub is blocked it uses jsDelivr for version and apply
