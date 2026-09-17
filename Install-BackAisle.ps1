@@ -102,7 +102,10 @@ function Test-BaPayload {
     try {
         $b = New-Object byte[] 4
         $n = $fs.Read($b, 0, 4)
-        if ($n -ge 1 -and $b[0] -eq 0x3C) { return $false }
+        if ($n -ge 1 -and $b[0] -eq 0x3C) {
+            if ($n -ge 2 -and $b[1] -eq 0x3F) { return -not $RequireZip }
+            return $false
+        }
         if ($RequireZip) { return ($n -ge 2 -and $b[0] -eq 0x50 -and $b[1] -eq 0x4B) }
         return $true
     } finally { $fs.Close() }
@@ -208,6 +211,47 @@ function Find-AppRoot([string]$ExtractDir) {
     return $null
 }
 
+function Get-JsDelivrRelPaths($node, [string]$prefix) {
+    $acc = New-Object System.Collections.Generic.List[string]
+    foreach ($f in @($node.files)) {
+        $p = if ($prefix) { "$prefix/$($f.name)" } else { [string]$f.name }
+        if ($p -match '^\.(git|grok)(/|$)') { continue }
+        if ([string]$f.type -eq 'file') { [void]$acc.Add($p) }
+        elseif ($f.files) {
+            foreach ($c in Get-JsDelivrRelPaths $f $p) { [void]$acc.Add($c) }
+        }
+    }
+    return $acc
+}
+
+function Download-JsDelivrTree([string]$Owner, [string]$Repo, [string]$Ref, [string]$Dest) {
+    Write-Step "Fetching $Owner/$Repo@$Ref from jsDelivr (GitHub zip blocked)"
+    $api = "https://data.jsdelivr.com/v1/packages/gh/$Owner/$Repo@$Ref"
+    $tmp = Join-Path $env:TEMP ("ba-jsd-{0}.json" -f [guid]::NewGuid().ToString('N'))
+    Invoke-BaDownload -Uri $api -OutFile $tmp -MinBytes 20
+    $meta = Get-Content -LiteralPath $tmp -Raw -Encoding UTF8 | ConvertFrom-Json
+    Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+    $files = @(Get-JsDelivrRelPaths $meta '')
+    if ($files.Count -lt 10) { throw "jsDelivr file list too small ($($files.Count))" }
+    if (Test-Path $Dest) { Remove-Item $Dest -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path $Dest | Out-Null
+    $n = 0
+    foreach ($rel in $files) {
+        $url = "https://cdn.jsdelivr.net/gh/$Owner/$Repo@$Ref/$rel"
+        $out = Join-Path $Dest ($rel -replace '/', '\')
+        $parent = Split-Path $out -Parent
+        if ($parent -and -not (Test-Path $parent)) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
+        try {
+            Invoke-BaDownload -Uri $url -OutFile $out -MinBytes 1
+            $n++
+        } catch {
+            Write-Warn "jsDelivr skip $rel"
+        }
+    }
+    Write-Ok "jsDelivr fetched $n files to $Dest"
+    return (Find-AppRoot $Dest)
+}
+
 function Download-Release {
     param([string]$Owner, [string]$Repo, [string]$Version, [string]$WorkRoot)
     $ref = $Version.Trim()
@@ -238,6 +282,14 @@ function Download-Release {
         }
     }
     if (-not $got) {
+        foreach ($jsRef in @($label, 'main')) {
+            try {
+                $jsRoot = Download-JsDelivrTree -Owner $Owner -Repo $Repo -Ref $jsRef -Dest (Join-Path $WorkRoot "jsd-$jsRef")
+                if ($jsRoot) { return $jsRoot }
+            } catch {
+                Write-Warn $_.Exception.Message
+            }
+        }
         $cloneDir = Join-Path $WorkRoot 'clone'
         Write-Warn 'Zip download failed (proxy HTML?). Trying git clone.'
         $old = $ErrorActionPreference

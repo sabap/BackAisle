@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.4.2] - 2026-09-17
+
+- PowerPanel import uses PHP/PDO (no IIS pyodbc). SQL passwords may contain punctuation.
+- If GitHub zip is blocked, installer fetches the tree from jsDelivr. `.grok/` is not in the repo.
+
 ## [0.4.1] - 2026-09-17
 
 - Installer download fail-closed: refuse OpenDNS/HTML, jsDelivr first, zip magic-byte check. PowerShell_QC gate.

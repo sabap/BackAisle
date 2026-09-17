@@ -19,7 +19,7 @@ require __DIR__ . '/../app/backup.php';
 require __DIR__ . '/../app/import_pp.php';
 
 if (ba_is_installed() && !isset($_GET['force'])) {
-    header('Location: /');
+    header('Location: /login.php');
     exit;
 }
 
