@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.7] - 2026-09-17
+
+- Collector SQL connect: use the same config.php credentials PHP uses (writable runtime JSON), ODBC after connect not autocommit-in-connect, brace PWD, try SqlPassword and the legacy SQL Server driver. Connect before loading pysnmp/cryptography.
+
 ## [0.5.6] - 2026-09-17
 
 - Check for updates uses GitHub releases/tags first (same as ColdAisle). jsDelivr is only a fallback if GitHub fails.

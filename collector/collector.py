@@ -20,8 +20,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from db import connect, init_db  # noqa: E402
 from secrets import load_secrets  # noqa: E402
-from snmp_client import close_engine, new_engine, snmp_get  # noqa: E402
 from profiles import get_secret, seed_from_env  # noqa: E402
+
+snmp_get = None  # set after SQL connect; pysnmp/cryptography can break msodbcsql TLS
+new_engine = None
+close_engine = None
 
 LOG = ROOT / "logs" / "collector.log"
 PID = ROOT / "logs" / "collector.pid"
@@ -774,6 +777,8 @@ def main():
         _bind_stdio_to_log()
     secrets = load_secrets()
     init_db()
+    global snmp_get, new_engine, close_engine
+    from snmp_client import close_engine, new_engine, snmp_get  # noqa: E402
     seed_from_env()
     PID.write_text(str(os_getpid()), encoding="utf-8")
     if args.qc:

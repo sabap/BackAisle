@@ -11,9 +11,12 @@ CONFIG_JSON = Path(r"C:\inetpub\BackAisle\config\collector.json")
 
 
 def load_app_config() -> dict:
+    root = Path(__file__).resolve().parent.parent
     paths = [
         Path(os.environ["BACKAISLE_COLLECTOR_JSON"]) if os.environ.get("BACKAISLE_COLLECTOR_JSON") else None,
-        Path(__file__).resolve().parent.parent / "config" / "collector.json",
+        root / "storage" / "tmp" / "collector-runtime.json",
+        Path(r"C:\ProgramData\BackAisle\collector.json"),
+        root / "config" / "collector.json",
         CONFIG_JSON,
     ]
     for p in paths:
@@ -375,7 +378,13 @@ def _odbc_quote(value: str, always: bool = False) -> str:
 
 
 def _sqlsrv_connect_raw(pyodbc_mod, dsn: str):
-    return pyodbc_mod.connect(dsn, timeout=5, autocommit=True)
+    # autocommit in connect() yields empty HY000 on some Windows Driver 17/18 builds
+    raw = pyodbc_mod.connect(dsn, timeout=8)
+    try:
+        raw.autocommit = True
+    except Exception:
+        pass
+    return raw
 
 
 def connect(path: Path | None = None):
@@ -399,28 +408,36 @@ def connect(path: Path | None = None):
             pass
         php_server = host if ("\\" in host or "," in host or port == 1433) else f"{host},{port}"
         tcp_server = host if ("," in host or "\\" in host) else f"tcp:{host},{port}"
-        attempts = [
-            (configured_drv, php_server, enc_cfg, trust_cfg),
-            (configured_drv, php_server, "yes", "yes"),
-            (configured_drv, tcp_server, "yes", "yes"),
-        ]
-        if host.lower() in ("localhost", "127.0.0.1", "(local)", "."):
-            attempts.append((configured_drv, f"tcp:127.0.0.1,{port}", "yes", "yes"))
-        if "ODBC Driver 17 for SQL Server" in installed:
-            attempts.append(("ODBC Driver 17 for SQL Server", tcp_server, "yes", "yes"))
-            attempts.append(("ODBC Driver 17 for SQL Server", php_server, enc_cfg, trust_cfg))
 
+        drivers_try = [configured_drv]
+        for extra in ("ODBC Driver 18 for SQL Server", "ODBC Driver 17 for SQL Server", "SQL Server"):
+            if extra not in drivers_try and (not installed or extra in installed):
+                drivers_try.append(extra)
+
+        pwd_vals = []
         if user:
-            if any(c in pwd for c in ";={}[]") or pwd != pwd.strip():
-                pwd_vals = [_odbc_quote(pwd, True)]
-            else:
-                pwd_vals = [pwd]
+            pwd_vals.append(_odbc_quote(pwd, True))
+            if pwd and pwd != _odbc_quote(pwd, True):
+                pwd_vals.append(pwd)
         else:
             pwd_vals = [None]
 
+        attempts = []
+        for drv in drivers_try:
+            legacy = drv == "SQL Server"
+            encs = [("no", "yes")] if legacy else [(enc_cfg, trust_cfg), ("yes", "yes"), ("no", "yes")]
+            servers = [php_server]
+            if not legacy:
+                servers.append(tcp_server)
+                if host.lower() in ("localhost", "127.0.0.1", "(local)", "."):
+                    servers.append(f"tcp:127.0.0.1,{port}")
+            for server in servers:
+                for enc, trust in encs:
+                    attempts.append((drv, server, enc, trust, legacy))
+
         seen = set()
         errors = []
-        for drv, server, enc, trust in attempts:
+        for drv, server, enc, trust, legacy in attempts:
             key = (drv, server, enc, trust)
             if key in seen:
                 continue
@@ -432,10 +449,16 @@ def connect(path: Path | None = None):
                     f"DRIVER={_odbc_quote(drv, True)}",
                     f"SERVER={server}",
                     f"DATABASE={_odbc_quote(dbn)}",
-                    f"Encrypt={enc}",
-                    f"TrustServerCertificate={trust}",
-                    "LoginTimeout=8",
                 ]
+                if not legacy:
+                    parts.extend([
+                        f"Encrypt={enc}",
+                        f"TrustServerCertificate={trust}",
+                        "LoginTimeout=8",
+                    ])
+                    if user:
+                        parts.append("Trusted_Connection=no")
+                        parts.append("Authentication=SqlPassword")
                 if user:
                     parts.append(f"UID={_odbc_quote(user)}")
                     parts.append(f"PWD={pwd_val}")
@@ -446,11 +469,18 @@ def connect(path: Path | None = None):
                     raw = _sqlsrv_connect_raw(pyodbc, dsn)
                     return SqlSrvConn(raw)
                 except Exception as e:
-                    errors.append("%s server=%s enc=%s trust=%s: %s" % (drv, server, enc, trust, e))
+                    errors.append("%s server=%s enc=%s: %s" % (drv, server, enc if not legacy else "n/a", e))
+                    if "Authentication=SqlPassword" in dsn and user:
+                        parts = [p for p in parts if not p.startswith("Authentication=")]
+                        try:
+                            raw = _sqlsrv_connect_raw(pyodbc, ";".join(parts))
+                            return SqlSrvConn(raw)
+                        except Exception as e2:
+                            errors.append("%s server=%s enc=%s (no Auth=): %s" % (drv, server, enc, e2))
         raise RuntimeError(
-            "SQL Server (pyodbc) connect failed. PHP uses PDO with the same SQL login; "
-            "the collector uses ODBC from this Windows account. Last errors: %s. Drivers installed: %s."
-            % (errors[-6:] if errors else ["no attempt"], installed)
+            "SQL Server (pyodbc) connect failed. PHP uses PDO with UID/PWD outside the DSN; "
+            "the collector uses ODBC. Last errors: %s. Drivers installed: %s."
+            % (errors[-8:] if errors else ["no attempt"], installed)
         )
     p = Path(cfg.get("path") or path or DB_PATH)
     p.parent.mkdir(parents=True, exist_ok=True)

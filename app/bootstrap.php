@@ -59,14 +59,10 @@ function ba_write_config(array $cfg): void {
     ba_sync_collector_json($cfg);
 }
 
-function ba_sync_collector_json(?array $cfg = null): void
+function ba_collector_json_payload(?array $cfg = null): array
 {
     $cfg = $cfg ?? ba_config();
-    $dir = BA_ROOT . DIRECTORY_SEPARATOR . 'config';
-    if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
-        return;
-    }
-    $json = [
+    return [
         'driver' => $cfg['db']['driver'] ?? 'sqlite',
         'path' => $cfg['db']['path'] ?? BA_DB,
         'host' => $cfg['db']['host'] ?? 'localhost',
@@ -78,12 +74,26 @@ function ba_sync_collector_json(?array $cfg = null): void
         'trust_server_certificate' => !empty($cfg['db']['trust_server_certificate']),
         'odbc_driver' => $cfg['db']['odbc_driver'] ?? 'ODBC Driver 18 for SQL Server',
     ];
-    $data = json_encode($json, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+}
+
+function ba_sync_collector_json(?array $cfg = null): void
+{
+    $data = json_encode(ba_collector_json_payload($cfg), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
     if ($data === false) {
         return;
     }
-    $path = $dir . DIRECTORY_SEPARATOR . 'collector.json';
-    @file_put_contents($path, $data);
+    $paths = [
+        BA_ROOT . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'tmp' . DIRECTORY_SEPARATOR . 'collector-runtime.json',
+        BA_ROOT . DIRECTORY_SEPARATOR . 'config' . DIRECTORY_SEPARATOR . 'collector.json',
+        'C:\\ProgramData\\BackAisle\\collector.json',
+    ];
+    foreach ($paths as $path) {
+        $dir = dirname($path);
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0775, true);
+        }
+        @file_put_contents($path, $data);
+    }
 }
 
 function ba_secrets(): array {
