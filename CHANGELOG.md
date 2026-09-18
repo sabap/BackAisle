@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.31] - 2026-09-18
+
+- RMCARD SCP uses aes128-ctr/aes256-ctr. After restore, wait for HTTPS not FTP (FTP often stays off). Pull retries 3 times.
+
 ## [0.5.30] - 2026-09-18
 
 - RMCARD SCP allows ssh-rsa host keys (OpenSSH vs CyberPower). HTTP restore if SCP fails. stop_on_error=0 is not treated as true.

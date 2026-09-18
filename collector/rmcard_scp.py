@@ -32,7 +32,7 @@ def scp_put_config(host: str, user: str, password: str, local_path: Path, remote
         "-o", "HostKeyAlgorithms=+ssh-rsa",
         "-o", "PubkeyAcceptedAlgorithms=+ssh-rsa",
         "-o", "PubkeyAcceptedKeyTypes=+ssh-rsa",
-        "-c", "aes128-cbc",
+        "-o", "Ciphers=aes128-ctr,aes256-ctr,aes128-cbc",
         str(local_path),
         f"{user}@{host}:{remote_name}",
     ]
