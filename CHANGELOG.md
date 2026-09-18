@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.5.20] - 2026-09-18
+
+- SNMP page: bulk assign SNMPv3 profile to selected UPS, schedule, all UPS, or IDF group
+- Check for updates: jsDelivr LATEST first, GitHub 3s timeout (no 45s hang)
+
 ## [0.5.19] - 2026-09-18
 
 - PHP SQL bridge: do not fetch rows after DELETE/INSERT (ODBC invalid cursor). SQL Server upserts instead of SQLite ON CONFLICT.

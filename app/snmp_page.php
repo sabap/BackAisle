@@ -210,6 +210,17 @@ function page_snmp_body(PDO $db, array $user): void
                 }
                 $msg = 'Added ' . count($ids) . ' device(s) to the polling schedule.';
                 ba_audit($db, 'snmp_schedule_selected', 'snmp', null, json_encode($ids));
+            } elseif ($act === 'bulk_snmp') {
+                $sid = (int)($_POST['snmp_profile_id'] ?? 0);
+                $scope = (string)($_POST['scope'] ?? 'selected');
+                $gid = ($_POST['group_id'] ?? '') === '' ? null : (int)$_POST['group_id'];
+                $ids = $_POST['ids'] ?? [];
+                if (!is_array($ids)) {
+                    $ids = [];
+                }
+                $n = ba_assign_snmp_profile($db, $sid, $scope, $ids, $gid);
+                ba_audit($db, 'bulk_snmp', 'snmp_profile', (string)$sid, 'scope='.$scope.' devices='.$n);
+                $msg = 'Assigned SNMPv3 profile to '.(int)$n.' UPS';
             }
             $_SESSION['ba_flash'] = $msg;
             header('Location: /snmp.php');
@@ -277,6 +288,34 @@ function page_snmp_body(PDO $db, array $user): void
     }
     echo '<h1>SNMP polling</h1>';
     echo '<p class="muted">SNMPv3 authPriv collector. Scheduled devices have <code>enabled=1</code>. Manual poll talks to the unit now, even if it is not on the schedule.</p>';
+
+    if ($admin) {
+        $profiles = [];
+        try {
+            $profiles = $db->query('SELECT id, name FROM snmp_profiles ORDER BY name')->fetchAll();
+        } catch (Throwable $e) {
+            $profiles = [];
+        }
+        $groupOpts = function_exists('ba_group_options') ? ba_group_options(ba_groups($db)) : '';
+        echo '<form method="post" action="/snmp.php" class="card stack" id="snmp-bulk">';
+        echo '<h3>Bulk assign SNMPv3 profile</h3>';
+        echo '<input type="hidden" name="act" value="bulk_snmp">';
+        echo '<p class="muted">Applies the credential profile to UPS records (authPriv secrets stay in ProgramData). Tick rows below for Selected, or choose All UPS / On schedule / IDF group.</p>';
+        echo '<label>Profile</label><select name="snmp_profile_id" required><option value="">choose</option>';
+        foreach ($profiles as $p) {
+            echo '<option value="'.(int)$p['id'].'">'.h((string)$p['name']).'</option>';
+        }
+        echo '</select>';
+        echo '<label>Apply to</label><select name="scope">';
+        echo '<option value="selected">Selected UPS (checkboxes below)</option>';
+        echo '<option value="scheduled">All UPS on the poll schedule</option>';
+        echo '<option value="all">All UPS</option>';
+        echo '<option value="group">IDF group (and subgroups)</option>';
+        echo '</select>';
+        echo '<label>IDF group</label><select name="group_id"><option value="">(for IDF group scope)</option>'.$groupOpts.'</select>';
+        echo '<button>Assign profile</button></form>';
+        echo '<script>(function(){var f=document.getElementById("snmp-bulk");if(!f)return;f.addEventListener("submit",function(){document.querySelectorAll(".snmp-id:checked,.snmp-unsched:checked").forEach(function(c){var i=document.createElement("input");i.type="hidden";i.name="ids[]";i.value=c.value;f.appendChild(i);});});})();</script>';
+    }
 
     echo '<div class="grid2">';
     echo '<div class="card"><h3>Poller</h3>';

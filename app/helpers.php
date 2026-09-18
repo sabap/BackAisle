@@ -145,6 +145,39 @@ function ba_python(): string {
 }
 
 /** @param list<string> $args */
+function ba_assign_snmp_profile(PDO $db, int $profileId, string $scope, array $selectedIds = [], ?int $groupId = null): int
+{
+    if ($profileId < 1) {
+        throw new RuntimeException('Choose an SNMPv3 profile');
+    }
+    $ups = "(kind='ups' OR kind IS NULL OR kind='')";
+    if ($scope === 'selected') {
+        $ids = array_values(array_unique(array_filter(array_map('intval', $selectedIds), static fn (int $i): bool => $i > 0)));
+        if (!$ids) {
+            throw new RuntimeException('Select one or more UPS');
+        }
+        $in = implode(',', $ids);
+        $db->exec('UPDATE devices SET snmp_profile_id=' . $profileId . ' WHERE id IN (' . $in . ') AND ' . $ups);
+        return (int)$db->query('SELECT COUNT(*) FROM devices WHERE snmp_profile_id=' . $profileId . ' AND id IN (' . $in . ')')->fetchColumn();
+    }
+    if ($scope === 'scheduled') {
+        $db->exec('UPDATE devices SET snmp_profile_id=' . $profileId . ' WHERE enabled=1 AND ' . $ups);
+        return (int)$db->query('SELECT COUNT(*) FROM devices WHERE snmp_profile_id=' . $profileId . ' AND enabled=1 AND ' . $ups)->fetchColumn();
+    }
+    if ($scope === 'group') {
+        if (!$groupId) {
+            throw new RuntimeException('Choose an IDF group');
+        }
+        $groups = function_exists('ba_groups') ? ba_groups($db) : $db->query('SELECT * FROM groups ORDER BY name')->fetchAll();
+        $gids = function_exists('ba_group_descendant_ids') ? ba_group_descendant_ids($groups, $groupId) : [$groupId];
+        $in = implode(',', array_map('intval', $gids));
+        $db->exec('UPDATE devices SET snmp_profile_id=' . $profileId . ' WHERE group_id IN (' . $in . ') AND ' . $ups);
+        return (int)$db->query('SELECT COUNT(*) FROM devices WHERE group_id IN (' . $in . ') AND snmp_profile_id=' . $profileId)->fetchColumn();
+    }
+    $db->exec('UPDATE devices SET snmp_profile_id=' . $profileId . ' WHERE ' . $ups);
+    return (int)$db->query('SELECT COUNT(*) FROM devices WHERE snmp_profile_id=' . $profileId . ' AND ' . $ups)->fetchColumn();
+}
+
 function ba_python_run(array $args, ?string $cwd = null): array {
     if (function_exists('ba_sync_collector_json')) {
         try { ba_sync_collector_json(); } catch (Throwable $e) { /* poll still tries existing collector.json */ }

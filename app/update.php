@@ -806,7 +806,7 @@ class BackAisleUpdate
         $url = 'https://cdn.jsdelivr.net/gh/' . self::GITHUB_OWNER . '/' . self::GITHUB_REPO
             . '@' . rawurlencode($ref) . '/' . ltrim($file, '/');
         try {
-            $body = self::httpRequest($url, false, true, false, 10);
+            $body = self::httpRequest($url, false, true, false, 6);
         } catch (Throwable $e) {
             return null;
         }
@@ -834,21 +834,13 @@ class BackAisleUpdate
         }
         $best = $floor;
         $probes = 0;
-        $max = 24;
+        $max = 4;
         $try = function (string $ver) use (&$best, &$probes, $max): bool {
             if ($probes >= $max) {
                 return false;
             }
             $probes++;
-            $got = self::jsDelivrVersionFile('v' . $ver);
-            if ($got === null && $probes < $max) {
-                $probes++;
-                $got = self::jsDelivrVersionFile($ver);
-            }
-            if ($got === null && $probes < $max) {
-                $probes++;
-                $got = self::jsDelivrTextFile('v' . $ver, 'LATEST');
-            }
+            $got = self::jsDelivrTextFile('v' . $ver, 'VERSION');
             if ($got === null) {
                 return false;
             }
@@ -857,9 +849,8 @@ class BackAisleUpdate
             }
             return true;
         };
-        // Do not stop at the first missing patch (CDN 404 on 0.5.2 hid 0.5.3).
         $miss = 0;
-        for ($p = $parts[2] + 1; $p <= $parts[2] + 12; $p++) {
+        for ($p = $parts[2] + 1; $p <= $parts[2] + 4; $p++) {
             if ($probes >= $max) {
                 break;
             }
@@ -867,31 +858,11 @@ class BackAisleUpdate
                 $miss = 0;
             } else {
                 $miss++;
-                if ($miss >= 3) {
+                if ($miss >= 2) {
                     break;
                 }
             }
         }
-        for ($mi = 1; $mi <= 3; $mi++) {
-            $minor = $parts[1] + $mi;
-            if ($try($parts[0] . '.' . $minor . '.0')) {
-                $miss = 0;
-                for ($p = 1; $p <= 8; $p++) {
-                    if ($probes >= $max) {
-                        break;
-                    }
-                    if ($try($parts[0] . '.' . $minor . '.' . $p)) {
-                        $miss = 0;
-                    } else {
-                        $miss++;
-                        if ($miss >= 3) {
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-        $try(($parts[0] + 1) . '.0.0');
         return $best;
     }
 
@@ -909,8 +880,40 @@ class BackAisleUpdate
         ];
         $owner = rawurlencode(self::GITHUB_OWNER);
         $repo = rawurlencode(self::GITHUB_REPO);
-        // Never return on the first source. This network may see a stale GitHub
-        // "latest" or a lagging jsDelivr catalog; take the max of everything that answers.
+        // jsDelivr first (this network). GitHub is often blocked and used to stall Check for ~45s.
+        try {
+            self::considerVersion($acc, self::jsDelivrTextFile('main', 'LATEST'), 'jsdelivr-latest');
+        } catch (Throwable $e) {
+            $errors[] = $e->getMessage();
+        }
+        try {
+            self::considerVersion($acc, self::jsDelivrTextFile('main', 'VERSION'), 'jsdelivr-main');
+        } catch (Throwable $e) {
+            $errors[] = $e->getMessage();
+        }
+        try {
+            $body = self::httpRequest(
+                'https://data.jsdelivr.com/v1/packages/gh/' . self::GITHUB_OWNER . '/' . self::GITHUB_REPO,
+                false,
+                false,
+                false,
+                8
+            );
+            $j = json_decode((string)$body, true);
+            if (is_array($j)) {
+                foreach ($j['versions'] ?? [] as $row) {
+                    $tv = is_array($row) ? (string)($row['version'] ?? '') : (string)$row;
+                    self::considerVersion($acc, $tv, 'jsdelivr');
+                }
+            }
+        } catch (Throwable $e) {
+            $errors[] = $e->getMessage();
+        }
+        $floor = $acc['tag'] ?? self::installedVersion();
+        $probed = self::probeJsDelivrNewer($floor);
+        if ($probed !== null) {
+            self::considerVersion($acc, $probed, 'jsdelivr-tag');
+        }
         try {
             $release = self::githubGetJson("https://api.github.com/repos/{$owner}/{$repo}/releases/latest", true);
             if (is_array($release) && !empty($release['tag_name']) && empty($release['message'])) {
@@ -926,50 +929,6 @@ class BackAisleUpdate
             }
         } catch (Throwable $e) {
             $errors[] = $e->getMessage();
-        }
-        try {
-            $tags = self::githubGetJson("https://api.github.com/repos/{$owner}/{$repo}/tags?per_page=30", false);
-            if (is_array($tags) && empty($tags['message'])) {
-                foreach ($tags as $t) {
-                    if (!is_array($t) || empty($t['name'])) {
-                        continue;
-                    }
-                    self::considerVersion($acc, (string)$t['name'], 'github-tags');
-                }
-            }
-        } catch (Throwable $e) {
-            $errors[] = $e->getMessage();
-        }
-        try {
-            $body = self::httpRequest(
-                'https://data.jsdelivr.com/v1/packages/gh/' . self::GITHUB_OWNER . '/' . self::GITHUB_REPO,
-                false,
-                false,
-                false,
-                15
-            );
-            $j = json_decode((string)$body, true);
-            if (is_array($j)) {
-                foreach ($j['versions'] ?? [] as $row) {
-                    $tv = is_array($row) ? (string)($row['version'] ?? '') : (string)$row;
-                    self::considerVersion($acc, $tv, 'jsdelivr');
-                }
-            }
-        } catch (Throwable $e) {
-            $errors[] = $e->getMessage();
-        }
-        foreach (['main', 'v' . self::installedVersion(), self::installedVersion()] as $ref) {
-            try {
-                self::considerVersion($acc, self::jsDelivrVersionFile($ref), 'jsdelivr-file');
-                self::considerVersion($acc, self::jsDelivrTextFile($ref, 'LATEST'), 'jsdelivr-latest');
-            } catch (Throwable $e) {
-                $errors[] = $e->getMessage();
-            }
-        }
-        $floor = $acc['tag'] ?? self::installedVersion();
-        $probed = self::probeJsDelivrNewer($floor);
-        if ($probed !== null) {
-            self::considerVersion($acc, $probed, 'jsdelivr-tag');
         }
         if ($acc['tag'] === null) {
             throw new RuntimeException('Could not determine latest version. ' . implode('; ', $errors));
@@ -1141,7 +1100,7 @@ class BackAisleUpdate
 
     private static function githubGetJson(string $url, bool $allowNotFound): mixed
     {
-        $body = self::httpRequest($url, false, $allowNotFound, true);
+        $body = self::httpRequest($url, false, $allowNotFound, true, 3);
         if ($body === null) return null;
         if (self::isHtmlPayload($body)) {
             throw new RuntimeException('GitHub API returned a web page (proxy).');

@@ -25,6 +25,7 @@ $files = [
     'db.php' => __DIR__ . '/../app/db.php',
     'auth.php' => __DIR__ . '/../app/auth.php',
     'layout.php' => __DIR__ . '/../app/layout.php',
+    'org.php' => __DIR__ . '/../app/org.php',
     'snmp_page.php' => __DIR__ . '/../app/snmp_page.php',
 ];
 foreach ($files as $name => $path) {

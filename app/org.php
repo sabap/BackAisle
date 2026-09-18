@@ -126,23 +126,11 @@ function page_org(PDO $db, array $user): void {
                 $msg = 'SNMPv3 profile updated';
             } elseif ($act === 'bulk_snmp') {
                 $sid = (int)($_POST['snmp_profile_id'] ?? 0);
-                if ($sid < 1) {
-                    throw new RuntimeException('Choose an SNMPv3 profile');
-                }
-                $gid = $_POST['group_id'] === '' ? null : (int)$_POST['group_id'];
-                if ($gid === null) {
-                    $db->prepare("UPDATE devices SET snmp_profile_id=? WHERE kind='ups' OR kind IS NULL OR kind=''")->execute([$sid]);
-                    $st = $db->prepare("SELECT COUNT(*) FROM devices WHERE snmp_profile_id=? AND (kind='ups' OR kind IS NULL OR kind='')");
-                    $st->execute([$sid]);
-                    $n = (int)$st->fetchColumn();
-                } else {
-                    $ids = ba_group_descendant_ids($groups, $gid);
-                    $in = implode(',', array_map('intval', $ids));
-                    $db->exec('UPDATE devices SET snmp_profile_id='.(int)$sid.' WHERE group_id IN ('.$in.')');
-                    $n = (int)$db->query('SELECT COUNT(*) FROM devices WHERE group_id IN ('.$in.') AND snmp_profile_id='.(int)$sid)->fetchColumn();
-                }
+                $gid = ($_POST['group_id'] ?? '') === '' ? null : (int)$_POST['group_id'];
+                $scope = $gid ? 'group' : 'all';
+                $n = ba_assign_snmp_profile($db, $sid, $scope, [], $gid);
                 ba_audit($db, 'bulk_snmp', 'snmp_profile', (string)$sid, 'devices='.$n);
-                $msg = 'Assigned SNMPv3 profile to '.(int)$n.' device(s)';
+                $msg = 'Assigned SNMPv3 profile to '.(int)$n.' UPS';
             } elseif ($act === 'import_pp') {
                 if (empty($_FILES['zip']['tmp_name'])) throw new RuntimeException('Choose a profile.zip');
                 $dest = sys_get_temp_dir().DIRECTORY_SEPARATOR.'pp_'.bin2hex(random_bytes(4)).'.zip';
