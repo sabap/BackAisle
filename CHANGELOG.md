@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.23] - 2026-09-18
+
+- SQL Server: never call PDO lastInsertId() (ODBC IM001). Use @@IDENTITY via ba_last_id().
+
 ## [0.5.22] - 2026-09-18
 
 - SNMPv3 RMCARD slot write is not lab-gated (PUSH SNMPV3 / Simulate). Config and firmware writes still require AllowMultiWrite.

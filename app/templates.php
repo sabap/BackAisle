@@ -111,7 +111,7 @@ function page_templates(PDO $db, array $user): void {
                     $db->prepare(
                         'INSERT INTO device_templates (manufacturer, model, kind, u_height, face, port_count, va_rating, watts, weight_kg, notes, snmp_profile_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
                     )->execute($row);
-                    $tid = (int)$db->lastInsertId();
+                    $tid = ba_last_id($db);
                 }
                 foreach (['front_picture', 'rear_picture'] as $field) {
                     if (!empty($_POST['clear_'.$field])) {

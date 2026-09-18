@@ -6,6 +6,30 @@ function ba_db_driver(): string {
     return $d === 'sqlsrv' || $d === 'sqlserver' ? 'sqlsrv' : 'sqlite';
 }
 
+function ba_last_id(PDO $db): int
+{
+    if (ba_db_driver() === 'sqlsrv') {
+        try {
+            $v = $db->query('SELECT CAST(@@IDENTITY AS INT)')->fetchColumn();
+            if ($v !== false && $v !== null && (int)$v > 0) {
+                return (int)$v;
+            }
+        } catch (Throwable $e) {
+        }
+        try {
+            $v = $db->query('SELECT CONVERT(int, SCOPE_IDENTITY())')->fetchColumn();
+            return (int)$v;
+        } catch (Throwable $e) {
+            return 0;
+        }
+    }
+    try {
+        return (int)$db->lastInsertId();
+    } catch (Throwable $e) {
+        return 0;
+    }
+}
+
 function ba_adapt_sql(string $sql): string {
     if (ba_db_driver() !== 'sqlsrv') {
         return $sql;

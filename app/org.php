@@ -153,10 +153,10 @@ function page_org(PDO $db, array $user): void {
                 $sid = (int)($_POST['snmp_profile_id'] ?? 0) ?: null;
                 $db->prepare('INSERT INTO devices (ip, hostname, site, group_id, snmp_profile_id, sensor_expected, is_simulated, enabled, va_rating) VALUES (?,?,?,?,?,1,0,1,2000)')
                     ->execute([$ip, trim($_POST['hostname'] ?? $ip), 'Hospital', $gid, $sid]);
-                $did = (int)$db->lastInsertId();
+                $did = ba_last_id($db);
                 $db->prepare("INSERT INTO write_jobs (kind,status,simulate,stop_on_error,created_by,payload_json) VALUES ('provision','queued',0,1,?,?)")
                     ->execute([$user['username'], json_encode(['device_id'=>$did,'config_id'=>$cfgId,'web_user'=>'cyber','web_pass'=>'cyber'])]);
-                $jid = (int)$db->lastInsertId();
+                $jid = ba_last_id($db);
                 $db->prepare("INSERT INTO write_job_targets (job_id,device_id,ip,hostname,status) VALUES (?,?,?,?,'queued')")
                     ->execute([$jid, $did, $ip, $_POST['hostname'] ?? $ip]);
                 ba_audit($db, 'add_default_ups', 'device', (string)$did, $ip);
@@ -232,7 +232,7 @@ PY);
                 $sim = isset($_POST['simulate']);
                 $db->prepare("INSERT INTO write_jobs (kind,status,simulate,stop_on_error,created_by,payload_json) VALUES ('push_cert', 'queued', ?, 1, ?, ?)")
                     ->execute([$sim ? 1 : 0, $user['username'], json_encode(['cert_id'=>$cid])]);
-                $jid = (int)$db->lastInsertId();
+                $jid = ba_last_id($db);
                 $ins = $db->prepare("INSERT INTO write_job_targets (job_id, device_id, ip, hostname, status) VALUES (?,?,?,?,'queued')");
                 foreach ($ids as $did) {
                     $d = $db->query('SELECT id,ip,hostname FROM devices WHERE id='.(int)$did)->fetch();

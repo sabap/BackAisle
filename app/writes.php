@@ -67,13 +67,9 @@ function ba_create_job(PDO $db, string $kind, array $deviceIds, array $extra, st
             $extra['template_id'] ?? null,
             $extra['firmware_id'] ?? null,
         ]);
-    $jid = function_exists('ba_last_id') ? ba_last_id($db) : (int)$db->lastInsertId();
+    $jid = ba_last_id($db);
     if ($jid < 1) {
-        try {
-            $jid = (int)$db->query('SELECT CONVERT(int, SCOPE_IDENTITY())')->fetchColumn();
-        } catch (Throwable $e) {
-            $jid = (int)$db->lastInsertId();
-        }
+        throw new RuntimeException('Could not get write job id from SQL Server (@@IDENTITY).');
     }
     $ins = $db->prepare("INSERT INTO write_job_targets (job_id, device_id, ip, hostname, status) VALUES (?,?,?,?, 'queued')");
     foreach ($targets as $t) {
