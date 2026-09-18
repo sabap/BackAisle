@@ -38,6 +38,16 @@ def now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def job_is_simulate(job: dict) -> bool:
+    """SQL Server/ODBC may return 0 as the string '0'; bool('0') is True in Python."""
+    v = job.get("simulate") if isinstance(job, dict) else job
+    if v is True or v == 1:
+        return True
+    if v is False or v == 0 or v is None:
+        return False
+    return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+
 def log(msg: str) -> None:
     LOG.parent.mkdir(parents=True, exist_ok=True)
     line = f"{now()}Z {msg}"
@@ -105,11 +115,17 @@ def pull_config_bytes(ip: str, secrets: dict, web_user: str | None = None, web_p
     pw = dp if web_pass in (None, "") else web_pass
     # 1) Web Save
     try:
-        sess = RmcardSession(ip, user, pw)  # web Save
-        sess.login()
-        data, name = sess.download_config()
-        if _looks_like_rmcard_config(data):
-            return data, name
+        sess = RmcardSession(ip, user, pw)
+        try:
+            sess.login()
+            data, name = sess.download_config()
+            if _looks_like_rmcard_config(data):
+                return data, name
+        finally:
+            try:
+                sess.logout()
+            except Exception:
+                pass
     except Exception as e:
         log(f"web save failed: {e}")
     # 2) FTP GET of current timestamp name (fw >= 1.4.0; LIST is empty on this card)
@@ -168,7 +184,7 @@ def run_push_config(con, job: dict, secrets: dict) -> None:
         raise RuntimeError("template file does not look like an RMCARD text config")
     doc = parse_config(raw)
     overlays = payload.get("overlays") or {}
-    simulate = bool(job["simulate"])
+    simulate = job_is_simulate(job)
     targets = con.execute("SELECT * FROM write_job_targets WHERE job_id=? ORDER BY id", (job["id"],)).fetchall()
     user, pw = web_creds(secrets)
     for t in targets:
@@ -229,7 +245,7 @@ def run_mass_edit(con, job: dict, secrets: dict) -> None:
     if any(k.lower() in ("ip", "gateway", "snmp_client") for k in sets):
         raise RuntimeError("refusing network identity SET")
     u, a, p = snmp_creds(secrets)
-    simulate = bool(job["simulate"])
+    simulate = job_is_simulate(job)
     targets = con.execute("SELECT * FROM write_job_targets WHERE job_id=? ORDER BY id", (job["id"],)).fetchall()
     for t in targets:
         assert_lab_only(t["ip"], secrets)
@@ -272,7 +288,7 @@ def run_firmware(con, job: dict, secrets: dict) -> None:
         raise RuntimeError(f"firmware file must be cpsrm2scfw_XXX.bin, got {fw_path.name}")
     if not re.match(r"cpsrm2scdata_.*\.bin$", data_path.name, re.I):
         raise RuntimeError(f"data file must be cpsrm2scdata_XXX.bin, got {data_path.name}")
-    simulate = bool(job["simulate"])
+    simulate = job_is_simulate(job)
     user, pw = web_creds(secrets)
     u, a, p = snmp_creds(secrets)
     targets = con.execute("SELECT * FROM write_job_targets WHERE job_id=? ORDER BY id", (job["id"],)).fetchall()
@@ -344,11 +360,11 @@ def run_provision(con, job: dict, secrets: dict) -> None:
         tmp.write_bytes(raw)
         step(con, tid, 2, "apply_config", "running", tmpl["name"])
         try:
-            detail = scp_put_config(device["ip"], web_user, web_pass, tmp, fname, simulate=bool(job["simulate"]))
+            detail = scp_put_config(device["ip"], web_user, web_pass, tmp, fname, simulate=job_is_simulate(job))
         except Exception as e:
             detail = f"scp failed ({e}); config stored for manual restore"
         step(con, tid, 2, "apply_config", "ok", detail)
-        wait_ftp_alive(device["ip"], web_user, web_pass, timeout_s=180, simulate=bool(job["simulate"]))
+        wait_ftp_alive(device["ip"], web_user, web_pass, timeout_s=180, simulate=job_is_simulate(job))
     sample = asyncio.run(poll_after(device["ip"], secrets))
     step(con, tid, 3, "snmp_poll", "ok", json.dumps({"model": sample.get("model"), "firmware": sample.get("firmware")}))
     con.execute("UPDATE write_job_targets SET status='ok', ended_at=?, post_model=?, post_firmware=? WHERE id=?",
@@ -360,7 +376,7 @@ def run_push_cert(con, job: dict, secrets: dict) -> None:
     cert = con.execute("SELECT * FROM certs WHERE id=?", (payload.get("cert_id"),)).fetchone()
     if not cert:
         raise RuntimeError("cert missing")
-    simulate = bool(job["simulate"])
+    simulate = job_is_simulate(job)
     targets = con.execute("SELECT * FROM write_job_targets WHERE job_id=? ORDER BY id", (job["id"],)).fetchall()
     user, pw = web_creds(secrets)
     for t in targets:
@@ -415,7 +431,7 @@ def run_push_snmpv3(con, job: dict, secrets: dict) -> None:
     priv_proto = (prof["priv_proto"] or "AES").strip()
     acl_mode = (payload.get("acl_mode") or "keep").strip().lower()
     nms_ip = (payload.get("nms_ip") or "").strip()
-    simulate = bool(job["simulate"])
+    simulate = job_is_simulate(job)
     du, dp = web_creds(secrets)
     wu = (str(prof["web_user"] or "").strip() or sec.get("web_user") or du)
     wp = sec.get("web_pass") or dp

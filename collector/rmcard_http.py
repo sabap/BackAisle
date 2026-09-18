@@ -42,11 +42,23 @@ class RmcardSession:
             hdr = {k.lower(): v for k, v in resp.headers.items()}
             return resp.geturl(), resp.status, hdr, raw
 
+    def logout(self) -> None:
+        for path in (
+            "logout.html",
+            "logout.cgi",
+            "logout.cgi?action=LOGOUT",
+            "login.cgi?action=LOGOUT",
+            "login.html?action=LOGOUT",
+            "log_out.html",
+        ):
+            try:
+                self.fetch(path, timeout=8)
+            except Exception:
+                pass
+
     def login(self) -> None:
-        try:
-            self.fetch("logout.html")
-        except Exception:
-            pass
+        self.logout()
+        time.sleep(0.4)
         self.fetch("login.html")
         self.fetch("login_pass.cgi", {"username": self.user, "password": self.password, "action": "LOGIN"})
         ready = 0
@@ -58,6 +70,13 @@ class RmcardSession:
             if ready >= 3:
                 break
         url, st, hd, raw = self.fetch("login.cgi?action=LOGIN")
+        busy = b"already logged" in raw.lower() or b"another user" in raw.lower()
+        if busy or (b"summary.html" not in raw and "summary.html" not in url):
+            self.logout()
+            time.sleep(1.2)
+            self.fetch("login.html")
+            self.fetch("login_pass.cgi", {"username": self.user, "password": self.password, "action": "LOGIN"})
+            url, st, hd, raw = self.fetch("login.cgi?action=LOGIN")
         if b"summary.html" not in raw and "summary.html" not in url:
             raise RuntimeError(f"web login failed: {url} status={st} bytes={len(raw)}")
         self._home = raw
