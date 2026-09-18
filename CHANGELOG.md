@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.28] - 2026-09-18
+
+- Write job header status counts per-target rows (SQL Server COUNT alias was marking all-ok SNMPv3 jobs as fail)
+
 ## [0.5.27] - 2026-09-18
 
 - Treat CyberPower factory SNMPv3 names (cyber snmpv3 user1–4) as empty slots. Real users (opmanager, sgmc-infrastructure, backaisle, …) are never overwritten.
