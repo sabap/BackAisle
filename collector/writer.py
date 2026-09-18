@@ -448,9 +448,21 @@ def run_push_snmpv3(con, job: dict, secrets: dict) -> None:
         tid = t["id"]
         con.execute("UPDATE write_job_targets SET status='running', started_at=? WHERE id=?", (now(), tid))
         con.commit()
+        sess = None
         try:
             step(con, tid, 1, "pull_config", "running", t["ip"])
-            data, name = pull_config_bytes(t["ip"], secrets, wu, wp)
+            sess = RmcardSession(t["ip"], wu, wp)
+            try:
+                sess.login()
+                data, name = sess.download_config()
+            except Exception:
+                if sess is not None:
+                    try:
+                        sess.logout()
+                    except Exception:
+                        pass
+                    sess = None
+                data, name = pull_config_bytes(t["ip"], secrets, wu, wp)
             text = data.decode("latin1", "replace")
             if not looks_like_rmcard_config(text):
                 raise RuntimeError("pulled file is not an RMCARD text config")
@@ -491,24 +503,32 @@ def run_push_snmpv3(con, job: dict, secrets: dict) -> None:
             else:
                 step(con, tid, 3, "restore", "running", fname)
                 content = tmp.read_bytes()
-                try:
-                    detail = scp_put_config(t["ip"], wu, wp, tmp, fname, simulate=False)
-                except Exception as e:
-                    log(f"scp failed {t['ip']}: {e}; trying FTP restore")
+                errors: list[str] = []
+                detail = None
+                if sess is not None:
                     try:
-                        detail = ftp_put_config(t["ip"], wu, wp, fname, content, simulate=False)
-                        detail += f" (after scp: {e})"
-                    except Exception as e2:
-                        log(f"ftp restore failed {t['ip']}: {e2}; trying HTTP restore")
-                        sess = RmcardSession(t["ip"], wu, wp)
+                        detail = sess.restore_config_http(content, fname)
+                    except Exception as e:
+                        errors.append(f"http: {e}")
+                        log(f"http restore failed {t['ip']}: {e}")
+                if detail is None:
+                    try:
+                        detail = scp_put_config(t["ip"], wu, wp, tmp, fname, simulate=False)
+                    except Exception as e:
+                        errors.append(f"scp: {e}")
+                        log(f"scp failed {t['ip']}: {e}; trying FTP restore")
+                        step(con, tid, 3, "restore", "running", f"scp failed; trying FTP: {e}"[:2000])
                         try:
-                            sess.login()
-                            detail = sess.restore_config_http(content, fname) + f" (after scp: {e}; ftp: {e2})"
-                        finally:
-                            try:
-                                sess.logout()
-                            except Exception:
-                                pass
+                            detail = ftp_put_config(t["ip"], wu, wp, fname, content, simulate=False)
+                        except Exception as e2:
+                            errors.append(f"ftp: {e2}")
+                            log(f"ftp restore failed {t['ip']}: {e2}")
+                            if sess is None:
+                                sess = RmcardSession(t["ip"], wu, wp)
+                                sess.login()
+                            detail = sess.restore_config_http(content, fname)
+                if errors:
+                    detail = f"{detail} (after {'; '.join(errors)})"
                 step(con, tid, 3, "restore", "ok", detail)
                 step(con, tid, 4, "wait_reboot", "running", "")
                 time.sleep(20)
@@ -538,6 +558,12 @@ def run_push_snmpv3(con, job: dict, secrets: dict) -> None:
             con.commit()
             if job_truthy(job, "stop_on_error"):
                 raise
+        finally:
+            if sess is not None:
+                try:
+                    sess.logout()
+                except Exception:
+                    pass
 
 
 def process_job(job_id: int) -> None:
