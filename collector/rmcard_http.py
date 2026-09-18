@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import socket
 import ssl
 import time
 import urllib.parse
@@ -16,18 +17,58 @@ SAVE_HINTS = re.compile(
 )
 
 
+def tcp_open(host: str, port: int, timeout: float = 2.0) -> bool:
+    s = socket.socket()
+    s.settimeout(timeout)
+    try:
+        s.connect((host, port))
+        return True
+    except OSError:
+        return False
+    finally:
+        try:
+            s.close()
+        except OSError:
+            pass
+
+
+def pick_rmcard_scheme(host: str) -> str:
+    """Prefer HTTPS when 443 answers. Use HTTP when 443 is refused (WinError 10061)."""
+    if tcp_open(host, 443):
+        return "https"
+    if tcp_open(host, 80):
+        return "http"
+    return "https"
+
+
+class _StayOnHttpRedirect(urllib.request.HTTPRedirectHandler):
+    """If 443 is closed, do not follow HTTP -> HTTPS (that 303 is what production 10061 is)."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if newurl.lower().startswith("https://"):
+            newurl = "http://" + newurl[8:]
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 class RmcardSession:
-    def __init__(self, host: str, user: str, password: str):
+    def __init__(self, host: str, user: str, password: str, scheme: str | None = None):
         self.host = host
         self.user = user
         self.password = password
-        self.base = f"https://{host}/"
+        chosen = (scheme or pick_rmcard_scheme(host)).lower()
+        if chosen not in ("http", "https"):
+            chosen = "https"
+        self.scheme = chosen
+        self.base = f"{chosen}://{host}/"
         ctx = ssl._create_unverified_context()
         self.cj = CookieJar()
-        self.opener = urllib.request.build_opener(
+        handlers: list = [
             urllib.request.HTTPSHandler(context=ctx),
             urllib.request.HTTPCookieProcessor(self.cj),
-        )
+        ]
+        if chosen == "http":
+            handlers.insert(0, _StayOnHttpRedirect())
+        self.opener = urllib.request.build_opener(*handlers)
 
     def fetch(self, path: str, data: dict | bytes | None = None, timeout: int = 30):
         url = path if path.startswith("http") else self.base + path.lstrip("/")
@@ -56,27 +97,24 @@ class RmcardSession:
             except Exception:
                 pass
 
+    def _login_once(self):
+        """Full login_pass + counter dance. Stopping the counter early lands on error.html."""
+        self.fetch("login.html")
+        self.fetch("login_pass.cgi", {"username": self.user, "password": self.password, "action": "LOGIN"})
+        for step in (0, 1, 2, 2, 2, 2, 2):
+            self.fetch(f"login_counter.html?stap={step}")
+            time.sleep(0.4)
+        return self.fetch("login.cgi?action=LOGIN")
+
     def login(self) -> None:
         self.logout()
         time.sleep(0.4)
-        self.fetch("login.html")
-        self.fetch("login_pass.cgi", {"username": self.user, "password": self.password, "action": "LOGIN"})
-        ready = 0
-        for step in (0, 1, 2, 2, 2, 2, 2):
-            url, st, hd, raw = self.fetch(f"login_counter.html?stap={step}")
-            if str(hd.get("auth_state") or "") not in ("", "0"):
-                ready += 1
-            time.sleep(0.4)
-            if ready >= 3:
-                break
-        url, st, hd, raw = self.fetch("login.cgi?action=LOGIN")
+        url, st, hd, raw = self._login_once()
         busy = b"already logged" in raw.lower() or b"another user" in raw.lower()
         if busy or (b"summary.html" not in raw and "summary.html" not in url):
             self.logout()
             time.sleep(1.2)
-            self.fetch("login.html")
-            self.fetch("login_pass.cgi", {"username": self.user, "password": self.password, "action": "LOGIN"})
-            url, st, hd, raw = self.fetch("login.cgi?action=LOGIN")
+            url, st, hd, raw = self._login_once()
         if b"summary.html" not in raw and "summary.html" not in url:
             raise RuntimeError(f"web login failed: {url} status={st} bytes={len(raw)}")
         self._home = raw

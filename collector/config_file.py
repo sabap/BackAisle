@@ -209,6 +209,22 @@ def pick_snmpv3_slot(slots: list[dict], username: str) -> tuple[int, str]:
     )
 
 
+def rmcard_snmpv3_auth_code(value: str) -> str:
+    """RMCARD AUTHTYPE is 0=none 1=MD5 2=SHA. Do not write the word SHA."""
+    v = (value or "").strip()
+    if v in ("0", "1", "2"):
+        return v
+    return {"none": "0", "md5": "1", "sha": "2", "sha1": "2"}.get(v.lower(), "2")
+
+
+def rmcard_snmpv3_priv_code(value: str) -> str:
+    """RMCARD PRIVTYPE is 0=none 1=DES 2=AES. Do not write the word AES."""
+    v = (value or "").strip()
+    if v in ("0", "1", "2"):
+        return v
+    return {"none": "0", "des": "1", "aes": "2", "aes128": "2", "aes-128": "2"}.get(v.lower(), "2")
+
+
 def snmpv3_overlays_for_slot(
     slots: list[dict],
     index: int,
@@ -225,15 +241,15 @@ def snmpv3_overlays_for_slot(
     if keys.get("username"):
         out[keys["username"]] = username
     if keys.get("auth_proto") and auth_proto:
-        out[keys["auth_proto"]] = auth_proto
+        out[keys["auth_proto"]] = rmcard_snmpv3_auth_code(auth_proto)
     if keys.get("priv_proto") and priv_proto:
-        out[keys["priv_proto"]] = priv_proto
+        out[keys["priv_proto"]] = rmcard_snmpv3_priv_code(priv_proto)
     if keys.get("auth_pass") and auth_pass:
         out[keys["auth_pass"]] = auth_pass
     if keys.get("priv_pass") and priv_pass:
         out[keys["priv_pass"]] = priv_pass
     if keys.get("status"):
-        out[keys["status"]] = "enable"
+        out[keys["status"]] = "1"
     if acl_ip is not None and keys.get("ip"):
         out[keys["ip"]] = acl_ip
     if not keys.get("username"):
