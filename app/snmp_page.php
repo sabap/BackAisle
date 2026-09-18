@@ -1,6 +1,32 @@
 <?php
 declare(strict_types=1);
 
+function ba_file_tail(string $path, int $lines = 8, int $maxBytes = 32768): string
+{
+    if (!is_file($path) || $maxBytes < 1 || $lines < 1) {
+        return '';
+    }
+    $size = filesize($path);
+    if ($size === false || $size < 1) {
+        return '';
+    }
+    $fh = @fopen($path, 'rb');
+    if ($fh === false) {
+        return '';
+    }
+    $read = (int)min($size, $maxBytes);
+    if ($read > 0 && fseek($fh, -$read, SEEK_END) !== 0) {
+        fseek($fh, 0);
+        $read = (int)min($size, $maxBytes);
+    }
+    $raw = $read > 0 ? (string)fread($fh, $read) : '';
+    fclose($fh);
+    $raw = str_replace("\r\n", "\n", $raw);
+    $raw = str_replace("\r", "\n", $raw);
+    $parts = explode("\n", trim($raw));
+    return implode("\n", array_slice($parts, -$lines));
+}
+
 function ba_txt(mixed $v, string $empty = '-'): string
 {
     if ($v === null || $v === false || $v === '') {
@@ -58,14 +84,7 @@ function ba_collector_status(): array
     }
     $fresh = $hbAge !== null && $hbAge <= 120;
     $running = $fresh;
-    $logTail = '';
-    if (is_file($logPath)) {
-        $raw = @file_get_contents($logPath);
-        if (is_string($raw) && $raw !== '') {
-            $lines = preg_split("/\r\n|\n|\r/", trim($raw)) ?: [];
-            $logTail = implode("\n", array_slice($lines, -8));
-        }
-    }
+    $logTail = ba_file_tail($logPath, 8, 32768);
     $label = 'Stopped';
     $cls = 'down';
     $detail = 'No collector process. Register BackAisleCollector in Task Scheduler or start collector.py.';

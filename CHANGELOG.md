@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.17] - 2026-09-18
+
+- SNMP page reads only the last 32 KB of collector.log (a full-file read exhausted 256 MB PHP memory)
+
 ## [0.5.16] - 2026-09-18
 
 - SNMP page is a standalone entry (like the dashboard) so IIS cannot hide the error behind a blank 500. Device list no longer joins samples.
