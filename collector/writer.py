@@ -521,9 +521,20 @@ def process_job(job_id: int) -> None:
             run_push_snmpv3(con, job, secrets)
         else:
             raise RuntimeError(f"unknown job kind {kind}")
-        fails = con.execute(
-            "SELECT COUNT(*) n FROM write_job_targets WHERE job_id=? AND status='fail'", (job_id,)
-        ).fetchone()["n"]
+        fails = 0
+        for t in con.execute(
+            "SELECT status FROM write_job_targets WHERE job_id=?", (job_id,)
+        ).fetchall() or []:
+            st = ""
+            try:
+                st = str(t["status"] if t["status"] is not None else "")
+            except Exception:
+                try:
+                    st = str(list(t.values())[0])
+                except Exception:
+                    st = ""
+            if st.strip().lower() == "fail":
+                fails += 1
         con.execute(
             "UPDATE write_jobs SET status=?, ended_at=? WHERE id=?",
             ("fail" if fails else "ok", now(), job_id),
