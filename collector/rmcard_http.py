@@ -145,6 +145,32 @@ class RmcardSession:
             return f"HTTP POST /about.cgi restore {filename} (connection ended: {type(e).__name__})"
 
 
+def wait_http_alive(host: str, timeout_s: int = 360) -> str:
+    """RMCARD often leaves FTP off; HTTPS login.html is enough to know the card is back."""
+    import ssl
+    import urllib.request
+
+    ctx = ssl._create_unverified_context()
+    deadline = time.time() + timeout_s
+    last = None
+    while time.time() < deadline:
+        for url in (
+            f"https://{host}/login.html",
+            f"http://{host}/login.html",
+            f"https://{host}/",
+            f"http://{host}/",
+        ):
+            try:
+                req = urllib.request.Request(url, method="GET")
+                with urllib.request.urlopen(req, timeout=8, context=ctx) as resp:
+                    resp.read(128)
+                    return f"{url} status={resp.status}"
+            except Exception as e:
+                last = e
+        time.sleep(5)
+    raise RuntimeError(f"card did not come back on HTTP within {timeout_s}s: {last}")
+
+
 def _filename_from_headers(hd: dict, body: bytes) -> str:
     cd = hd.get("content-disposition") or ""
     m = re.search(r'filename="?([^";]+)', cd)
