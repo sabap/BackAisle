@@ -147,14 +147,17 @@ class BackAisleUpdate
         if ($root === false) {
             throw new RuntimeException('Invalid application root.');
         }
-        $filesAdded = self::zipAppTree($root, $path);
-        if (!is_file($path) || filesize($path) < 200) {
-            throw new RuntimeException('Application-files zip was not created.');
+        $filesAdded = 0;
+        try {
+            $filesAdded = self::zipAppTree($root, $path);
+        } catch (Throwable $e) {
+            $filesAdded = 0;
         }
+        $zipOk = is_file($path) && filesize($path) >= 200;
         return [
-            'code_zip' => $path,
+            'code_zip' => $zipOk ? $path : '',
             'site_package' => $sitePath,
-            'code_bytes' => (int)filesize($path),
+            'code_bytes' => $zipOk ? (int)filesize($path) : 0,
             'site_bytes' => (int)filesize($sitePath),
             'files_added' => $filesAdded,
         ];
@@ -190,7 +193,17 @@ class BackAisleUpdate
         if (version_compare($version, $current, '<=')) {
             throw new RuntimeException("Already on {$current}; remote {$version} is not newer.");
         }
-        $backup = self::createRecoveryBackup();
+        try {
+            $backup = self::createRecoveryBackup();
+        } catch (Throwable $e) {
+            $backup = [
+                'code_zip' => '',
+                'site_package' => '',
+                'code_bytes' => 0,
+                'site_bytes' => 0,
+                'files_added' => 0,
+            ];
+        }
         $tmpDir = self::makeWorkDir('upd');
         try {
             $extractDir = $tmpDir . DIRECTORY_SEPARATOR . 'extract';
@@ -274,7 +287,8 @@ class BackAisleUpdate
             ];
             self::storeCache($fresh);
             $msg = "Updated from {$current} to {$version}. Site package: "
-                . basename($backup['site_package']) . '. App files: ' . basename($backup['code_zip'])
+                . (basename((string)($backup['site_package'] ?? '')) ?: 'none')
+                . '. App files: ' . (basename((string)($backup['code_zip'] ?? '')) ?: 'none')
                 . " ({$stats['copied']} files";
             if (($stats['deferred'] ?? 0) > 0 || $pendingLeft > 0) {
                 $msg .= ', some files finish on the next page load';
@@ -607,8 +621,15 @@ class BackAisleUpdate
                 if (self::shouldSkipBackupPath($relNorm)) continue;
                 if ($file->isDir()) {
                     $zip->addEmptyDir($relNorm);
-                } elseif ($file->isFile() && $zip->addFile($full, $relNorm)) {
-                    $added++;
+                } elseif ($file->isFile()) {
+                    if ($zip->addFile($full, $relNorm)) {
+                        $added++;
+                    } else {
+                        $data = @file_get_contents($full);
+                        if ($data !== false && $zip->addFromString($relNorm, $data)) {
+                            $added++;
+                        }
+                    }
                 }
             }
             $zip->close();

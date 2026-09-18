@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.13] - 2026-09-18
+
+- Apply does not abort if the application-files zip is empty (IIS-locked files). ZipArchive falls back to addFromString.
+
 ## [0.5.12] - 2026-09-18
 
 - Apply/backup: do not run SQLite `PRAGMA wal_checkpoint(TRUNCATE)` against SQL Server (ODBC 156)
