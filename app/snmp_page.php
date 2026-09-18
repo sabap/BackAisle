@@ -220,7 +220,34 @@ function page_snmp_body(PDO $db, array $user): void
                 }
                 $n = ba_assign_snmp_profile($db, $sid, $scope, $ids, $gid);
                 ba_audit($db, 'bulk_snmp', 'snmp_profile', (string)$sid, 'scope='.$scope.' devices='.$n);
-                $msg = 'Assigned SNMPv3 profile to '.(int)$n.' UPS';
+                $msg = 'Assigned SNMPv3 profile to '.(int)$n.' UPS (database only; card slots unchanged)';
+            } elseif ($act === 'push_snmpv3') {
+                if (!function_exists('ba_create_job')) {
+                    throw new RuntimeException('Writer helpers missing');
+                }
+                $simulate = isset($_POST['simulate']);
+                if (!$simulate && trim((string)($_POST['confirm'] ?? '')) !== 'PUSH SNMPV3') {
+                    throw new RuntimeException('Type PUSH SNMPV3 to write the RMCARD, or tick Simulate to preview slots only.');
+                }
+                $sid = (int)($_POST['snmp_profile_id'] ?? 0);
+                if ($sid < 1) {
+                    throw new RuntimeException('Choose an SNMPv3 profile');
+                }
+                $scope = (string)($_POST['scope'] ?? 'selected');
+                $gid = ($_POST['group_id'] ?? '') === '' ? null : (int)$_POST['group_id'];
+                $ids = $_POST['ids'] ?? [];
+                if (!is_array($ids)) {
+                    $ids = [];
+                }
+                $ids = ba_ups_ids_for_scope($db, $scope, $ids, $gid);
+                $nms = trim((string)($_POST['nms_ip'] ?? ''));
+                $acl = (string)($_POST['acl_mode'] ?? 'keep');
+                $jid = ba_create_job($db, 'push_snmpv3', $ids, [
+                    'snmp_profile_id' => $sid,
+                    'acl_mode' => $acl,
+                    'nms_ip' => $nms,
+                ], (string)$user['username'], $simulate);
+                $msg = ($simulate ? 'Simulate' : 'Push') . " SNMPv3 job #$jid queued (" . count($ids) . ' UPS). Watch Fleet writes. Empty slots only; matching username updates that slot; four occupied slots with other users are skipped.';
             }
             $_SESSION['ba_flash'] = $msg;
             header('Location: /snmp.php');
@@ -313,8 +340,34 @@ function page_snmp_body(PDO $db, array $user): void
         echo '<option value="group">IDF group (and subgroups)</option>';
         echo '</select>';
         echo '<label>IDF group</label><select name="group_id"><option value="">(for IDF group scope)</option>'.$groupOpts.'</select>';
-        echo '<button>Assign profile</button></form>';
-        echo '<script>(function(){var f=document.getElementById("snmp-bulk");if(!f)return;f.addEventListener("submit",function(){document.querySelectorAll(".snmp-id:checked,.snmp-unsched:checked").forEach(function(c){var i=document.createElement("input");i.type="hidden";i.name="ids[]";i.value=c.value;f.appendChild(i);});});})();</script>';
+        echo '<button>Assign in BackAisle only</button></form>';
+        echo '<form method="post" action="/snmp.php" class="card stack" id="snmp-pushv3">';
+        echo '<h3>Write SNMPv3 slot on the RMCARD</h3>';
+        echo '<input type="hidden" name="act" value="push_snmpv3">';
+        echo '<p class="muted">CyberPower has <strong>4 SNMPv3 slots</strong>. This pulls the live config, then: if this username already exists, that slot is updated; else the first <em>empty</em> slot is used; if all four have other users, the unit is <strong>skipped</strong> (never overwritten). Each slot has one ACL IP/mask. Identity (card IP/hostname) is not changed. Requires the writer task and, for more than the lab UPS, AllowMultiWrite in secrets.env.</p>';
+        echo '<label>Profile</label><select name="snmp_profile_id" required><option value="">choose</option>';
+        foreach ($profiles as $p) {
+            echo '<option value="'.(int)$p['id'].'">'.h((string)$p['name']).'</option>';
+        }
+        echo '</select>';
+        echo '<label>Apply to</label><select name="scope">';
+        echo '<option value="selected">Selected UPS</option>';
+        echo '<option value="scheduled">On poll schedule</option>';
+        echo '<option value="all">All UPS</option>';
+        echo '<option value="group">IDF group</option>';
+        echo '</select>';
+        echo '<label>IDF group</label><select name="group_id"><option value="">(for IDF group)</option>'.$groupOpts.'</select>';
+        echo '<label>ACL / NMS IP on a new empty slot</label>';
+        echo '<input name="nms_ip" placeholder="collector IPv4 or 192.168.20.255" value="'.h((string)($_SERVER['SERVER_ADDR'] ?? '')).'">';
+        echo '<label>If the username already exists on the card</label><select name="acl_mode">';
+        echo '<option value="keep">Keep the existing ACL IP (recommended)</option>';
+        echo '<option value="nms">Replace ACL with the NMS IP above</option>';
+        echo '</select>';
+        echo '<label><input type="checkbox" name="simulate" value="1" checked> Simulate (pull and choose slot, do not restore)</label>';
+        echo '<label>Type PUSH SNMPV3 to write (leave blank if simulating)</label>';
+        echo '<input name="confirm" autocomplete="off">';
+        echo '<button>Queue SNMPv3 write</button></form>';
+        echo '<script>(function(){function wire(id){var f=document.getElementById(id);if(!f)return;f.addEventListener("submit",function(){document.querySelectorAll(".snmp-id:checked,.snmp-unsched:checked").forEach(function(c){var i=document.createElement("input");i.type="hidden";i.name="ids[]";i.value=c.value;f.appendChild(i);});});}wire("snmp-bulk");wire("snmp-pushv3");})();</script>';
     }
 
     echo '<div class="grid2">';
