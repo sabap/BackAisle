@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.29] - 2026-09-18
+
+- Simulate flag: SQL Server '0' is not treated as true. RMCARD web session always logs out after pull (one login at a time).
+
 ## [0.5.28] - 2026-09-18
 
 - Write job header status counts per-target rows (SQL Server COUNT alias was marking all-ok SNMPv3 jobs as fail)
