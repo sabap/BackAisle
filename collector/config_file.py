@@ -179,15 +179,28 @@ def parse_snmpv3_slots(doc: ConfigDoc) -> list[dict]:
     return [slots[i] for i in range(1, 5)]
 
 
+def is_placeholder_snmpv3_user(name: str) -> bool:
+    """CyberPower factory labels: 'cyber snmpv3 user1' .. user4. Treat as empty."""
+    n = re.sub(r"\s+", " ", (name or "").strip().lower())
+    if n == "":
+        return True
+    if re.match(r"^cyber snmpv3 user\s*[1-4]$", n):
+        return True
+    if re.match(r"^snmpv3 user\s*[1-4]$", n):
+        return True
+    return False
+
+
 def pick_snmpv3_slot(slots: list[dict], username: str) -> tuple[int, str]:
-    """Match existing username, else first empty. Never overwrite a different user."""
+    """Match existing real username, else first empty/placeholder. Never overwrite a different real user."""
     want = (username or "").strip().lower()
-    if want:
+    if want and not is_placeholder_snmpv3_user(want):
         for s in slots:
-            if (s.get("username") or "").strip().lower() == want:
+            have = (s.get("username") or "").strip().lower()
+            if have == want:
                 return int(s["index"]), "existing_user"
     for s in slots:
-        if not (s.get("username") or "").strip():
+        if is_placeholder_snmpv3_user(s.get("username") or ""):
             return int(s["index"]), "empty_slot"
     occupied = ", ".join(f"{s['index']}={(s.get('username') or 'occupied')}" for s in slots)
     raise RuntimeError(
