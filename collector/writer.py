@@ -28,7 +28,7 @@ from config_file import (  # noqa: E402
 from profiles import get_secret  # noqa: E402
 from db import connect, init_db  # noqa: E402
 from rmcard_ftp import ftp_get_config, ftp_put_config, ftp_put_firmware_bin, wait_ftp_alive  # noqa: E402
-from rmcard_http import RmcardSession, _looks_like_rmcard_config  # noqa: E402
+from rmcard_http import RmcardSession, _looks_like_rmcard_config, wait_http_alive  # noqa: E402
 from rmcard_scp import scp_put_config  # noqa: E402
 from secrets import load_secrets  # noqa: E402
 from snmp_client import SET_OIDS, snmp_get, snmp_get_one, snmp_set  # noqa: E402
@@ -117,30 +117,33 @@ def pull_config_bytes(ip: str, secrets: dict, web_user: str | None = None, web_p
     du, dp = web_creds(secrets)
     user = (web_user or "").strip() or du
     pw = dp if web_pass in (None, "") else web_pass
-    # 1) Web Save
-    try:
-        sess = RmcardSession(ip, user, pw)
+    last = None
+    for attempt in range(3):
         try:
-            sess.login()
-            data, name = sess.download_config()
-            if _looks_like_rmcard_config(data):
-                return data, name
-        finally:
+            sess = RmcardSession(ip, user, pw)
             try:
-                sess.logout()
-            except Exception:
-                pass
-    except Exception as e:
-        log(f"web save failed: {e}")
-    # 2) FTP GET of current timestamp name (fw >= 1.4.0; LIST is empty on this card)
-    ts_name = datetime.now().strftime("%Y_%m_%d_%H%M.txt")
-    try:
-        data = ftp_get_config(ip, user, pw, ts_name)
-        if _looks_like_rmcard_config(data):
-            return data, ts_name
-    except Exception as e:
-        log(f"ftp get {ts_name} failed: {e}")
-    raise RuntimeError("could not pull RMCARD config via web Save or FTP GET")
+                sess.login()
+                data, name = sess.download_config()
+                if _looks_like_rmcard_config(data):
+                    return data, name
+            finally:
+                try:
+                    sess.logout()
+                except Exception:
+                    pass
+        except Exception as e:
+            last = e
+            log(f"web save failed ({attempt + 1}/3): {e}")
+        ts_name = datetime.now().strftime("%Y_%m_%d_%H%M.txt")
+        try:
+            data = ftp_get_config(ip, user, pw, ts_name)
+            if _looks_like_rmcard_config(data):
+                return data, ts_name
+        except Exception as e:
+            last = e
+            log(f"ftp get {ts_name} failed ({attempt + 1}/3): {e}")
+        time.sleep(8)
+    raise RuntimeError(f"could not pull RMCARD config via web Save or FTP GET: {last}")
 
 
 def save_config_file(ip: str, data: bytes, name: str) -> Path:
@@ -501,9 +504,15 @@ def run_push_snmpv3(con, job: dict, secrets: dict) -> None:
                             pass
                 step(con, tid, 3, "restore", "ok", detail)
                 step(con, tid, 4, "wait_reboot", "running", "")
-                time.sleep(8)
-                wait_ftp_alive(t["ip"], wu, wp, timeout_s=180, simulate=False)
-                step(con, tid, 4, "wait_reboot", "ok", "")
+                time.sleep(20)
+                http_ok = wait_http_alive(t["ip"], timeout_s=360)
+                ftp_note = ""
+                try:
+                    wait_ftp_alive(t["ip"], wu, wp, timeout_s=45, simulate=False)
+                    ftp_note = "; FTP ok"
+                except Exception:
+                    ftp_note = "; FTP still down (ignored if HTTP is up)"
+                step(con, tid, 4, "wait_reboot", "ok", http_ok + ftp_note)
                 con.execute(
                     "UPDATE devices SET snmp_profile_id=? WHERE id=?",
                     (profile_id, t["device_id"]),
