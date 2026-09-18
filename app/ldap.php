@@ -155,7 +155,7 @@ function ba_ldap_login(PDO $db, string $username, string $password): bool {
     } else {
         $db->prepare('INSERT INTO users (username, password_hash, role, source, display_name) VALUES (?, ?, ?, ?, ?)')
             ->execute([$username, 'ldap', $role, 'ldap', $display]);
-        $id = (int)$db->lastInsertId();
+        $id = ba_last_id($db);
     }
     $_SESSION['user'] = ['id' => $id, 'username' => $username, 'role' => $role];
     ba_audit($db, 'login_ldap', 'user', (string)$id);

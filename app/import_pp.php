@@ -3,15 +3,6 @@ declare(strict_types=1);
 
 /** PowerPanel Business profile.zip import using the live PHP PDO connection (no pyodbc). */
 
-function ba_last_id(PDO $db): int
-{
-    if (ba_db_driver() === 'sqlsrv') {
-        $v = $db->query('SELECT CAST(@@IDENTITY AS INT)')->fetchColumn();
-        return (int)$v;
-    }
-    return (int)$db->lastInsertId();
-}
-
 function ba_pp_get(array $row, string $key, mixed $default = null): mixed
 {
     foreach ($row as $k => $v) {

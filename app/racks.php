@@ -485,7 +485,7 @@ function page_rack(PDO $db, array $user): void {
                     '', '', '', $rack['name'], $kind, $id, $pos, $uh, $face, $ports, $sensor, 0, $enabled, (int)$rack['group_id'],
                     $tid ?: null, $tpl['va_rating'] ?? null,
                 ]);
-                $did = (int)$db->lastInsertId();
+                $did = ba_last_id($db);
                 ba_sync_location_from_group($db, $did, (int)$rack['group_id'], $rack['name']);
                 ba_audit($db, 'add_rack_item', 'device', (string)$did, $kind.' U'.$pos);
                 $msg = ba_kind_label($kind).' added at U'.$pos;
