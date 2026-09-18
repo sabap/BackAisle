@@ -355,6 +355,9 @@ class SqlSrvCursor:
         cols = [c[0] for c in (self.cur.description or [])]
         return [_Row(zip(cols, r)) for r in self.cur.fetchall()]
 
+    def __iter__(self):
+        return iter(self.fetchall())
+
     def fetchcolumn(self):
         row = self.fetchone()
         if row is None:
@@ -363,10 +366,131 @@ class SqlSrvCursor:
 
 
 def last_id(con) -> int:
+    if hasattr(con, "last_insert_id") and con.last_insert_id is not None:
+        return int(con.last_insert_id)
     if is_sqlsrv():
         row = con.execute("SELECT SCOPE_IDENTITY()").fetchone()
         return int(list(row.values())[0] if isinstance(row, dict) else row[0])
     return int(con.execute("SELECT last_insert_rowid()").fetchone()[0])
+
+
+class PhpPdoCursor:
+    def __init__(self, rows: list):
+        self._rows = [_Row(r) if not isinstance(r, _Row) else r for r in rows]
+        self._i = 0
+
+    def fetchone(self):
+        if self._i >= len(self._rows):
+            return None
+        row = self._rows[self._i]
+        self._i += 1
+        return row
+
+    def fetchall(self):
+        rest = self._rows[self._i :]
+        self._i = len(self._rows)
+        return rest
+
+    def __iter__(self):
+        return iter(self.fetchall())
+
+
+class PhpPdoConn:
+    """SQL via PHP PDO (same stack as the website). Used when pyodbc HY000s under IIS."""
+
+    def __init__(self, proc, stdin, stdout):
+        self.proc = proc
+        self.stdin = stdin
+        self.stdout = stdout
+        self.last_insert_id = None
+
+    def _rpc(self, op: str, sql: str = "", params=()):
+        req = json.dumps({"op": op, "sql": sql, "params": list(params or ())}, default=str) + "\n"
+        self.stdin.write(req)
+        self.stdin.flush()
+        line = self.stdout.readline()
+        if not line:
+            raise RuntimeError("PHP SQL bridge closed")
+        data = json.loads(line)
+        if not data.get("ok"):
+            raise RuntimeError(str(data.get("error") or "PHP SQL bridge error"))
+        if data.get("id") is not None:
+            try:
+                self.last_insert_id = int(data["id"])
+            except (TypeError, ValueError):
+                self.last_insert_id = None
+        return data
+
+    def execute(self, sql, params=()):
+        data = self._rpc("query", sql, params)
+        rows = data.get("rows") or []
+        return PhpPdoCursor(rows)
+
+    def executescript(self, sql):
+        return self
+
+    def commit(self):
+        return None
+
+    def close(self):
+        try:
+            self._rpc("quit")
+        except Exception:
+            pass
+        try:
+            self.stdin.close()
+        except Exception:
+            pass
+        try:
+            self.proc.kill()
+        except Exception:
+            pass
+
+
+def _php_bridge_cmd() -> list[str] | None:
+    root = Path(__file__).resolve().parent.parent
+    php = os.environ.get("BACKAISLE_PHP_CLI") or r"C:\PHP\php.exe"
+    ini = os.environ.get("BACKAISLE_PHP_INI") or str(root / "php.ini")
+    bridge = root / "collector" / "sql_bridge.php"
+    if not Path(php).is_file() or not bridge.is_file():
+        return None
+    cmd = [php]
+    if Path(ini).is_file():
+        cmd.extend(["-c", ini])
+    cmd.extend(["-d", "display_errors=0", str(bridge)])
+    return cmd
+
+
+def _connect_php_bridge() -> PhpPdoConn:
+    import subprocess
+
+    cmd = _php_bridge_cmd()
+    if not cmd:
+        raise RuntimeError("PHP CLI sql_bridge.php not available")
+    proc = subprocess.Popen(
+        cmd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    hello = proc.stdout.readline() if proc.stdout else ""
+    try:
+        data = json.loads(hello)
+    except Exception:
+        err = ""
+        try:
+            err = proc.stderr.read(2000) if proc.stderr else ""
+        except Exception:
+            pass
+        proc.kill()
+        raise RuntimeError("PHP SQL bridge did not start: " + (hello or err or "empty"))
+    if not data.get("ok"):
+        proc.kill()
+        raise RuntimeError("PHP SQL bridge: " + str(data.get("error")))
+    return PhpPdoConn(proc, proc.stdin, proc.stdout)
 
 
 def _odbc_quote(value: str, always: bool = False) -> str:
@@ -390,6 +514,10 @@ def _sqlsrv_connect_raw(pyodbc_mod, dsn: str):
 def connect(path: Path | None = None):
     cfg = load_app_config()
     if (cfg.get("driver") or "sqlite").lower() in ("sqlsrv", "sqlserver"):
+        try:
+            return _connect_php_bridge()
+        except Exception:
+            pass
         import pyodbc
 
         host = str(cfg.get("host") or "localhost").strip() or "localhost"
@@ -478,8 +606,7 @@ def connect(path: Path | None = None):
                         except Exception as e2:
                             errors.append("%s server=%s enc=%s (no Auth=): %s" % (drv, server, enc, e2))
         raise RuntimeError(
-            "SQL Server (pyodbc) connect failed. PHP uses PDO with UID/PWD outside the DSN; "
-            "the collector uses ODBC. Last errors: %s. Drivers installed: %s."
+            "SQL Server connect failed (PHP PDO bridge then pyodbc). Last errors: %s. Drivers installed: %s."
             % (errors[-8:] if errors else ["no attempt"], installed)
         )
     p = Path(cfg.get("path") or path or DB_PATH)
