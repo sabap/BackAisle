@@ -97,6 +97,21 @@ class RmcardSession:
             except Exception:
                 pass
 
+    @staticmethod
+    def _logged_in(url: str, raw: bytes) -> bool:
+        return "summary.html" in (url or "") or b"summary.html" in (raw or b"")
+
+    @staticmethod
+    def _busy_session(url: str, raw: bytes) -> bool:
+        low = (raw or b"").lower()
+        if b"someone is currently logged" in low:
+            return True
+        if b"already logged" in low or b"another user" in low:
+            return True
+        if "error.html" in (url or "") and b"here to login" in low:
+            return True
+        return False
+
     def _login_once(self):
         """Full login_pass + counter dance. Stopping the counter early lands on error.html."""
         self.fetch("login.html")
@@ -106,16 +121,38 @@ class RmcardSession:
             time.sleep(0.4)
         return self.fetch("login.cgi?action=LOGIN")
 
+    def _click_login_again(self) -> None:
+        """error.html: 'Please click here to login again' is href='/'."""
+        for path in ("/", "login.html", "error.html"):
+            try:
+                self.fetch(path, timeout=8)
+            except Exception:
+                pass
+
     def login(self) -> None:
         self.logout()
         time.sleep(0.4)
         url, st, hd, raw = self._login_once()
-        busy = b"already logged" in raw.lower() or b"another user" in raw.lower()
-        if busy or (b"summary.html" not in raw and "summary.html" not in url):
-            self.logout()
-            time.sleep(1.2)
-            url, st, hd, raw = self._login_once()
-        if b"summary.html" not in raw and "summary.html" not in url:
+        if self._logged_in(url, raw):
+            self._home = raw
+            return
+        # Card holds one web login. Do not logout() here — that is a different cookie jar
+        # than the session already on the card. Click "here to login again" and retry.
+        self._click_login_again()
+        time.sleep(1.0)
+        url, st, hd, raw = self._login_once()
+        if self._logged_in(url, raw):
+            self._home = raw
+            return
+        self.logout()
+        time.sleep(1.2)
+        url, st, hd, raw = self._login_once()
+        if not self._logged_in(url, raw):
+            if self._busy_session(url, raw):
+                raise RuntimeError(
+                    "web login failed: RMCARD already has a web session "
+                    "(close the UPS browser tab that says 'Someone is currently logged in', then retry)"
+                )
             raise RuntimeError(f"web login failed: {url} status={st} bytes={len(raw)}")
         self._home = raw
 
