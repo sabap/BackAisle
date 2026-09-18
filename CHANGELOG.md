@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.21] - 2026-09-18
+
+- Write SNMPv3 onto CyberPower RMCARD: 4 slots, never overwrite a different username; empty slot or matching user only; ACL keep vs NMS IP; simulate first
+
 ## [0.5.20] - 2026-09-18
 
 - SNMP page: bulk assign SNMPv3 profile to selected UPS, schedule, all UPS, or IDF group

@@ -18,7 +18,14 @@ PID = ROOT / "logs" / "writer.pid"
 LAB_IP = ""  # set from secrets UPS_HOST in main()
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from config_file import looks_like_rmcard_config, parse_config  # noqa: E402
+from config_file import (  # noqa: E402
+    looks_like_rmcard_config,
+    parse_config,
+    parse_snmpv3_slots,
+    pick_snmpv3_slot,
+    snmpv3_overlays_for_slot,
+)
+from profiles import get_secret  # noqa: E402
 from db import connect, init_db  # noqa: E402
 from rmcard_ftp import ftp_get_config, ftp_put_config, ftp_put_firmware_bin, wait_ftp_alive  # noqa: E402
 from rmcard_http import RmcardSession, _looks_like_rmcard_config  # noqa: E402
@@ -90,11 +97,11 @@ async def poll_after(ip: str, secrets: dict) -> dict:
     return sample
 
 
-def pull_config_bytes(ip: str, secrets: dict) -> tuple[bytes, str]:
-    user, pw = web_creds(secrets)
+def pull_config_bytes(ip: str, secrets: dict, web_user: str | None = None, web_pass: str | None = None) -> tuple[bytes, str]:
+    user, pw = web_user or secrets["UPS_WEB_USER"], web_pass or secrets["UPS_WEB_PASS"]
     # 1) Web Save
     try:
-        sess = RmcardSession(ip, user, pw)
+        sess = RmcardSession(ip, user, pw)  # web Save
         sess.login()
         data, name = sess.download_config()
         if _looks_like_rmcard_config(data):
@@ -383,6 +390,104 @@ def run_push_cert(con, job: dict, secrets: dict) -> None:
                 raise
 
 
+def run_push_snmpv3(con, job: dict, secrets: dict) -> None:
+    """Add or update one SNMPv3 slot on the card. Never overwrite a different username."""
+    payload = json.loads(job["payload_json"] or "{}")
+    profile_id = int(payload.get("snmp_profile_id") or 0)
+    if profile_id < 1:
+        raise RuntimeError("snmp_profile_id required")
+    prof = con.execute("SELECT * FROM snmp_profiles WHERE id=?", (profile_id,)).fetchone()
+    if not prof:
+        raise RuntimeError("SNMPv3 profile missing")
+    sec = get_secret(profile_id)
+    username = (prof["username"] or sec.get("user") or "").strip()
+    if not username:
+        raise RuntimeError("profile has no SNMPv3 username")
+    auth_pass = sec.get("auth_pass") or ""
+    priv_pass = sec.get("priv_pass") or ""
+    if len(auth_pass) < 16 or len(priv_pass) < 16:
+        raise RuntimeError("CyberPower requires auth and priv passphrases of 16-31 characters")
+    auth_proto = (prof["auth_proto"] or "SHA").strip()
+    priv_proto = (prof["priv_proto"] or "AES").strip()
+    acl_mode = (payload.get("acl_mode") or "keep").strip().lower()
+    nms_ip = (payload.get("nms_ip") or "").strip()
+    simulate = bool(job["simulate"])
+    wu = sec.get("web_user") or secrets.get("UPS_WEB_USER") or ""
+    wp = sec.get("web_pass") or secrets.get("UPS_WEB_PASS") or ""
+    targets = con.execute("SELECT * FROM write_job_targets WHERE job_id=? ORDER BY id", (job["id"],)).fetchall()
+    for t in targets:
+        assert_lab_only(t["ip"], secrets)
+        tid = t["id"]
+        con.execute("UPDATE write_job_targets SET status='running', started_at=? WHERE id=?", (now(), tid))
+        con.commit()
+        try:
+            step(con, tid, 1, "pull_config", "running", t["ip"])
+            data, name = pull_config_bytes(t["ip"], secrets, wu, wp)
+            text = data.decode("latin1", "replace")
+            if not looks_like_rmcard_config(text):
+                raise RuntimeError("pulled file is not an RMCARD text config")
+            doc = parse_config(text)
+            slots = parse_snmpv3_slots(doc)
+            summary = [
+                f"{s['index']}={(s['username'] or '(empty)')} acl={s['ip'] or '-'}"
+                for s in slots
+            ]
+            step(con, tid, 1, "pull_config", "ok", name + " slots=[" + "; ".join(summary) + "]")
+            idx, reason = pick_snmpv3_slot(slots, username)
+            slot = next(s for s in slots if int(s["index"]) == idx)
+            acl_ip = None
+            if reason == "empty_slot":
+                acl_ip = nms_ip or None
+            elif acl_mode == "nms" and nms_ip:
+                acl_ip = nms_ip
+            # existing_user + keep: acl_ip stays None (do not change IP filter)
+            overlays = snmpv3_overlays_for_slot(
+                slots, idx, username, auth_proto, priv_proto, auth_pass, priv_pass, acl_ip
+            )
+            rewritten = doc.rewrite(overlays, strip_identity=True, identity_map={})
+            fname = datetime.now().strftime("%Y_%m_%d_%H%M.txt")
+            tmp = CONFIG_DIR / f"snmpv3_{t['ip'].replace('.', '_')}_{fname}"
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            tmp.write_text(rewritten, encoding="latin1")
+            step(
+                con,
+                tid,
+                2,
+                "choose_slot",
+                "ok",
+                f"slot={idx} reason={reason} acl={acl_ip if acl_ip is not None else '(unchanged)'} "
+                f"user={username} existing_acl={slot.get('ip') or '-'}",
+            )
+            if simulate:
+                step(con, tid, 3, "restore", "ok", f"SIMULATE scp {fname} (slot {idx} only; other SNMPv3 users untouched)")
+            else:
+                step(con, tid, 3, "restore", "running", fname)
+                detail = scp_put_config(t["ip"], wu, wp, tmp, fname, simulate=False)
+                step(con, tid, 3, "restore", "ok", detail)
+                step(con, tid, 4, "wait_reboot", "running", "")
+                time.sleep(8)
+                wait_ftp_alive(t["ip"], wu, wp, timeout_s=180, simulate=False)
+                step(con, tid, 4, "wait_reboot", "ok", "")
+                con.execute(
+                    "UPDATE devices SET snmp_profile_id=? WHERE id=?",
+                    (profile_id, t["device_id"]),
+                )
+            con.execute(
+                "UPDATE write_job_targets SET status='ok', ended_at=? WHERE id=?",
+                (now(), tid),
+            )
+            con.commit()
+        except Exception as e:
+            step(con, tid, 99, "error", "fail", str(e))
+            con.execute(
+                "UPDATE write_job_targets SET status='fail', ended_at=?, error=? WHERE id=?",
+                (now(), str(e)[:500], tid),
+            )
+            con.commit()
+            if job["stop_on_error"]:
+                raise
+
+
 def process_job(job_id: int) -> None:
     secrets = load_secrets()
     con = init_db()
@@ -408,6 +513,8 @@ def process_job(job_id: int) -> None:
             run_provision(con, job, secrets)
         elif kind == "push_cert":
             run_push_cert(con, job, secrets)
+        elif kind == "push_snmpv3":
+            run_push_snmpv3(con, job, secrets)
         else:
             raise RuntimeError(f"unknown job kind {kind}")
         fails = con.execute(

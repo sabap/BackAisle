@@ -145,6 +145,43 @@ function ba_python(): string {
 }
 
 /** @param list<string> $args */
+function ba_ups_ids_for_scope(PDO $db, string $scope, array $selectedIds = [], ?int $groupId = null): array
+{
+    $ups = "(kind='ups' OR kind IS NULL OR kind='')";
+    if ($scope === 'selected') {
+        $ids = array_values(array_unique(array_filter(array_map('intval', $selectedIds), static fn (int $i): bool => $i > 0)));
+        if (!$ids) {
+            throw new RuntimeException('Select one or more UPS');
+        }
+        return $ids;
+    }
+    if ($scope === 'scheduled') {
+        $out = [];
+        foreach ($db->query("SELECT id FROM devices WHERE enabled=1 AND $ups") as $r) {
+            $out[] = (int)$r['id'];
+        }
+        return $out;
+    }
+    if ($scope === 'group') {
+        if (!$groupId) {
+            throw new RuntimeException('Choose an IDF group');
+        }
+        $groups = function_exists('ba_groups') ? ba_groups($db) : $db->query('SELECT * FROM groups ORDER BY name')->fetchAll();
+        $gids = function_exists('ba_group_descendant_ids') ? ba_group_descendant_ids($groups, $groupId) : [$groupId];
+        $in = implode(',', array_map('intval', $gids));
+        $out = [];
+        foreach ($db->query("SELECT id FROM devices WHERE group_id IN ($in) AND $ups") as $r) {
+            $out[] = (int)$r['id'];
+        }
+        return $out;
+    }
+    $out = [];
+    foreach ($db->query("SELECT id FROM devices WHERE $ups") as $r) {
+        $out[] = (int)$r['id'];
+    }
+    return $out;
+}
+
 function ba_assign_snmp_profile(PDO $db, int $profileId, string $scope, array $selectedIds = [], ?int $groupId = null): int
 {
     if ($profileId < 1) {

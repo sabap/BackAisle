@@ -93,6 +93,105 @@ def parse_config(text: str) -> ConfigDoc:
     return ConfigDoc(raw=text, lines=lines, pairs=pairs)
 
 
+def parse_snmpv3_slots(doc: ConfigDoc) -> list[dict]:
+    """RMCARD has 4 SNMPv3 access-control slots. Map config keys onto index 1-4."""
+    slots = {
+        i: {
+            "index": i,
+            "username": "",
+            "ip": "",
+            "auth_proto": "",
+            "priv_proto": "",
+            "status": "",
+            "keys": {},
+        }
+        for i in range(1, 5)
+    }
+    for _i, _orig, key, val in doc.pairs:
+        lk = re.sub(r"\s+", "", key.strip().lower())
+        if "snmpv3" not in lk and "usm" not in lk:
+            continue
+        m = re.search(r"(\d)", lk)
+        if not m:
+            continue
+        idx = int(m.group(1))
+        if idx not in slots:
+            continue
+        val = (val or "").strip()
+        if any(x in lk for x in ("username", "username", "name")) and "auth" not in lk and "priv" not in lk:
+            slots[idx]["username"] = val
+            slots[idx]["keys"]["username"] = key
+        elif any(x in lk for x in ("ipaddr", "ipaddress", "ip")):
+            slots[idx]["ip"] = val
+            slots[idx]["keys"]["ip"] = key
+        elif "auth" in lk and ("proto" in lk or "type" in lk or "protocol" in lk):
+            slots[idx]["auth_proto"] = val
+            slots[idx]["keys"]["auth_proto"] = key
+        elif "priv" in lk and ("proto" in lk or "type" in lk or "protocol" in lk):
+            slots[idx]["priv_proto"] = val
+            slots[idx]["keys"]["priv_proto"] = key
+        elif "auth" in lk and ("pass" in lk or "key" in lk or "pwd" in lk):
+            slots[idx]["keys"]["auth_pass"] = key
+        elif "priv" in lk and ("pass" in lk or "key" in lk or "pwd" in lk):
+            slots[idx]["keys"]["priv_pass"] = key
+        elif "status" in lk or "enable" in lk:
+            slots[idx]["status"] = val
+            slots[idx]["keys"]["status"] = key
+    return [slots[i] for i in range(1, 5)]
+
+
+def pick_snmpv3_slot(slots: list[dict], username: str) -> tuple[int, str]:
+    """Match existing username, else first empty. Never overwrite a different user."""
+    want = (username or "").strip().lower()
+    if want:
+        for s in slots:
+            if (s.get("username") or "").strip().lower() == want:
+                return int(s["index"]), "existing_user"
+    for s in slots:
+        if not (s.get("username") or "").strip():
+            return int(s["index"]), "empty_slot"
+    occupied = ", ".join(f"{s['index']}={(s.get('username') or 'occupied')}" for s in slots)
+    raise RuntimeError(
+        "All 4 SNMPv3 slots are occupied (" + occupied + "). "
+        "Refusing to overwrite. Free a slot on the card or use a username that already exists."
+    )
+
+
+def snmpv3_overlays_for_slot(
+    slots: list[dict],
+    index: int,
+    username: str,
+    auth_proto: str,
+    priv_proto: str,
+    auth_pass: str,
+    priv_pass: str,
+    acl_ip: str | None,
+) -> dict[str, str]:
+    slot = next(s for s in slots if int(s["index"]) == int(index))
+    keys = slot.get("keys") or {}
+    out: dict[str, str] = {}
+    if keys.get("username"):
+        out[keys["username"]] = username
+    if keys.get("auth_proto") and auth_proto:
+        out[keys["auth_proto"]] = auth_proto
+    if keys.get("priv_proto") and priv_proto:
+        out[keys["priv_proto"]] = priv_proto
+    if keys.get("auth_pass") and auth_pass:
+        out[keys["auth_pass"]] = auth_pass
+    if keys.get("priv_pass") and priv_pass:
+        out[keys["priv_pass"]] = priv_pass
+    if keys.get("status"):
+        out[keys["status"]] = "enable"
+    if acl_ip is not None and keys.get("ip"):
+        out[keys["ip"]] = acl_ip
+    if not keys.get("username"):
+        raise RuntimeError(
+            f"Could not find SNMPv3 username key for slot {index} in the RMCARD config. "
+            "Pull a config in Fleet writes and inspect snmpv3_* keys."
+        )
+    return out
+
+
 def looks_like_rmcard_config(text: str) -> bool:
     if not text or len(text) < 40:
         return False
