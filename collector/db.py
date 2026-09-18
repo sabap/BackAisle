@@ -403,6 +403,7 @@ class PhpPdoConn:
         self.stdin = stdin
         self.stdout = stdout
         self.last_insert_id = None
+        self.last_rowcount = 0
 
     def _rpc(self, op: str, sql: str = "", params=()):
         req = json.dumps({"op": op, "sql": sql, "params": list(params or ())}, default=str) + "\n"
@@ -419,6 +420,10 @@ class PhpPdoConn:
                 self.last_insert_id = int(data["id"])
             except (TypeError, ValueError):
                 self.last_insert_id = None
+        try:
+            self.last_rowcount = int(data.get("rowcount") or 0)
+        except (TypeError, ValueError):
+            self.last_rowcount = 0
         return data
 
     def execute(self, sql, params=()):

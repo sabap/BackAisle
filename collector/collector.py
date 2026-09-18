@@ -18,7 +18,7 @@ from pathlib import Path
 ROOT = Path(r"C:\inetpub\BackAisle")
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from db import connect, init_db  # noqa: E402
+from db import connect, init_db, is_sqlsrv  # noqa: E402
 from secrets import load_secrets  # noqa: E402
 from profiles import get_secret, seed_from_env  # noqa: E402
 
@@ -41,6 +41,68 @@ WORKER_MAX = 16
 
 def now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def insert_pending_alert(con, device_id, code, ts) -> None:
+    if is_sqlsrv():
+        try:
+            con.execute(
+                "INSERT INTO pending_alerts (device_id, code, first_seen) VALUES (?,?,?)",
+                (device_id, code, ts),
+            )
+        except Exception:
+            pass
+        return
+    con.execute(
+        "INSERT OR IGNORE INTO pending_alerts (device_id, code, first_seen) VALUES (?,?,?)",
+        (device_id, code, ts),
+    )
+
+
+def upsert_poll_state_ok(con, device_id, ts) -> None:
+    if is_sqlsrv():
+        con.execute(
+            "UPDATE poll_state SET last_success=?, last_attempt=?, consecutive_failures=0, last_error=NULL, comm_state='ok' WHERE device_id=?",
+            (ts, ts, device_id),
+        )
+        try:
+            con.execute(
+                "INSERT INTO poll_state (device_id, last_success, last_attempt, consecutive_failures, last_error, comm_state) VALUES (?,?,?,0,NULL,'ok')",
+                (device_id, ts, ts),
+            )
+        except Exception:
+            pass
+        return
+    con.execute(
+        """INSERT INTO poll_state (device_id, last_success, last_attempt, consecutive_failures, last_error, comm_state)
+           VALUES (?,?,?,0,NULL,'ok')
+           ON CONFLICT(device_id) DO UPDATE SET last_success=excluded.last_success,
+             last_attempt=excluded.last_attempt, consecutive_failures=0, last_error=NULL, comm_state='ok'""",
+        (device_id, ts, ts),
+    )
+
+
+def upsert_poll_state_fail(con, device_id, ts, n, err, comm) -> None:
+    if is_sqlsrv():
+        con.execute(
+            "UPDATE poll_state SET last_attempt=?, consecutive_failures=?, last_error=?, comm_state=? WHERE device_id=?",
+            (ts, n, err, comm, device_id),
+        )
+        try:
+            con.execute(
+                "INSERT INTO poll_state (device_id, last_attempt, consecutive_failures, last_error, comm_state) VALUES (?,?,?,?,?)",
+                (device_id, ts, n, err, comm),
+            )
+        except Exception:
+            pass
+        return
+    con.execute(
+        """INSERT INTO poll_state (device_id, last_attempt, consecutive_failures, last_error, comm_state)
+           VALUES (?,?,?,?,?)
+           ON CONFLICT(device_id) DO UPDATE SET last_attempt=excluded.last_attempt,
+             consecutive_failures=excluded.consecutive_failures, last_error=excluded.last_error, comm_state=excluded.comm_state""",
+        (device_id, ts, n, err, comm),
+    )
 
 
 def log(msg: str) -> None:
@@ -180,10 +242,7 @@ def evaluate(con, device, sample, secrets):
     fire("sensor_missing", "warn", "Sensor expected but not attached", expected and not present)
     fire("poll_fail", "crit", "unreachable", False)
     for code, msg in new_alerts:
-        con.execute(
-            "INSERT OR IGNORE INTO pending_alerts (device_id, code, first_seen) VALUES (?,?,?)",
-            (did, code, now()),
-        )
+        insert_pending_alert(con, did, code, now())
 
 
 def store_sample(con, device_id, sample, va_rating=2000):
@@ -203,13 +262,7 @@ def store_sample(con, device_id, sample, va_rating=2000):
             sample.get("replace_battery"), power,
         ),
     )
-    con.execute(
-        """INSERT INTO poll_state (device_id, last_success, last_attempt, consecutive_failures, last_error, comm_state)
-           VALUES (?,?,?,0,NULL,'ok')
-           ON CONFLICT(device_id) DO UPDATE SET last_success=excluded.last_success,
-             last_attempt=excluded.last_attempt, consecutive_failures=0, last_error=NULL, comm_state='ok'""",
-        (device_id, now(), now()),
-    )
+    upsert_poll_state_ok(con, device_id, now())
     # identity autofill
     fields = []
     args = []
@@ -228,20 +281,11 @@ def store_sample(con, device_id, sample, va_rating=2000):
 def mark_fail(con, device, err, secrets):
     st = con.execute("SELECT consecutive_failures FROM poll_state WHERE device_id=?", (device["id"],)).fetchone()
     n = (st["consecutive_failures"] if st else 0) + 1
-    con.execute(
-        """INSERT INTO poll_state (device_id, last_attempt, consecutive_failures, last_error, comm_state)
-           VALUES (?,?,?,?,?)
-           ON CONFLICT(device_id) DO UPDATE SET last_attempt=excluded.last_attempt,
-             consecutive_failures=excluded.consecutive_failures, last_error=excluded.last_error, comm_state=excluded.comm_state""",
-        (device["id"], now(), n, str(err)[:500], "down" if n >= 3 else "degraded"),
-    )
+    upsert_poll_state_fail(con, device["id"], now(), n, str(err)[:500], "down" if n >= 3 else "degraded")
     th = thresholds_for(con, device)
     if n >= int(th.get("poll_fail_count") or 3):
         if set_alert(con, device["id"], "poll_fail", "crit", f"Unreachable: {err}"):
-            con.execute(
-                "INSERT OR IGNORE INTO pending_alerts (device_id, code, first_seen) VALUES (?,?,?)",
-                (device["id"], "poll_fail", now()),
-            )
+            insert_pending_alert(con, device["id"], "poll_fail", now())
     emit_event(con, device["id"], "warn", "poll_timeout", str(err)[:200])
 
 
@@ -315,14 +359,25 @@ def apply_result(secrets, kind: str, device: dict, payload) -> None:
 
 def _housekeep(con, secrets) -> None:
     con.execute("DELETE FROM samples WHERE ts < datetime('now','-90 days')")
-    con.execute(
-        """INSERT OR REPLACE INTO samples_hourly (device_id, hour_ts, capacity_avg, runtime_avg, load_avg, input_voltage_avg, temp_f_avg, humidity_avg, power_avg)
-           SELECT device_id, strftime('%Y-%m-%d %H:00:00', ts),
-                  AVG(capacity_pct), AVG(runtime_min), AVG(load_pct), AVG(input_voltage), AVG(temp_f), AVG(humidity_pct), AVG(power_w)
-           FROM samples WHERE ts >= datetime('now','-2 hours')
-           GROUP BY device_id, strftime('%Y-%m-%d %H:00:00', ts)"""
-    )
-    con.execute("DELETE FROM samples_hourly WHERE hour_ts < datetime('now','-370 days')")
+    if is_sqlsrv():
+        con.execute("DELETE FROM samples_hourly WHERE hour_ts >= DATEADD(hour, -3, SYSUTCDATETIME())")
+        con.execute(
+            """INSERT INTO samples_hourly (device_id, hour_ts, capacity_avg, runtime_avg, load_avg, input_voltage_avg, temp_f_avg, humidity_avg, power_avg)
+               SELECT device_id, CONVERT(varchar(13), ts, 120) + ':00:00',
+                      AVG(capacity_pct), AVG(runtime_min), AVG(load_pct), AVG(input_voltage), AVG(temp_f), AVG(humidity_pct), AVG(power_w)
+               FROM samples WHERE ts >= DATEADD(hour, -2, SYSUTCDATETIME())
+               GROUP BY device_id, CONVERT(varchar(13), ts, 120) + ':00:00'"""
+        )
+        con.execute("DELETE FROM samples_hourly WHERE hour_ts < DATEADD(day, -370, SYSUTCDATETIME())")
+    else:
+        con.execute(
+            """INSERT OR REPLACE INTO samples_hourly (device_id, hour_ts, capacity_avg, runtime_avg, load_avg, input_voltage_avg, temp_f_avg, humidity_avg, power_avg)
+               SELECT device_id, strftime('%Y-%m-%d %H:00:00', ts),
+                      AVG(capacity_pct), AVG(runtime_min), AVG(load_pct), AVG(input_voltage), AVG(temp_f), AVG(humidity_pct), AVG(power_w)
+               FROM samples WHERE ts >= datetime('now','-2 hours')
+               GROUP BY device_id, strftime('%Y-%m-%d %H:00:00', ts)"""
+        )
+        con.execute("DELETE FROM samples_hourly WHERE hour_ts < datetime('now','-370 days')")
     process_group_alerts(con, secrets)
     con.commit()
 
@@ -533,7 +588,10 @@ async def poll_cycle(secrets, climate=False, only_ids: list[int] | None = None):
     except asyncio.TimeoutError:
         log(f"poll cycle join timeout after {budget:.0f}s in_flight={len(pool.in_flight)}")
     await pool.stop()
-    _housekeep_unlocked(secrets)
+    try:
+        _housekeep_unlocked(secrets)
+    except Exception as e:
+        log(f"housekeep: {e}")
     elapsed = time.time() - t0
     log(
         f"poll cycle devices={len(devices)} live={len(live)} workers={n_w} "
@@ -728,12 +786,26 @@ def trap_loop(secrets):
                 (did, now(), "info", "snmp_trap", f"trap from {ip}", json.dumps({"bytes": len(data), "src": ip})),
             )
             if did:
-                con.execute(
-                    """INSERT INTO poll_state (device_id, last_trap, last_attempt, consecutive_failures, comm_state)
-                       VALUES (?,?,?,0,'ok')
-                       ON CONFLICT(device_id) DO UPDATE SET last_trap=excluded.last_trap""",
-                    (did, now(), now()),
-                )
+                ts = now()
+                if is_sqlsrv():
+                    con.execute(
+                        "UPDATE poll_state SET last_trap=?, last_attempt=? WHERE device_id=?",
+                        (ts, ts, did),
+                    )
+                    try:
+                        con.execute(
+                            "INSERT INTO poll_state (device_id, last_trap, last_attempt, consecutive_failures, comm_state) VALUES (?,?,?,0,'ok')",
+                            (did, ts, ts),
+                        )
+                    except Exception:
+                        pass
+                else:
+                    con.execute(
+                        """INSERT INTO poll_state (device_id, last_trap, last_attempt, consecutive_failures, comm_state)
+                           VALUES (?,?,?,0,'ok')
+                           ON CONFLICT(device_id) DO UPDATE SET last_trap=excluded.last_trap""",
+                        (did, ts, ts),
+                    )
             con.commit()
             con.close()
         except Exception as e:

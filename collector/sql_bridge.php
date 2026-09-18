@@ -50,17 +50,32 @@ while (($line = fgets(STDIN)) !== false) {
     $params = array_values($params);
     try {
         if ($op === 'query' || $op === 'exec') {
+            $isSelect = (bool)preg_match('/^\s*SELECT\b/i', $sql);
             $st = $db->prepare($sql);
             $st->execute($params);
             $rows = [];
-            if ($op === 'query' || preg_match('/^\s*SELECT\b/i', $sql)) {
+            if ($isSelect) {
                 $rows = $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
             }
+            $rowcount = 0;
+            try {
+                $rowcount = (int)$st->rowCount();
+            } catch (Throwable $e) {
+                $rowcount = 0;
+            }
+            try {
+                $st->closeCursor();
+            } catch (Throwable $e) {
+            }
             $id = null;
-            if (preg_match('/^\s*INSERT\b/i', $sql)) {
+            if (!$isSelect && preg_match('/^\s*INSERT\b/i', $sql)) {
                 try {
                     if (ba_db_driver() === 'sqlsrv') {
-                        $id = $db->query('SELECT CONVERT(int, SCOPE_IDENTITY())')->fetchColumn();
+                        $idSt = $db->query('SELECT CONVERT(int, SCOPE_IDENTITY()) AS id');
+                        $id = $idSt ? $idSt->fetchColumn() : null;
+                        if ($idSt) {
+                            $idSt->closeCursor();
+                        }
                     } else {
                         $id = $db->query('SELECT last_insert_rowid()')->fetchColumn();
                     }
@@ -76,7 +91,7 @@ while (($line = fgets(STDIN)) !== false) {
                 }
             }
             unset($row);
-            ba_bridge_out(['ok' => true, 'rows' => $rows, 'id' => $id]);
+            ba_bridge_out(['ok' => true, 'rows' => $rows, 'id' => $id, 'rowcount' => $rowcount]);
         } else {
             ba_bridge_out(['ok' => false, 'error' => 'unknown op']);
         }

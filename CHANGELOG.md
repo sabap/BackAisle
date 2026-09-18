@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.19] - 2026-09-18
+
+- PHP SQL bridge: do not fetch rows after DELETE/INSERT (ODBC invalid cursor). SQL Server upserts instead of SQLite ON CONFLICT.
+
 ## [0.5.18] - 2026-09-18
 
 - Collector SQL: use PHP PDO (same as the website) via sql_bridge.php when pyodbc returns empty HY000 under IIS
