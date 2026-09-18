@@ -38,14 +38,18 @@ def now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def job_is_simulate(job: dict) -> bool:
+def job_truthy(job: dict, key: str) -> bool:
     """SQL Server/ODBC may return 0 as the string '0'; bool('0') is True in Python."""
-    v = job.get("simulate") if isinstance(job, dict) else job
+    v = job.get(key) if isinstance(job, dict) else None
     if v is True or v == 1:
         return True
     if v is False or v == 0 or v is None:
         return False
     return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+
+def job_is_simulate(job: dict) -> bool:
+    return job_truthy(job, "simulate")
 
 
 def log(msg: str) -> None:
@@ -232,7 +236,7 @@ def run_push_config(con, job: dict, secrets: dict) -> None:
                 (now(), str(e)[:500], tid),
             )
             con.commit()
-            if job["stop_on_error"]:
+            if job_truthy(job, "stop_on_error"):
                 raise
 
 
@@ -274,7 +278,7 @@ def run_mass_edit(con, job: dict, secrets: dict) -> None:
             step(con, tid, 99, "error", "fail", str(e))
             con.execute("UPDATE write_job_targets SET status='fail', ended_at=?, error=? WHERE id=?", (now(), str(e)[:500], tid))
             con.commit()
-            if job["stop_on_error"]:
+            if job_truthy(job, "stop_on_error"):
                 raise
 
 
@@ -334,7 +338,7 @@ def run_firmware(con, job: dict, secrets: dict) -> None:
             step(con, tid, 99, "error", "fail", str(e))
             con.execute("UPDATE write_job_targets SET status='fail', ended_at=?, error=? WHERE id=?", (now(), str(e)[:500], tid))
             con.commit()
-            if job["stop_on_error"]:
+            if job_truthy(job, "stop_on_error"):
                 raise
 
 
@@ -406,7 +410,7 @@ def run_push_cert(con, job: dict, secrets: dict) -> None:
             step(con, tid, 99, "error", "fail", str(e))
             con.execute("UPDATE write_job_targets SET status='fail', ended_at=?, error=? WHERE id=?", (now(), str(e)[:500], tid))
             con.commit()
-            if job["stop_on_error"]:
+            if job_truthy(job, "stop_on_error"):
                 raise
 
 
@@ -482,7 +486,19 @@ def run_push_snmpv3(con, job: dict, secrets: dict) -> None:
                 step(con, tid, 3, "restore", "ok", f"SIMULATE scp {fname} (slot {idx} only; other SNMPv3 users untouched)")
             else:
                 step(con, tid, 3, "restore", "running", fname)
-                detail = scp_put_config(t["ip"], wu, wp, tmp, fname, simulate=False)
+                try:
+                    detail = scp_put_config(t["ip"], wu, wp, tmp, fname, simulate=False)
+                except Exception as e:
+                    log(f"scp failed {t['ip']}: {e}; trying HTTP restore")
+                    sess = RmcardSession(t["ip"], wu, wp)
+                    try:
+                        sess.login()
+                        detail = sess.restore_config_http(tmp.read_bytes(), fname) + f" (after scp: {e})"
+                    finally:
+                        try:
+                            sess.logout()
+                        except Exception:
+                            pass
                 step(con, tid, 3, "restore", "ok", detail)
                 step(con, tid, 4, "wait_reboot", "running", "")
                 time.sleep(8)
@@ -504,7 +520,7 @@ def run_push_snmpv3(con, job: dict, secrets: dict) -> None:
                 (now(), str(e)[:500], tid),
             )
             con.commit()
-            if job["stop_on_error"]:
+            if job_truthy(job, "stop_on_error"):
                 raise
 
 
