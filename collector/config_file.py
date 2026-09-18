@@ -53,6 +53,7 @@ class ConfigDoc:
         """overlays match keys case-insensitively. identity_map replaces identity keys."""
         identity_map = identity_map or {}
         out = []
+        used = set()
         for line in self.lines:
             key, val, sep = _split_kv(line)
             if not key:
@@ -63,6 +64,7 @@ class ConfigDoc:
             for ok, ov in overlays.items():
                 if ok.strip().lower() == lk:
                     out.append(key + sep + ov)
+                    used.add(ok.strip().lower())
                     replaced = True
                     break
             if replaced:
@@ -76,9 +78,12 @@ class ConfigDoc:
                 if mapped is not None:
                     out.append(key + sep + mapped)
                 else:
-                    out.append(line)  # keep original identity unless mapped
+                    out.append(line)
                 continue
             out.append(line)
+        for ok, ov in overlays.items():
+            if ok.strip().lower() not in used:
+                out.append(ok + "=" + ov)
         return "\n".join(out)
 
 
@@ -91,6 +96,27 @@ def parse_config(text: str) -> ConfigDoc:
         if key:
             pairs.append((i, line, key, val))
     return ConfigDoc(raw=text, lines=lines, pairs=pairs)
+
+
+def _snmpv3_slot_index(lk: str) -> int | None:
+    """Do not use the '3' in 'snmpv3'. Prefer a trailing 1-4 after username/ip/pass."""
+    rest = re.sub(r"^(snmpv3|usm)", "", lk)
+    m = re.search(r"(\d+)", rest)
+    if not m:
+        return None
+    idx = int(m.group(1))
+    if 1 <= idx <= 4:
+        return idx
+    return None
+
+
+def _retarget_key(key: str, from_idx: int, to_idx: int) -> str:
+    rev = key[::-1]
+    old = str(from_idx)[::-1]
+    new = str(to_idx)[::-1]
+    if old in rev:
+        return rev.replace(old, new, 1)[::-1]
+    return key
 
 
 def parse_snmpv3_slots(doc: ConfigDoc) -> list[dict]:
@@ -111,17 +137,17 @@ def parse_snmpv3_slots(doc: ConfigDoc) -> list[dict]:
         lk = re.sub(r"\s+", "", key.strip().lower())
         if "snmpv3" not in lk and "usm" not in lk:
             continue
-        m = re.search(r"(\d)", lk)
-        if not m:
-            continue
-        idx = int(m.group(1))
-        if idx not in slots:
+        idx = _snmpv3_slot_index(lk)
+        if idx is None:
             continue
         val = (val or "").strip()
-        if any(x in lk for x in ("username", "username", "name")) and "auth" not in lk and "priv" not in lk:
+        if any(x in lk for x in ("username", "user")) and "auth" not in lk and "priv" not in lk:
             slots[idx]["username"] = val
             slots[idx]["keys"]["username"] = key
-        elif any(x in lk for x in ("ipaddr", "ipaddress", "ip")):
+        elif "name" in lk and "auth" not in lk and "priv" not in lk:
+            slots[idx]["username"] = val
+            slots[idx]["keys"]["username"] = key
+        elif any(x in lk for x in ("ipaddr", "ipaddress")) or (lk.endswith("ip") or "ip" + str(idx) in lk):
             slots[idx]["ip"] = val
             slots[idx]["keys"]["ip"] = key
         elif "auth" in lk and ("proto" in lk or "type" in lk or "protocol" in lk):
@@ -137,6 +163,19 @@ def parse_snmpv3_slots(doc: ConfigDoc) -> list[dict]:
         elif "status" in lk or "enable" in lk:
             slots[idx]["status"] = val
             slots[idx]["keys"]["status"] = key
+    donor = None
+    for i in range(1, 5):
+        if slots[i]["keys"].get("username"):
+            donor = i
+            break
+    if donor:
+        for i in range(1, 5):
+            if slots[i]["keys"].get("username"):
+                continue
+            cloned = {}
+            for field, src in slots[donor]["keys"].items():
+                cloned[field] = _retarget_key(src, donor, i)
+            slots[i]["keys"] = cloned
     return [slots[i] for i in range(1, 5)]
 
 
