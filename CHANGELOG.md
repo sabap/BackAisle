@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.27] - 2026-09-18
+
+- Treat CyberPower factory SNMPv3 names (cyber snmpv3 user1–4) as empty slots. Real users (opmanager, sgmc-infrastructure, backaisle, …) are never overwritten.
+
 ## [0.5.26] - 2026-09-18
 
 - SNMPv3 slot parse: do not treat the 3 in snmpv3 as the slot index. Empty slots get cloned key names from an occupied slot.
