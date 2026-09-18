@@ -301,8 +301,17 @@ function page_job_view(PDO $db): void {
     $tg->execute([$id]);
     $targets = $tg->fetchAll();
     ba_layout_start('Job '.$id, 'writes');
+    $live = in_array((string)$job['status'], ['queued', 'running'], true);
+    if ($live) {
+        echo '<script>setTimeout(function(){ location.reload(); }, 4000);</script>';
+    }
+    echo '<p><a href="'.h(ba_href('/writes')).'">All jobs</a> · <a href="'.h(ba_href('/snmp')).'">SNMP page</a></p>';
     echo '<h1>Job '.$id.' · '.h($job['kind']).' · '.h($job['status']).($job['simulate']?' · simulate':'').'</h1>';
-    echo '<p class="muted">stop-on-error default. Firmware jobs are not cancellable mid-STOR.</p>';
+    if ($live) {
+        echo '<p class="muted">Writer is still working. This page reloads every 4 seconds. There is no extra toast when it finishes — status here is the result (ok / fail per UPS, slot choice in the step detail).</p>';
+    } else {
+        echo '<p class="muted">Job finished. Per-UPS result and SNMPv3 slot notes are in the tables below.</p>';
+    }
     if ($job['error']) echo '<div class="flash">'.h($job['error']).'</div>';
     foreach ($targets as $t) {
         echo '<div class="card"><h3>'.h($t['hostname'].' '.$t['ip']).' · '.h($t['status']).' · '.h($t['step']).'</h3>';

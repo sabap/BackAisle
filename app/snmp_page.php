@@ -247,7 +247,8 @@ function page_snmp_body(PDO $db, array $user): void
                     'acl_mode' => $acl,
                     'nms_ip' => $nms,
                 ], (string)$user['username'], $simulate, false);
-                $msg = ($simulate ? 'Simulate' : 'Push') . " SNMPv3 job #$jid queued (" . count($ids) . ' UPS). Watch Fleet writes. Empty slots only; matching username updates that slot; four occupied slots with other users are skipped.';
+                $msg = ($simulate ? 'Simulate' : 'Push') . " SNMPv3 job #$jid queued (" . count($ids) . ' UPS).';
+                $_SESSION['ba_flash_job'] = $jid;
             }
             $_SESSION['ba_flash'] = $msg;
             header('Location: /snmp.php');
@@ -311,7 +312,13 @@ function page_snmp_body(PDO $db, array $user): void
 
     ba_layout_start('SNMP', 'snmp');
     if ($msg) {
-        echo '<div class="flash">'.h($msg).'</div>';
+        echo '<div class="flash">'.h($msg);
+        $jidFlash = (int)($_SESSION['ba_flash_job'] ?? 0);
+        unset($_SESSION['ba_flash_job']);
+        if ($jidFlash > 0) {
+            echo ' <a href="'.h(ba_href('/writes/job?id='.$jidFlash)).'">Watch job #'.$jidFlash.' (live status)</a>. No second toast when it finishes.';
+        }
+        echo '</div>';
     }
     echo '<h1>SNMP polling</h1>';
     echo '<p class="muted">SNMPv3 authPriv collector. Scheduled devices have <code>enabled=1</code>. Manual poll talks to the unit now, even if it is not on the schedule.</p>';
