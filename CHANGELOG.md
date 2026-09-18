@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.22] - 2026-09-18
+
+- SNMPv3 RMCARD slot write is not lab-gated (PUSH SNMPV3 / Simulate). Config and firmware writes still require AllowMultiWrite.
+
 ## [0.5.21] - 2026-09-18
 
 - Write SNMPv3 onto CyberPower RMCARD: 4 slots, never overwrite a different username; empty slot or matching user only; ACL keep vs NMS IP; simulate first

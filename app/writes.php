@@ -39,8 +39,12 @@ function ba_redact_config(string $text): string {
     return implode("\n", $out);
 }
 
-function ba_create_job(PDO $db, string $kind, array $deviceIds, array $extra, string $user, bool $simulate = false): int {
-    $allowed = ba_writable_devices($db);
+function ba_all_ups_targets(PDO $db): array {
+    return $db->query("SELECT id, ip, hostname, idf_closet, firmware, snmp_name FROM devices WHERE is_simulated=0 AND IFNULL(kind,'ups')='ups' ORDER BY hostname")->fetchAll();
+}
+
+function ba_create_job(PDO $db, string $kind, array $deviceIds, array $extra, string $user, bool $simulate = false, bool $labOnly = true): int {
+    $allowed = $labOnly ? ba_writable_devices($db) : ba_all_ups_targets($db);
     $byId = [];
     foreach ($allowed as $d) {
         $byId[(int)$d['id']] = $d;
@@ -63,7 +67,14 @@ function ba_create_job(PDO $db, string $kind, array $deviceIds, array $extra, st
             $extra['template_id'] ?? null,
             $extra['firmware_id'] ?? null,
         ]);
-    $jid = (int)$db->lastInsertId();
+    $jid = function_exists('ba_last_id') ? ba_last_id($db) : (int)$db->lastInsertId();
+    if ($jid < 1) {
+        try {
+            $jid = (int)$db->query('SELECT CONVERT(int, SCOPE_IDENTITY())')->fetchColumn();
+        } catch (Throwable $e) {
+            $jid = (int)$db->lastInsertId();
+        }
+    }
     $ins = $db->prepare("INSERT INTO write_job_targets (job_id, device_id, ip, hostname, status) VALUES (?,?,?,?, 'queued')");
     foreach ($targets as $t) {
         $ins->execute([$jid, $t['id'], $t['ip'], $t['hostname']]);

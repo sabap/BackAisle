@@ -416,7 +416,6 @@ def run_push_snmpv3(con, job: dict, secrets: dict) -> None:
     wp = sec.get("web_pass") or secrets.get("UPS_WEB_PASS") or ""
     targets = con.execute("SELECT * FROM write_job_targets WHERE job_id=? ORDER BY id", (job["id"],)).fetchall()
     for t in targets:
-        assert_lab_only(t["ip"], secrets)
         tid = t["id"]
         con.execute("UPDATE write_job_targets SET status='running', started_at=? WHERE id=?", (now(), tid))
         con.commit()
