@@ -121,6 +121,7 @@ def pull_config_bytes(ip: str, secrets: dict, web_user: str | None = None, web_p
     for attempt in range(3):
         try:
             sess = RmcardSession(ip, user, pw)
+            log(f"web session {sess.base}")
             try:
                 sess.login()
                 data, name = sess.download_config()
@@ -489,19 +490,25 @@ def run_push_snmpv3(con, job: dict, secrets: dict) -> None:
                 step(con, tid, 3, "restore", "ok", f"SIMULATE scp {fname} (slot {idx} only; other SNMPv3 users untouched)")
             else:
                 step(con, tid, 3, "restore", "running", fname)
+                content = tmp.read_bytes()
                 try:
                     detail = scp_put_config(t["ip"], wu, wp, tmp, fname, simulate=False)
                 except Exception as e:
-                    log(f"scp failed {t['ip']}: {e}; trying HTTP restore")
-                    sess = RmcardSession(t["ip"], wu, wp)
+                    log(f"scp failed {t['ip']}: {e}; trying FTP restore")
                     try:
-                        sess.login()
-                        detail = sess.restore_config_http(tmp.read_bytes(), fname) + f" (after scp: {e})"
-                    finally:
+                        detail = ftp_put_config(t["ip"], wu, wp, fname, content, simulate=False)
+                        detail += f" (after scp: {e})"
+                    except Exception as e2:
+                        log(f"ftp restore failed {t['ip']}: {e2}; trying HTTP restore")
+                        sess = RmcardSession(t["ip"], wu, wp)
                         try:
-                            sess.logout()
-                        except Exception:
-                            pass
+                            sess.login()
+                            detail = sess.restore_config_http(content, fname) + f" (after scp: {e}; ftp: {e2})"
+                        finally:
+                            try:
+                                sess.logout()
+                            except Exception:
+                                pass
                 step(con, tid, 3, "restore", "ok", detail)
                 step(con, tid, 4, "wait_reboot", "running", "")
                 time.sleep(20)
