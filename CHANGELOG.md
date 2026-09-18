@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.9] - 2026-09-18
+
+- Check for updates takes the newest of GitHub releases, GitHub tags, jsDelivr catalog, VERSION, and LATEST. It no longer stops at the first source (a stale GitHub latest or lagging catalog hid 0.5.8).
+
 ## [0.5.8] - 2026-09-17
 
 - SNMP page: do not write Task Scheduler stderr into IIS FastCGI (empty HTTP 500). SQL Server uses TOP instead of LIMIT for last sample.

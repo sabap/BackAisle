@@ -664,10 +664,10 @@ class BackAisleUpdate
         $acc['published'] = $published;
     }
 
-    private static function jsDelivrVersionFile(string $ref): ?string
+    private static function jsDelivrTextFile(string $ref, string $file): ?string
     {
         $url = 'https://cdn.jsdelivr.net/gh/' . self::GITHUB_OWNER . '/' . self::GITHUB_REPO
-            . '@' . rawurlencode($ref) . '/VERSION';
+            . '@' . rawurlencode($ref) . '/' . ltrim($file, '/');
         try {
             $body = self::httpRequest($url, false, true, false, 10);
         } catch (Throwable $e) {
@@ -677,6 +677,15 @@ class BackAisleUpdate
             return null;
         }
         return self::parseSemver($body);
+    }
+
+    private static function jsDelivrVersionFile(string $ref): ?string
+    {
+        $ver = self::jsDelivrTextFile($ref, 'VERSION');
+        if ($ver !== null) {
+            return $ver;
+        }
+        return self::jsDelivrTextFile($ref, 'LATEST');
     }
 
     /** Walk patch/minor tags on jsDelivr so a lagging versions[] catalog cannot hide a GitHub tag. */
@@ -698,6 +707,10 @@ class BackAisleUpdate
             if ($got === null && $probes < $max) {
                 $probes++;
                 $got = self::jsDelivrVersionFile($ver);
+            }
+            if ($got === null && $probes < $max) {
+                $probes++;
+                $got = self::jsDelivrTextFile('v' . $ver, 'LATEST');
             }
             if ($got === null) {
                 return false;
@@ -759,39 +772,33 @@ class BackAisleUpdate
         ];
         $owner = rawurlencode(self::GITHUB_OWNER);
         $repo = rawurlencode(self::GITHUB_REPO);
+        // Never return on the first source. This network may see a stale GitHub
+        // "latest" or a lagging jsDelivr catalog; take the max of everything that answers.
         try {
             $release = self::githubGetJson("https://api.github.com/repos/{$owner}/{$repo}/releases/latest", true);
             if (is_array($release) && !empty($release['tag_name']) && empty($release['message'])) {
-                $tag = ltrim((string)$release['tag_name'], 'vV');
-                return [
-                    'tag' => $tag,
-                    'name' => (string)($release['name'] ?? $release['tag_name']),
-                    'html' => (string)($release['html_url'] ?? ''),
-                    'notes' => trim((string)($release['body'] ?? '')) ?: null,
-                    'published' => (string)($release['published_at'] ?? $release['created_at'] ?? ''),
-                    'source' => 'github',
-                ];
+                self::considerVersion(
+                    $acc,
+                    (string)$release['tag_name'],
+                    'github',
+                    (string)($release['name'] ?? $release['tag_name']),
+                    (string)($release['html_url'] ?? ''),
+                    trim((string)($release['body'] ?? '')) ?: null,
+                    (string)($release['published_at'] ?? $release['created_at'] ?? '')
+                );
             }
         } catch (Throwable $e) {
             $errors[] = $e->getMessage();
         }
         try {
             $tags = self::githubGetJson("https://api.github.com/repos/{$owner}/{$repo}/tags?per_page=30", false);
-            if (!is_array($tags) || isset($tags['message'])) {
-                $msg = is_array($tags) ? (string)($tags['message'] ?? 'GitHub API error') : 'GitHub API error';
-                throw new RuntimeException($msg);
-            }
-            if ($tags !== [] && function_exists('array_is_list') && !array_is_list($tags)) {
-                throw new RuntimeException('Unexpected tags response from GitHub.');
-            }
-            foreach ($tags as $t) {
-                if (!is_array($t) || empty($t['name'])) {
-                    continue;
+            if (is_array($tags) && empty($tags['message'])) {
+                foreach ($tags as $t) {
+                    if (!is_array($t) || empty($t['name'])) {
+                        continue;
+                    }
+                    self::considerVersion($acc, (string)$t['name'], 'github-tags');
                 }
-                self::considerVersion($acc, (string)$t['name'], 'github-tags');
-            }
-            if ($acc['tag'] !== null) {
-                return $acc;
             }
         } catch (Throwable $e) {
             $errors[] = $e->getMessage();
@@ -814,9 +821,17 @@ class BackAisleUpdate
         } catch (Throwable $e) {
             $errors[] = $e->getMessage();
         }
+        foreach (['main', 'v' . self::installedVersion(), self::installedVersion()] as $ref) {
+            try {
+                self::considerVersion($acc, self::jsDelivrVersionFile($ref), 'jsdelivr-file');
+                self::considerVersion($acc, self::jsDelivrTextFile($ref, 'LATEST'), 'jsdelivr-latest');
+            } catch (Throwable $e) {
+                $errors[] = $e->getMessage();
+            }
+        }
         $floor = $acc['tag'] ?? self::installedVersion();
         $probed = self::probeJsDelivrNewer($floor);
-        if ($probed !== null && ($floor === null || version_compare($probed, $floor, '>'))) {
+        if ($probed !== null) {
             self::considerVersion($acc, $probed, 'jsdelivr-tag');
         }
         if ($acc['tag'] === null) {
