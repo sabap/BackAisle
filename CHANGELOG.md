@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.11] - 2026-09-18
+
+- PHP Check uses Windows native CA store (CURLSSLOPT_NATIVE_CA). OpenSSL does not see OS roots on this host; that was HTTP 0 / issuer certificate (20).
+
 ## [0.5.10] - 2026-09-18
 
 - Check/Apply fall back to `curl.exe --ssl-no-revoke` when the PHP curl extension is missing or fails (IIS php.ini vs CLI php.ini)

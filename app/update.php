@@ -1076,6 +1076,11 @@ class BackAisleUpdate
             CURLOPT_SSL_VERIFYPEER => $sslVerify,
             CURLOPT_SSL_VERIFYHOST => $sslVerify ? 2 : 0,
         ];
+        // Windows PHP OpenSSL does not use the OS store; curl.exe does. Native CA
+        // is the same roots the overlay already used successfully on this network.
+        if ($sslVerify && defined('CURLSSLOPT_NATIVE_CA')) {
+            $opts[CURLOPT_SSL_OPTIONS] = CURLSSLOPT_NATIVE_CA;
+        }
         $ca = self::caBundlePath();
         if ($sslVerify && is_file($ca)) {
             $opts[CURLOPT_CAINFO] = $ca;
