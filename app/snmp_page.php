@@ -132,7 +132,6 @@ function page_snmp(PDO $db, array $user): void
             FILE_APPEND
         );
         if (!headers_sent()) {
-            http_response_code(500);
             header('Content-Type: text/html; charset=utf-8');
         }
         echo '<!doctype html><meta charset="utf-8"><pre style="white-space:pre-wrap;padding:24px">';
@@ -205,21 +204,35 @@ function page_snmp_body(PDO $db, array $user): void
         unset($_SESSION['ba_flash']);
     }
 
-    $st = ba_collector_status();
-    $sampleJoin = ba_db_driver() === 'sqlsrv'
-        ? "OUTER APPLY (SELECT TOP 1 s2.capacity_pct, s2.temp_f, s2.load_pct FROM samples s2 WHERE s2.device_id=d.id ORDER BY s2.ts DESC) s"
-        : "LEFT JOIN samples s ON s.id = (SELECT s2.id FROM samples s2 WHERE s2.device_id=d.id ORDER BY s2.ts DESC LIMIT 1)";
+    try {
+        $st = ba_collector_status();
+    } catch (Throwable $e) {
+        $st = [
+            'pid' => 0, 'running' => false, 'fresh' => false, 'label' => 'Unknown', 'cls' => 'warn',
+            'detail' => $e->getMessage(), 'heartbeat' => null, 'log_tail' => '',
+            'collector_task' => ba_schtask_info('BackAisleCollector'),
+            'watch_task' => ba_schtask_info('BackAisleCollectorWatch'),
+            'writer_task' => ba_schtask_info('BackAisleWriter'),
+        ];
+        $msg = trim($msg . ' Poller status: ' . $e->getMessage());
+    }
     $scheduled = [];
     $unscheduled = [];
     try {
+        $on = ba_db_driver() === 'sqlsrv'
+            ? 'WHERE ISNULL(d.enabled,0)=1'
+            : 'WHERE IFNULL(d.enabled,0)=1';
+        $off = ba_db_driver() === 'sqlsrv'
+            ? "WHERE ISNULL(d.enabled,0)=0 AND ISNULL(d.kind,'ups')='ups'"
+            : "WHERE IFNULL(d.enabled,0)=0 AND IFNULL(d.kind,'ups')='ups'";
         $scheduled = $db->query(
             "SELECT d.id, d.ip, d.hostname, d.kind, d.enabled, d.snmp_profile_id, sp.name AS profile_name,
-                    ps.last_success, ps.last_attempt, ps.comm_state, ps.consecutive_failures, s.capacity_pct, s.temp_f, s.load_pct
+                    ps.last_success, ps.last_attempt, ps.comm_state, ps.consecutive_failures,
+                    NULL AS capacity_pct, NULL AS temp_f, NULL AS load_pct
              FROM devices d
              LEFT JOIN snmp_profiles sp ON sp.id=d.snmp_profile_id
              LEFT JOIN poll_state ps ON ps.device_id=d.id
-             $sampleJoin
-             WHERE d.enabled=1
+             $on
              ORDER BY d.hostname, d.ip"
         )->fetchAll();
         $unscheduled = $db->query(
@@ -227,11 +240,16 @@ function page_snmp_body(PDO $db, array $user): void
              FROM devices d
              LEFT JOIN snmp_profiles sp ON sp.id=d.snmp_profile_id
              LEFT JOIN poll_state ps ON ps.device_id=d.id
-             WHERE IFNULL(d.enabled,0)=0 AND IFNULL(d.kind,'ups')='ups'
+             $off
              ORDER BY d.hostname, d.ip"
         )->fetchAll();
     } catch (Throwable $e) {
         $msg = trim($msg . ' Device list failed: ' . $e->getMessage());
+        try {
+            $scheduled = $db->query('SELECT id, ip, hostname, kind, enabled, snmp_profile_id FROM devices')->fetchAll();
+        } catch (Throwable $e2) {
+            $msg = trim($msg . ' | ' . $e2->getMessage());
+        }
     }
 
     ba_layout_start('SNMP', 'snmp');
@@ -279,10 +297,10 @@ function page_snmp_body(PDO $db, array $user): void
             echo '<td><input type="checkbox" name="ids[]" value="'.$id.'" class="snmp-id" form="snmp-sched-form"></td>';
             echo '<td><a href="'.h(ba_href('/device?id='.$id)).'">'.h(ba_txt($d['hostname'] ?: $d['ip'], '')).'</a></td>';
             echo '<td>'.h(ba_txt($d['ip'])).'</td><td>'.h(ba_txt($d['kind'], 'ups')).'</td>';
-            echo '<td>'.h(ba_txt($d['profile_name'])).'</td>';
-            echo '<td>'.h(ba_txt($d['last_success'])).'</td>';
-            echo '<td><span class="pill">'.h(ba_txt($d['comm_state'])).'</span>';
-            if ($d['capacity_pct'] !== null) {
+            echo '<td>'.h(ba_txt($d['profile_name'] ?? null)).'</td>';
+            echo '<td>'.h(ba_txt($d['last_success'] ?? null)).'</td>';
+            echo '<td><span class="pill">'.h(ba_txt($d['comm_state'] ?? null)).'</span>';
+            if (($d['capacity_pct'] ?? null) !== null) {
                 echo ' '.h((string)(int)$d['capacity_pct']).'%';
             }
             echo '</td><td style="white-space:nowrap">';

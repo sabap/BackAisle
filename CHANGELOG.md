@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.16] - 2026-09-18
+
+- SNMP page is a standalone entry (like the dashboard) so IIS cannot hide the error behind a blank 500. Device list no longer joins samples.
+
 ## [0.5.15] - 2026-09-18
 
 - SNMP page: do not exec tasklist/schtasks from IIS (FastCGI 500). SQL Server last-sample uses OUTER APPLY. Cell values accept SQL datetime objects.
