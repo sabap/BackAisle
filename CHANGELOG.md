@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.32] - 2026-09-18
+
+- Lab-tested on 10.202.7.24: pull, SNMPv3 slot overlay, FTP restore, re-pull. Slot 1 left intact; empty slot 2 took the new user.
+- Web session uses HTTPS when 443 is open, HTTP when 443 is refused (WinError 10061).
+- SNMPv3 AUTHTYPE/PRIVTYPE/STATUS write numeric codes (2/2/1), not SHA/AES/enable.
+- Login finishes the full auth-counter dance (early stop landed on error.html).
+- SCP dest is `user@host:` (local file named `YYYY_MM_DD_HHMM.txt`). A remote filename makes the card drop the session. CTR and CBC ciphers, ed25519/ssh-rsa. Restore falls back SCP → FTP → HTTP.
+
 ## [0.5.31] - 2026-09-18
 
 - RMCARD SCP uses aes128-ctr/aes256-ctr. After restore, wait for HTTPS not FTP (FTP often stays off). Pull retries 3 times.
