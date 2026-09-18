@@ -225,7 +225,7 @@ function page_snmp_body(PDO $db, array $user): void
                 if (!function_exists('ba_create_job')) {
                     throw new RuntimeException('Writer helpers missing');
                 }
-                $simulate = isset($_POST['simulate']);
+                $simulate = (string)($_POST['simulate'] ?? '0') === '1';
                 if (!$simulate && trim((string)($_POST['confirm'] ?? '')) !== 'PUSH SNMPV3') {
                     throw new RuntimeException('Type PUSH SNMPV3 to write the RMCARD, or tick Simulate to preview slots only.');
                 }
@@ -370,7 +370,8 @@ function page_snmp_body(PDO $db, array $user): void
         echo '<option value="keep">Keep the existing ACL IP (recommended)</option>';
         echo '<option value="nms">Replace ACL with the NMS IP above</option>';
         echo '</select>';
-        echo '<label><input type="checkbox" name="simulate" value="1" checked> Simulate (pull and choose slot, do not restore)</label>';
+        echo '<input type="hidden" name="simulate" value="0">';
+        echo '<label><input type="checkbox" name="simulate" value="1"> Simulate (pull and choose slot, do not restore)</label>';
         echo '<label>Type PUSH SNMPV3 to write (leave blank if simulating)</label>';
         echo '<input name="confirm" autocomplete="off">';
         echo '<button>Queue SNMPv3 write</button></form>';
