@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.25] - 2026-09-18
+
+- SNMPv3 card write uses profile/web login or factory cyber/cyber (no KeyError UPS_WEB_USER). One UPS failure does not leave the rest queued.
+
 ## [0.5.24] - 2026-09-18
 
 - Write job page auto-refreshes while queued/running. SNMP toast links to that page (no second toast when the writer finishes).
