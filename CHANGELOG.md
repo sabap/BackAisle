@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.33] - 2026-09-18
+
+- RMCARD allows one web login. SNMPv3 push keeps that session from pull through HTTP restore (no second login on error.html). Logout after the target. Busy-page error tells you to close the UPS browser tab.
+
 ## [0.5.32] - 2026-09-18
 
 - Lab-tested on 10.202.7.24: pull, SNMPv3 slot overlay, FTP restore, re-pull. Slot 1 left intact; empty slot 2 took the new user.
