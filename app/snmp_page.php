@@ -1,46 +1,37 @@
 <?php
 declare(strict_types=1);
 
+function ba_txt(mixed $v, string $empty = '-'): string
+{
+    if ($v === null || $v === false || $v === '') {
+        return $empty;
+    }
+    if ($v instanceof DateTimeInterface) {
+        return $v->format('Y-m-d H:i:s');
+    }
+    if (is_bool($v)) {
+        return $v ? '1' : '0';
+    }
+    return (string)$v;
+}
+
+/** Do not exec tasklist/schtasks from IIS — FastCGI treats their stderr as HTTP 500. */
 function ba_pid_running(int $pid): bool
 {
-    if ($pid < 1) {
-        return false;
-    }
-    $out = [];
-    @exec('cmd /c tasklist /FI "PID eq ' . $pid . '" /NH 2>nul', $out);
-    return str_contains(implode("\n", $out), (string)$pid);
+    return $pid > 0;
 }
 
 function ba_schtask_info(string $name): array
 {
-    $out = [];
-    $code = 0;
-    @exec('cmd /c schtasks /Query /TN ' . escapeshellarg($name) . ' /FO LIST /V 2>nul', $out, $code);
-    $text = implode("\n", $out);
-    $info = [
+    return [
         'name' => $name,
-        'ok' => $code === 0 && stripos($text, 'ERROR:') === false && stripos($text, 'cannot') === false,
-        'raw' => $text,
+        'ok' => false,
+        'raw' => '',
         'status' => '',
         'next' => '',
         'last' => '',
         'result' => '',
     ];
-    foreach ($out as $line) {
-        if (preg_match('/^Status:\s*(.+)$/i', $line, $m)) {
-            $info['status'] = trim($m[1]);
-        }
-        if (preg_match('/^Next Run Time:\s*(.+)$/i', $line, $m)) {
-            $info['next'] = trim($m[1]);
-        }
-        if (preg_match('/^Last Run Time:\s*(.+)$/i', $line, $m)) {
-            $info['last'] = trim($m[1]);
-        }
-        if (preg_match('/^Last Result:\s*(.+)$/i', $line, $m)) {
-            $info['result'] = trim($m[1]);
-        }
-    }
-    return $info;
 }
 
 function ba_collector_status(): array
@@ -52,7 +43,6 @@ function ba_collector_status(): array
     if (is_file($pidPath)) {
         $pid = (int)trim((string)@file_get_contents($pidPath));
     }
-    $running = ba_pid_running($pid);
     $hb = null;
     if (is_file($hbPath)) {
         $j = json_decode((string)@file_get_contents($hbPath), true);
@@ -66,7 +56,8 @@ function ba_collector_status(): array
     } elseif (is_file($hbPath)) {
         $hbAge = time() - (int)filemtime($hbPath);
     }
-    $fresh = $running && $hbAge !== null && $hbAge <= 120;
+    $fresh = $hbAge !== null && $hbAge <= 120;
+    $running = $fresh;
     $logTail = '';
     if (is_file($logPath)) {
         $raw = @file_get_contents($logPath);
@@ -132,6 +123,27 @@ function ba_poll_devices_now(array $ids): array
 
 function page_snmp(PDO $db, array $user): void
 {
+    try {
+        page_snmp_body($db, $user);
+    } catch (Throwable $e) {
+        @file_put_contents(
+            BA_ROOT . DIRECTORY_SEPARATOR . 'logs' . DIRECTORY_SEPARATOR . 'php-error.log',
+            date('c') . ' SNMP ' . $e->getMessage() . ' @ ' . $e->getFile() . ':' . $e->getLine() . "\n",
+            FILE_APPEND
+        );
+        if (!headers_sent()) {
+            http_response_code(500);
+            header('Content-Type: text/html; charset=utf-8');
+        }
+        echo '<!doctype html><meta charset="utf-8"><pre style="white-space:pre-wrap;padding:24px">';
+        echo 'SNMP page error: ' . htmlspecialchars($e->getMessage()) . "\n";
+        echo htmlspecialchars($e->getFile() . ':' . $e->getLine());
+        echo '</pre>';
+    }
+}
+
+function page_snmp_body(PDO $db, array $user): void
+{
     $admin = ($user['role'] ?? '') === 'admin';
     $msg = '';
     $flashCls = 'flash';
@@ -195,7 +207,7 @@ function page_snmp(PDO $db, array $user): void
 
     $st = ba_collector_status();
     $sampleJoin = ba_db_driver() === 'sqlsrv'
-        ? "LEFT JOIN samples s ON s.id = (SELECT TOP 1 s2.id FROM samples s2 WHERE s2.device_id=d.id ORDER BY s2.ts DESC)"
+        ? "OUTER APPLY (SELECT TOP 1 s2.capacity_pct, s2.temp_f, s2.load_pct FROM samples s2 WHERE s2.device_id=d.id ORDER BY s2.ts DESC) s"
         : "LEFT JOIN samples s ON s.id = (SELECT s2.id FROM samples s2 WHERE s2.device_id=d.id ORDER BY s2.ts DESC LIMIT 1)";
     $scheduled = [];
     $unscheduled = [];
@@ -231,8 +243,8 @@ function page_snmp(PDO $db, array $user): void
 
     echo '<div class="grid2">';
     echo '<div class="card"><h3>Poller</h3>';
-    echo '<p><span class="pill '.$st['cls'].'">'.h($st['label']).'</span> PID '.((int)$st['pid'] ?: '-').'</p>';
-    echo '<p class="muted">'.h($st['detail']).'</p>';
+    echo '<p><span class="pill '.$st['cls'].'">'.h(ba_txt($st['label'], '')).'</span> PID '.((int)$st['pid'] ?: '-').'</p>';
+    echo '<p class="muted">'.h(ba_txt($st['detail'], '')).'</p>';
     if (!empty($st['heartbeat']['at'])) {
         echo '<p class="muted">Heartbeat at '.h((string)$st['heartbeat']['at']).' UTC</p>';
     }
@@ -265,11 +277,11 @@ function page_snmp(PDO $db, array $user): void
             $id = (int)$d['id'];
             echo '<tr>';
             echo '<td><input type="checkbox" name="ids[]" value="'.$id.'" class="snmp-id" form="snmp-sched-form"></td>';
-            echo '<td><a href="'.h(ba_href('/device?id='.$id)).'">'.h($d['hostname'] ?: $d['ip']).'</a></td>';
-            echo '<td>'.h($d['ip']).'</td><td>'.h($d['kind'] ?: 'ups').'</td>';
-            echo '<td>'.h($d['profile_name'] ?: '-').'</td>';
-            echo '<td>'.h($d['last_success'] ?: '-').'</td>';
-            echo '<td><span class="pill">'.h($d['comm_state'] ?: '-').'</span>';
+            echo '<td><a href="'.h(ba_href('/device?id='.$id)).'">'.h(ba_txt($d['hostname'] ?: $d['ip'], '')).'</a></td>';
+            echo '<td>'.h(ba_txt($d['ip'])).'</td><td>'.h(ba_txt($d['kind'], 'ups')).'</td>';
+            echo '<td>'.h(ba_txt($d['profile_name'])).'</td>';
+            echo '<td>'.h(ba_txt($d['last_success'])).'</td>';
+            echo '<td><span class="pill">'.h(ba_txt($d['comm_state'])).'</span>';
             if ($d['capacity_pct'] !== null) {
                 echo ' '.h((string)(int)$d['capacity_pct']).'%';
             }
@@ -299,8 +311,8 @@ function page_snmp(PDO $db, array $user): void
             $id = (int)$d['id'];
             echo '<tr>';
             echo '<td><input type="checkbox" name="ids[]" value="'.$id.'" class="snmp-unsched" form="snmp-unsched-form"></td>';
-            echo '<td><a href="'.h(ba_href('/device?id='.$id)).'">'.h($d['hostname'] ?: $d['ip']).'</a></td>';
-            echo '<td>'.h($d['ip']).'</td><td>'.h($d['profile_name'] ?: '-').'</td><td>'.h($d['last_success'] ?: '-').'</td>';
+            echo '<td><a href="'.h(ba_href('/device?id='.$id)).'">'.h(ba_txt($d['hostname'] ?: $d['ip'], '')).'</a></td>';
+            echo '<td>'.h(ba_txt($d['ip'])).'</td><td>'.h(ba_txt($d['profile_name'])).'</td><td>'.h(ba_txt($d['last_success'])).'</td>';
             echo '<td><button type="submit" form="snmp-on-'.$id.'" name="act" value="schedule_on">Add to schedule</button></td>';
             echo '</tr>';
         }
@@ -329,7 +341,7 @@ function page_snmp(PDO $db, array $user): void
         echo '<div class="card"><p class="muted">Viewer: schedule is read-only. Ask an admin to poll or change membership.</p>';
         echo '<table><thead><tr><th>Host</th><th>IP</th><th>Last OK</th><th>State</th></tr></thead><tbody>';
         foreach ($scheduled as $d) {
-            echo '<tr><td>'.h($d['hostname'] ?: $d['ip']).'</td><td>'.h($d['ip']).'</td><td>'.h($d['last_success'] ?: '-').'</td><td>'.h($d['comm_state'] ?: '-').'</td></tr>';
+            echo '<tr><td>'.h(ba_txt($d['hostname'] ?: $d['ip'], '')).'</td><td>'.h(ba_txt($d['ip'])).'</td><td>'.h(ba_txt($d['last_success'])).'</td><td>'.h(ba_txt($d['comm_state'])).'</td></tr>';
         }
         echo '</tbody></table></div>';
     }

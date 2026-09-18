@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.15] - 2026-09-18
+
+- SNMP page: do not exec tasklist/schtasks from IIS (FastCGI 500). SQL Server last-sample uses OUTER APPLY. Cell values accept SQL datetime objects.
+
 ## [0.5.14] - 2026-09-18
 
 - TLS for updates matches ColdAisle: search php.ini / PHP extras / config/cacert.pem, auto-download Mozilla CA on first SSL failure, Install CA certificates writes config/cacert.pem with verify off only for that bootstrap URL.
