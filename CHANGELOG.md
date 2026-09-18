@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.14] - 2026-09-18
+
+- TLS for updates matches ColdAisle: search php.ini / PHP extras / config/cacert.pem, auto-download Mozilla CA on first SSL failure, Install CA certificates writes config/cacert.pem with verify off only for that bootstrap URL.
+
 ## [0.5.13] - 2026-09-18
 
 - Apply does not abort if the application-files zip is empty (IIS-locked files). ZipArchive falls back to addFromString.

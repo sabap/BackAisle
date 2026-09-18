@@ -714,8 +714,8 @@ function page_admin(PDO $db, array $user): void {
     }
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['install_ca'])) {
         try {
-            $p = BackAisleUpdate::installCaBundle();
-            $updMsg = 'CA bundle installed: '.$p;
+            $res = BackAisleUpdate::installCaBundle();
+            $updMsg = (string)($res['message'] ?? ('CA bundle installed: ' . ($res['path'] ?? '')));
             $updFlash = 'ok';
         } catch (Throwable $e) {
             $updMsg = $e->getMessage();
@@ -800,7 +800,7 @@ function page_admin(PDO $db, array $user): void {
     }
     $packages = [];
     try { $packages = BackAisleBackup::listPackages(); } catch (Throwable $e) { $packages = []; }
-    $caPath = BackAisleUpdate::caBundlePath();
+    $caStatus = BackAisleUpdate::caBundleStatus();
     ba_layout_start('Admin', 'admin');
     if ($updMsg) {
         $flashCls = 'flash';
@@ -863,12 +863,21 @@ function page_admin(PDO $db, array $user): void {
         <label><input type="checkbox" name="updates_auto_check" value="1" <?= !empty($updCfg['auto_check'])?'checked':'' ?>> Auto-check when opening Admin</label>
         <label>Check interval (hours)</label>
         <input type="number" min="1" max="168" name="check_interval_hours" value="<?= (int)$updCfg['check_interval_hours'] ?>">
-        <label><input type="checkbox" name="updates_ssl_verify" value="1" <?= !empty($updCfg['ssl_verify'])?'checked':'' ?>> Verify TLS certificates when contacting GitHub</label>
-        <p class="muted">CA bundle: <?= is_file($caPath) ? '<code>'.h($caPath).'</code>' : 'not installed — use Install CA certificates' ?></p>
+        <label><input type="checkbox" name="updates_ssl_verify" value="1" <?= !empty($updCfg['ssl_verify'])?'checked':'' ?>> Verify TLS certificates when contacting GitHub (recommended)</label>
+        <p class="muted">Requires a CA certificate list. Status:
+          <?php if (!empty($caStatus['found'])): ?>
+            OK <code><?= h((string)$caStatus['path']) ?></code>
+          <?php else: ?>
+            Missing — click <strong>Install CA certificates</strong> below (keeps verify enabled).
+          <?php endif; ?>
+        </p>
         <button name="updates_save" value="1">Save update settings</button>
       </form>
       <div class="filters" style="margin-top:.8rem">
-        <form method="post" action="/admin.php"><button type="submit" name="install_ca" value="1">Install CA certificates</button></form>
+        <?php $caOk = !empty($caStatus['found']); ?>
+        <form method="post" action="/admin.php" <?= $caOk ? 'onsubmit="return false;"' : '' ?>>
+          <button type="submit" name="install_ca" value="1" <?= $caOk ? 'disabled' : '' ?>>Install CA certificates</button>
+        </form>
         <form method="post" action="/admin.php"><button type="submit" name="update_check" value="1">Check for updates</button></form>
         <form method="post" action="/admin.php" onsubmit="return confirm('Create a recovery backup now? Writes a full site package and an application-files zip. Does not apply an update.');">
           <button type="submit" name="update_backup_now" value="1">Create recovery backup</button>

@@ -390,23 +390,139 @@ class BackAisleUpdate
 
     public static function caBundlePath(): string
     {
-        return BA_ROOT . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'cacert.pem';
+        return BA_ROOT . DIRECTORY_SEPARATOR . 'config' . DIRECTORY_SEPARATOR . 'cacert.pem';
     }
 
-    public static function installCaBundle(): string
+    /** Locate a CA bundle, or download Mozilla's list into config/cacert.pem once. */
+    public static function ensureCaBundle(bool $forceDownload = false): ?string
     {
-        $dest = self::caBundlePath();
-        $dir = dirname($dest);
-        if (!is_dir($dir)) @mkdir($dir, 0775, true);
+        static $triedAuto = false;
+        $local = self::caBundlePath();
+        if (!$forceDownload) {
+            $existing = self::resolveCaBundle();
+            if ($existing !== null) {
+                return $existing;
+            }
+        }
+        if ($triedAuto && !$forceDownload) {
+            return is_file($local) ? $local : null;
+        }
+        $triedAuto = true;
+        $dir = dirname($local);
+        if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
+            return self::resolveCaBundle();
+        }
+        try {
+            self::downloadCaBundleTo($local);
+            if (is_file($local) && filesize($local) > 50000) {
+                return $local;
+            }
+        } catch (Throwable $e) {
+            // fall through to whatever bundle already exists
+        }
+        return self::resolveCaBundle();
+    }
+
+    /**
+     * Download Mozilla CA certificates (curl.se) into config/cacert.pem.
+     * @return array{ok:bool,path:string,bytes:int,message:string}
+     */
+    public static function installCaBundle(): array
+    {
+        $local = self::caBundlePath();
+        $dir = dirname($local);
+        if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
+            throw new RuntimeException('config/ is not writable — cannot install cacert.pem.');
+        }
+        self::downloadCaBundleTo($local);
+        if (!is_file($local) || filesize($local) < 50000) {
+            throw new RuntimeException('Downloaded CA bundle looks invalid or incomplete.');
+        }
+        return [
+            'ok' => true,
+            'path' => $local,
+            'bytes' => (int)filesize($local),
+            'message' => 'CA certificates installed at config/cacert.pem ('
+                . number_format((int)filesize($local)) . ' bytes). Keep “Verify TLS certificates” enabled.',
+        ];
+    }
+
+    /** @return array{found:bool,path:?string,app_local:bool,php_curl_cainfo:string,php_openssl_cafile:string} */
+    public static function caBundleStatus(): array
+    {
+        $path = self::resolveCaBundle();
+        return [
+            'found' => $path !== null,
+            'path' => $path,
+            'app_local' => is_file(self::caBundlePath()),
+            'php_curl_cainfo' => trim((string)ini_get('curl.cainfo')),
+            'php_openssl_cafile' => trim((string)ini_get('openssl.cafile')),
+        ];
+    }
+
+    private static function resolveCaBundle(): ?string
+    {
+        $candidates = [
+            self::caBundlePath(),
+            BA_ROOT . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'cacert.pem',
+            (string)ini_get('curl.cainfo'),
+            (string)ini_get('openssl.cafile'),
+            'C:/PHP/extras/ssl/cacert.pem',
+            'C:/php/extras/ssl/cacert.pem',
+            'C:/Windows/System32/curl-ca-bundle.crt',
+        ];
+        foreach ($candidates as $p) {
+            $p = trim((string)$p);
+            if ($p !== '' && is_file($p) && filesize($p) > 1000) {
+                return $p;
+            }
+        }
+        return null;
+    }
+
+    /** Bootstrap only: peer verify off so a host with no CA list can still fetch the Mozilla pack. */
+    private static function downloadCaBundleTo(string $dest): void
+    {
         $url = 'https://curl.se/ca/cacert.pem';
-        $body = self::httpRequest($url, false, false);
-        if ($body === null || strlen($body) < 1000) {
-            throw new RuntimeException('Could not download CA bundle.');
+        $body = null;
+        $err = '';
+        if (function_exists('curl_init')) {
+            $ch = curl_init($url);
+            if ($ch !== false) {
+                curl_setopt_array($ch, [
+                    CURLOPT_RETURNTRANSFER => true,
+                    CURLOPT_FOLLOWLOCATION => true,
+                    CURLOPT_TIMEOUT => 60,
+                    CURLOPT_SSL_VERIFYPEER => false,
+                    CURLOPT_SSL_VERIFYHOST => 0,
+                    CURLOPT_USERAGENT => 'BackAisle-CA-Installer',
+                ]);
+                $raw = curl_exec($ch);
+                $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                $err = curl_error($ch);
+                curl_close($ch);
+                if (is_string($raw) && $code >= 200 && $code < 300) {
+                    $body = $raw;
+                }
+            }
+        }
+        if ($body === null) {
+            try {
+                $body = self::httpRequestCurlExe($url, false, false, false, 60);
+            } catch (Throwable $e) {
+                throw new RuntimeException(
+                    'Could not download CA bundle from curl.se'
+                    . ($err !== '' ? ': ' . $err : '')
+                    . ' (' . $e->getMessage() . '). Allow outbound HTTPS to curl.se or copy cacert.pem into config/.'
+                );
+            }
+        }
+        if ($body === null || !str_contains($body, 'BEGIN CERTIFICATE')) {
+            throw new RuntimeException('CA download did not look like a PEM certificate bundle.');
         }
         if (@file_put_contents($dest, $body) === false) {
             throw new RuntimeException('Could not write ' . $dest);
         }
-        return $dest;
     }
 
     /** @return array{ok:bool,current:string,latest:?string,update_available:bool,release_name:?string,html_url:?string,notes_url:?string,notes:?string,published_at:?string,checked_at:string,cached:bool} */
@@ -445,7 +561,7 @@ class BackAisleUpdate
         foreach ([
             'data/', 'logs/', 'storage/backups/', 'storage/tmp/',
             '.git/', 'secrets.env', 'php.ini',
-            'config/config.php', 'config/collector.json',
+            'config/config.php', 'config/collector.json', 'config/cacert.pem',
             'public/web.config', 'public/assets/tpl/',
         ] as $p) {
             if ($relNorm === rtrim($p, '/') || str_starts_with($relNorm, $p)) {
@@ -961,7 +1077,7 @@ class BackAisleUpdate
         }
         $n = 0;
         $sslVerify = !empty(self::config()['ssl_verify']);
-        $ca = self::caBundlePath();
+        $ca = $sslVerify ? (self::ensureCaBundle() ?? '') : '';
         $chunk = 8;
         $total = count($jobs);
         for ($i = 0; $i < $total; $i += $chunk) {
@@ -1073,7 +1189,7 @@ class BackAisleUpdate
         throw new RuntimeException(implode('; ', $errors));
     }
 
-    private static function httpRequestPhpCurl(string $url, bool $binary, bool $allowNotFound, bool $githubApi, int $timeoutSec): ?string
+    private static function httpRequestPhpCurl(string $url, bool $binary, bool $allowNotFound, bool $githubApi, int $timeoutSec, bool $caRetried = false): ?string
     {
         $ch = curl_init($url);
         if ($ch === false) {
@@ -1097,14 +1213,14 @@ class BackAisleUpdate
             CURLOPT_SSL_VERIFYPEER => $sslVerify,
             CURLOPT_SSL_VERIFYHOST => $sslVerify ? 2 : 0,
         ];
-        // Windows PHP OpenSSL does not use the OS store; curl.exe does. Native CA
-        // is the same roots the overlay already used successfully on this network.
         if ($sslVerify && defined('CURLSSLOPT_NATIVE_CA')) {
             $opts[CURLOPT_SSL_OPTIONS] = CURLSSLOPT_NATIVE_CA;
         }
-        $ca = self::caBundlePath();
-        if ($sslVerify && is_file($ca)) {
-            $opts[CURLOPT_CAINFO] = $ca;
+        if ($sslVerify) {
+            $ca = self::ensureCaBundle($caRetried);
+            if ($ca !== null) {
+                $opts[CURLOPT_CAINFO] = $ca;
+            }
         }
         curl_setopt_array($ch, $opts);
         $body = curl_exec($ch);
@@ -1112,7 +1228,18 @@ class BackAisleUpdate
         $err = curl_error($ch);
         curl_close($ch);
         if ($body === false) {
-            throw new RuntimeException('HTTP request failed: ' . $err);
+            if ($sslVerify && !$caRetried && (stripos($err, 'certificate') !== false || stripos($err, 'SSL') !== false)) {
+                if (self::ensureCaBundle(true) !== null) {
+                    return self::httpRequestPhpCurl($url, $binary, $allowNotFound, $githubApi, $timeoutSec, true);
+                }
+            }
+            $hint = '';
+            if (stripos($err, 'certificate') !== false || stripos($err, 'SSL') !== false) {
+                $hint = ' PHP has no trusted CA list. Use Admin → Updates → Install CA certificates, '
+                    . 'or set curl.cainfo in php.ini to a cacert.pem path. '
+                    . 'Uncheck “Verify TLS certificates” only for lab/dev.';
+            }
+            throw new RuntimeException('HTTP request failed: ' . $err . $hint);
         }
         return self::httpFinish((string)$body, $code, $url, $binary, $allowNotFound);
     }
