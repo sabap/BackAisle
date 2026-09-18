@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.30] - 2026-09-18
+
+- RMCARD SCP allows ssh-rsa host keys (OpenSSH vs CyberPower). HTTP restore if SCP fails. stop_on_error=0 is not treated as true.
+
 ## [0.5.29] - 2026-09-18
 
 - Simulate flag: SQL Server '0' is not treated as true. RMCARD web session always logs out after pull (one login at a time).
