@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.24] - 2026-09-18
+
+- Write job page auto-refreshes while queued/running. SNMP toast links to that page (no second toast when the writer finishes).
+
 ## [0.5.23] - 2026-09-18
 
 - SQL Server: never call PDO lastInsertId() (ODBC IM001). Use @@IDENTITY via ba_last_id().
