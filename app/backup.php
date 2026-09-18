@@ -60,28 +60,43 @@ class BackAisleBackup
 
         try {
             $dbFile = $staging . DIRECTORY_SEPARATOR . 'data' . DIRECTORY_SEPARATOR . 'backaisle.db';
-            $db = ba_db();
-            $db->exec('PRAGMA wal_checkpoint(TRUNCATE)');
-            try {
-                $db->exec('VACUUM INTO ' . $db->quote(str_replace('\\', '/', $dbFile)));
-            } catch (Throwable $e) {
-                $live = BA_ROOT . DIRECTORY_SEPARATOR . 'data' . DIRECTORY_SEPARATOR . 'backaisle.db';
-                if (!@copy($live, $dbFile)) {
-                    throw new RuntimeException('Could not snapshot database: ' . $e->getMessage());
+            $dbDriver = ba_db_driver();
+            if ($dbDriver === 'sqlite') {
+                $db = ba_db();
+                $db->exec('PRAGMA wal_checkpoint(TRUNCATE)');
+                try {
+                    $db->exec('VACUUM INTO ' . $db->quote(str_replace('\\', '/', $dbFile)));
+                } catch (Throwable $e) {
+                    $live = BA_ROOT . DIRECTORY_SEPARATOR . 'data' . DIRECTORY_SEPARATOR . 'backaisle.db';
+                    if (!@copy($live, $dbFile)) {
+                        throw new RuntimeException('Could not snapshot database: ' . $e->getMessage());
+                    }
                 }
-            }
-            if (!$includeAudit || !$includeReadings) {
-                $snap = new PDO('sqlite:' . $dbFile, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
-                if (!$includeAudit) {
-                    $snap->exec('DELETE FROM audit_log');
+                if (!$includeAudit || !$includeReadings) {
+                    $snap = new PDO('sqlite:' . $dbFile, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+                    if (!$includeAudit) {
+                        $snap->exec('DELETE FROM audit_log');
+                    }
+                    if (!$includeReadings) {
+                        $snap->exec('DELETE FROM samples');
+                        $snap->exec('DELETE FROM samples_hourly');
+                        $snap->exec('DELETE FROM events');
+                    }
+                    $snap->exec('VACUUM');
+                    $snap = null;
                 }
-                if (!$includeReadings) {
-                    $snap->exec('DELETE FROM samples');
-                    $snap->exec('DELETE FROM samples_hourly');
-                    $snap->exec('DELETE FROM events');
-                }
-                $snap->exec('VACUUM');
-                $snap = null;
+            } else {
+                $cfg = ba_config()['db'] ?? [];
+                file_put_contents(
+                    $staging . DIRECTORY_SEPARATOR . 'meta' . DIRECTORY_SEPARATOR . 'db-sqlsrv.json',
+                    json_encode([
+                        'driver' => 'sqlsrv',
+                        'host' => $cfg['host'] ?? '',
+                        'port' => (int)($cfg['port'] ?? 1433),
+                        'database' => $cfg['database'] ?? '',
+                        'note' => 'Live data stays in SQL Server. This package does not contain a SQLite snapshot.',
+                    ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)
+                );
             }
 
             $secretsSrc = '';
@@ -116,6 +131,7 @@ class BackAisleBackup
                     'encrypted' => $encrypt,
                 ],
                 'has_secrets' => $secretsSrc !== '',
+                'db_driver' => $dbDriver,
                 'db_bytes' => is_file($dbFile) ? filesize($dbFile) : 0,
             ];
             file_put_contents(
@@ -179,19 +195,23 @@ class BackAisleBackup
                 throw new RuntimeException('Unrecognized backup format.');
             }
             $dbSnap = $root . '/data/backaisle.db';
-            if (!is_file($dbSnap)) {
-                throw new RuntimeException('Package has no database snapshot.');
-            }
             $live = BA_ROOT . DIRECTORY_SEPARATOR . 'data' . DIRECTORY_SEPARATOR . 'backaisle.db';
-            ba_db()->exec('PRAGMA wal_checkpoint(TRUNCATE)');
-            ba_db(true);
-            foreach ([$live, $live . '-wal', $live . '-shm'] as $p) {
-                if (is_file($p)) {
-                    @unlink($p);
+            if (ba_db_driver() === 'sqlite') {
+                if (!is_file($dbSnap)) {
+                    throw new RuntimeException('Package has no database snapshot.');
                 }
-            }
-            if (!@copy($dbSnap, $live)) {
-                throw new RuntimeException('Could not replace live database. ' . BackAisleUpdate::aclHelpMessage());
+                ba_db()->exec('PRAGMA wal_checkpoint(TRUNCATE)');
+                ba_db(true);
+                foreach ([$live, $live . '-wal', $live . '-shm'] as $p) {
+                    if (is_file($p)) {
+                        @unlink($p);
+                    }
+                }
+                if (!@copy($dbSnap, $live)) {
+                    throw new RuntimeException('Could not replace live database. ' . BackAisleUpdate::aclHelpMessage());
+                }
+            } else {
+                ba_db(true);
             }
             $sec = $root . '/meta/secrets.env';
             if (is_file($sec)) {

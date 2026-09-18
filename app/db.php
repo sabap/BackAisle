@@ -10,6 +10,9 @@ function ba_adapt_sql(string $sql): string {
     if (ba_db_driver() !== 'sqlsrv') {
         return $sql;
     }
+    if (preg_match('/^\s*PRAGMA\b/i', $sql) || preg_match('/^\s*VACUUM\b/i', $sql)) {
+        return 'SELECT 1';
+    }
     $sql = preg_replace("/datetime\('now'\s*,\s*'-(\d+)\s*days?'\)/i", 'DATEADD(day, -$1, SYSUTCDATETIME())', $sql) ?? $sql;
     $sql = str_ireplace("datetime('now')", 'SYSUTCDATETIME()', $sql);
     $sql = str_ireplace('IFNULL(', 'ISNULL(', $sql);

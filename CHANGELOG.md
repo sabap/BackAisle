@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.12] - 2026-09-18
+
+- Apply/backup: do not run SQLite `PRAGMA wal_checkpoint(TRUNCATE)` against SQL Server (ODBC 156)
+
 ## [0.5.11] - 2026-09-18
 
 - PHP Check uses Windows native CA store (CURLSSLOPT_NATIVE_CA). OpenSSL does not see OS roots on this host; that was HTTP 0 / issuer certificate (20).
