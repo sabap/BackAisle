@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.26] - 2026-09-18
+
+- SNMPv3 slot parse: do not treat the 3 in snmpv3 as the slot index. Empty slots get cloned key names from an occupied slot.
+
 ## [0.5.25] - 2026-09-18
 
 - SNMPv3 card write uses profile/web login or factory cyber/cyber (no KeyError UPS_WEB_USER). One UPS failure does not leave the rest queued.
