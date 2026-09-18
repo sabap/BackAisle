@@ -838,10 +838,10 @@ function page_admin(PDO $db, array $user): void {
     </div>
     <div class="card" id="updates">
       <h3>Updates <span class="muted">v<?= h(ba_version()) ?></span></h3>
-      <p class="muted">Same flow as ColdAisle: Check for updates, then Update. Writes a full
-        <code>backaisle-site_…</code> package and an application-files zip, overlays the release, keeps
-        <code>config.php</code> / SQL / php.ini. No GitHub token. If GitHub is blocked, the check and
-        download use jsDelivr.</p>
+      <p class="muted">Same flow as ColdAisle: Check for updates, then Update. If GitHub is blocked,
+        jsDelivr is used. If the PHP curl extension is off, Check uses Windows curl.exe (same as the
+        overlay). Keep <code>extension=curl</code> and <code>extension=openssl</code> in the site
+        <code>php.ini</code> (FastCGI <code>-c</code>), not only the global CLI ini.</p>
       <?php if ($updStatus): ?>
         <?php if (!empty($updStatus['update_available'])): ?>
           <div class="flash info">Update available: v<?= h((string)$updStatus['latest']) ?> (you have v<?= h((string)$updStatus['current']) ?>)

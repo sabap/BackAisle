@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.10] - 2026-09-18
+
+- Check/Apply fall back to `curl.exe --ssl-no-revoke` when the PHP curl extension is missing or fails (IIS php.ini vs CLI php.ini)
+
 ## [0.5.9] - 2026-09-18
 
 - Check for updates takes the newest of GitHub releases, GitHub tags, jsDelivr catalog, VERSION, and LATEST. It no longer stops at the first source (a stale GitHub latest or lagging catalog hid 0.5.8).

@@ -916,6 +916,28 @@ class BackAisleUpdate
     /** @param list<array{rel:string,url:string}> $jobs */
     private static function downloadJsDelivrBatch(array $jobs, string $dest): int
     {
+        if (!function_exists('curl_multi_init')) {
+            $n = 0;
+            foreach ($jobs as $job) {
+                try {
+                    $body = self::httpRequest($job['url'], true, true, false, 60);
+                    if ($body === null || $body === '') {
+                        continue;
+                    }
+                    $out = $dest . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $job['rel']);
+                    $parent = dirname($out);
+                    if (!is_dir($parent)) {
+                        @mkdir($parent, 0755, true);
+                    }
+                    if (@file_put_contents($out, $body) !== false) {
+                        $n++;
+                    }
+                } catch (Throwable $e) {
+                    continue;
+                }
+            }
+            return $n;
+        }
         $n = 0;
         $sslVerify = !empty(self::config()['ssl_verify']);
         $ca = self::caBundlePath();
@@ -1012,9 +1034,26 @@ class BackAisleUpdate
 
     private static function httpRequest(string $url, bool $binary, bool $allowNotFound, bool $githubApi = true, int $timeoutSec = 0): ?string
     {
-        if (!function_exists('curl_init')) {
-            throw new RuntimeException('PHP cURL extension is required for updates.');
+        $errors = [];
+        if (function_exists('curl_init')) {
+            try {
+                return self::httpRequestPhpCurl($url, $binary, $allowNotFound, $githubApi, $timeoutSec);
+            } catch (Throwable $e) {
+                $errors[] = 'php-curl: ' . $e->getMessage();
+            }
+        } else {
+            $errors[] = 'php-curl: extension not loaded';
         }
+        try {
+            return self::httpRequestCurlExe($url, $binary, $allowNotFound, $githubApi, $timeoutSec);
+        } catch (Throwable $e) {
+            $errors[] = 'curl.exe: ' . $e->getMessage();
+        }
+        throw new RuntimeException(implode('; ', $errors));
+    }
+
+    private static function httpRequestPhpCurl(string $url, bool $binary, bool $allowNotFound, bool $githubApi, int $timeoutSec): ?string
+    {
         $ch = curl_init($url);
         if ($ch === false) {
             throw new RuntimeException('curl_init failed.');
@@ -1049,13 +1088,75 @@ class BackAisleUpdate
         if ($body === false) {
             throw new RuntimeException('HTTP request failed: ' . $err);
         }
+        return self::httpFinish((string)$body, $code, $url, $binary, $allowNotFound);
+    }
+
+    private static function curlExePath(): string
+    {
+        $sys = 'C:\\Windows\\System32\\curl.exe';
+        if (is_file($sys)) {
+            return $sys;
+        }
+        return 'curl.exe';
+    }
+
+    private static function httpRequestCurlExe(string $url, bool $binary, bool $allowNotFound, bool $githubApi, int $timeoutSec): ?string
+    {
+        $timeout = $timeoutSec > 0 ? $timeoutSec : ($binary ? 300 : 45);
+        $tmp = tempnam(sys_get_temp_dir(), 'bahttp');
+        if ($tmp === false) {
+            throw new RuntimeException('tempnam failed.');
+        }
+        $cmd = [
+            self::curlExePath(),
+            '-sS',
+            '-L',
+            '--ssl-no-revoke',
+            '--max-time',
+            (string)$timeout,
+            '-A',
+            'BackAisle-Updater',
+            '-o',
+            $tmp,
+            '-w',
+            '%{http_code}',
+        ];
+        if ($githubApi) {
+            $cmd[] = '-H';
+            $cmd[] = 'Accept: application/vnd.github+json';
+            $cmd[] = '-H';
+            $cmd[] = 'X-GitHub-Api-Version: 2022-11-28';
+        }
+        $cmd[] = $url;
+        $dspec = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+        $p = @proc_open($cmd, $dspec, $pipes, null, null, ['bypass_shell' => true]);
+        if (!is_resource($p)) {
+            @unlink($tmp);
+            throw new RuntimeException('proc_open curl.exe failed.');
+        }
+        fclose($pipes[0]);
+        $stdout = (string)stream_get_contents($pipes[1]);
+        $stderr = (string)stream_get_contents($pipes[2]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        $exit = proc_close($p);
+        $code = (int)preg_replace('/\D/', '', $stdout);
+        $body = is_file($tmp) ? (string)file_get_contents($tmp) : '';
+        @unlink($tmp);
+        if ($exit !== 0 && $code === 0) {
+            throw new RuntimeException(trim($stderr) !== '' ? trim($stderr) : ('curl.exe exit ' . $exit));
+        }
+        return self::httpFinish($body, $code, $url, $binary, $allowNotFound);
+    }
+
+    private static function httpFinish(string $body, int $code, string $url, bool $binary, bool $allowNotFound): ?string
+    {
         if ($allowNotFound && $code === 404) {
             return null;
         }
         if ($code < 200 || $code >= 300) {
             throw new RuntimeException('HTTP ' . $code . ' from ' . $url);
         }
-        $body = (string)$body;
         if (!$binary && self::isHtmlPayload($body)) {
             throw new RuntimeException('Received a web page instead of data (proxy).');
         }
