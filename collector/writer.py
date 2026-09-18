@@ -74,7 +74,9 @@ def step(con, target_id: int, seq: int, name: str, status: str, detail: str = ""
 
 
 def web_creds(secrets: dict) -> tuple[str, str]:
-    return secrets["UPS_WEB_USER"], secrets["UPS_WEB_PASS"]
+    user = (secrets.get("UPS_WEB_USER") or secrets.get("UPS_WEB_USERNAME") or "cyber").strip() or "cyber"
+    pw = secrets.get("UPS_WEB_PASS") or secrets.get("UPS_WEB_PASSWORD") or "cyber"
+    return user, pw
 
 
 def snmp_creds(secrets: dict) -> tuple[str, str, str]:
@@ -98,7 +100,9 @@ async def poll_after(ip: str, secrets: dict) -> dict:
 
 
 def pull_config_bytes(ip: str, secrets: dict, web_user: str | None = None, web_pass: str | None = None) -> tuple[bytes, str]:
-    user, pw = web_user or secrets["UPS_WEB_USER"], web_pass or secrets["UPS_WEB_PASS"]
+    du, dp = web_creds(secrets)
+    user = (web_user or "").strip() or du
+    pw = dp if web_pass in (None, "") else web_pass
     # 1) Web Save
     try:
         sess = RmcardSession(ip, user, pw)  # web Save
@@ -412,8 +416,9 @@ def run_push_snmpv3(con, job: dict, secrets: dict) -> None:
     acl_mode = (payload.get("acl_mode") or "keep").strip().lower()
     nms_ip = (payload.get("nms_ip") or "").strip()
     simulate = bool(job["simulate"])
-    wu = sec.get("web_user") or secrets.get("UPS_WEB_USER") or ""
-    wp = sec.get("web_pass") or secrets.get("UPS_WEB_PASS") or ""
+    du, dp = web_creds(secrets)
+    wu = (str(prof["web_user"] or "").strip() or sec.get("web_user") or du)
+    wp = sec.get("web_pass") or dp
     targets = con.execute("SELECT * FROM write_job_targets WHERE job_id=? ORDER BY id", (job["id"],)).fetchall()
     for t in targets:
         tid = t["id"]
