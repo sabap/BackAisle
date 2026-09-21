@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.35] - 2026-09-21
+
+- Fleet config and SNMPv3 writes run several cards at once (default 4, `WRITE_WORKERS`, max 8). One card is never written by two workers. Transient login/connect/SCP/FTP failures retry (default 2 extra tries, `WRITE_RETRIES`). Firmware stays one card at a time.
+
 ## [0.5.34] - 2026-09-21
 
 - Job pull step records `writer=VERSION` so an old in-memory writer is obvious. In-app Update sets `restart_writer.flag`; watchdog recycles writer.py when the file is newer than the process. `scripts/Restart-BackAisleWriter.ps1` copies collector files from jsDelivr and restarts the task.

@@ -4,8 +4,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import queue
 import re
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -59,12 +61,155 @@ def job_is_simulate(job: dict) -> bool:
     return job_truthy(job, "simulate")
 
 
+_log_lock = threading.Lock()
+
+
 def log(msg: str) -> None:
     LOG.parent.mkdir(parents=True, exist_ok=True)
     line = f"{now()}Z {msg}"
     print(line, flush=True)
-    with LOG.open("a", encoding="utf-8") as f:
-        f.write(line + "\n")
+    with _log_lock:
+        with LOG.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+
+
+def _secret_int(secrets: dict, key: str, default: int, lo: int, hi: int) -> int:
+    raw = (secrets.get(key) or "").strip()
+    if not raw:
+        return default
+    try:
+        n = int(raw)
+    except ValueError:
+        return default
+    return max(lo, min(n, hi))
+
+
+def write_workers(secrets: dict) -> int:
+    """How many different UPS cards to write at once. Never two writers on one card."""
+    return _secret_int(secrets, "WRITE_WORKERS", 4, 1, 8)
+
+
+def write_retries(secrets: dict) -> int:
+    """Extra attempts after a transient web/SCP/FTP failure. 0 disables retries."""
+    return _secret_int(secrets, "WRITE_RETRIES", 2, 0, 5)
+
+
+def is_retryable(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    hard = (
+        "all 4 snmpv3",
+        "refusing to overwrite",
+        "passphrase",
+        "16-31",
+        "not an rmcard",
+        "profile missing",
+        "allowmultiwrite",
+        "snmp_profile_id",
+        "could not find snmpv3 username",
+        "template missing",
+        "firmware",
+    )
+    if any(h in msg for h in hard):
+        return False
+    soft = (
+        "10061", "10060", "10054", "timed out", "timeout", "connection refused",
+        "connection reset", "connection aborted", "remotedisconnected", "urlerror",
+        "error.html", "currently logged", "already logged", "another user",
+        "web login failed", "did not come back", "winerror", "broken pipe",
+        "temporarily", "scp exit", "ftp", "connection ended", "remote end closed",
+    )
+    return any(s in msg for s in soft)
+
+
+def _as_dict(row) -> dict:
+    if isinstance(row, dict):
+        return dict(row)
+    return {k: row[k] for k in row.keys()}
+
+
+def run_targets_parallel(job: dict, secrets: dict, targets, fn) -> None:
+    """Run fn(con, target) on several cards at once. fn raises on failure."""
+    items = [_as_dict(t) for t in targets]
+    if not items:
+        return
+    n = min(write_workers(secrets), len(items))
+    retries = write_retries(secrets)
+    stop = threading.Event()
+    work: queue.Queue = queue.Queue()
+    for t in items:
+        work.put(t)
+    errors: list[str] = []
+    err_lock = threading.Lock()
+    log(f"job {job.get('id')} parallel workers={n} targets={len(items)} retries={retries}")
+
+    def worker() -> None:
+        con = connect()
+        try:
+            while not stop.is_set():
+                try:
+                    t = work.get_nowait()
+                except queue.Empty:
+                    return
+                try:
+                    _run_target_attempts(con, job, secrets, t, fn, retries, stop)
+                except Exception as e:
+                    with err_lock:
+                        errors.append(f"{t.get('ip')}: {e}")
+                    if job_truthy(job, "stop_on_error"):
+                        stop.set()
+                finally:
+                    work.task_done()
+        finally:
+            try:
+                con.close()
+            except Exception:
+                pass
+
+    threads = [threading.Thread(target=worker, name=f"ba-write-{i}", daemon=False) for i in range(n)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    if errors and job_truthy(job, "stop_on_error"):
+        raise RuntimeError("; ".join(errors)[:500])
+
+
+def _run_target_attempts(con, job: dict, secrets: dict, t: dict, fn, retries: int, stop: threading.Event) -> None:
+    attempts = 1 + retries
+    last: Exception | None = None
+    tid = int(t["id"])
+    for attempt in range(1, attempts + 1):
+        if stop.is_set() and attempt == 1:
+            return
+        if attempt == 1:
+            con.execute(
+                "UPDATE write_job_targets SET status='running', started_at=?, error=? WHERE id=?",
+                (now(), None, tid),
+            )
+        else:
+            step(con, tid, 80 + attempt, "retry", "running", f"attempt {attempt}/{attempts} after: {last}"[:2000])
+            time.sleep(min(45, 15 * (attempt - 1)))
+            con.execute(
+                "UPDATE write_job_targets SET status='running', error=? WHERE id=?",
+                (None, tid),
+            )
+        con.commit()
+        try:
+            fn(con, t)
+            return
+        except Exception as e:
+            last = e
+            log(f"{t.get('ip')} attempt {attempt}/{attempts} failed: {e}")
+            if attempt < attempts and is_retryable(e) and not stop.is_set():
+                step(con, tid, 80 + attempt, "retry", "ok", f"will retry: {e}"[:2000])
+                continue
+            step(con, tid, 99, "error", "fail", str(e))
+            con.execute(
+                "UPDATE write_job_targets SET status='fail', ended_at=?, error=? WHERE id=?",
+                (now(), str(e)[:500], tid),
+            )
+            con.commit()
+            raise
 
 
 def allow_multi(secrets: dict) -> bool:
@@ -202,53 +347,44 @@ def run_push_config(con, job: dict, secrets: dict) -> None:
     simulate = job_is_simulate(job)
     targets = con.execute("SELECT * FROM write_job_targets WHERE job_id=? ORDER BY id", (job["id"],)).fetchall()
     user, pw = web_creds(secrets)
-    for t in targets:
+
+    def one(con, t) -> None:
         assert_lab_only(t["ip"], secrets)
         tid = t["id"]
-        con.execute("UPDATE write_job_targets SET status='running', started_at=? WHERE id=?", (now(), tid))
+        ident_map = (payload.get("identity_maps") or {}).get(str(t["device_id"])) or {}
+        rewritten = doc.rewrite(overlays, strip_identity=True, identity_map=ident_map)
+        fname = datetime.now().strftime("%Y_%m_%d_%H%M.txt")
+        tmp = CONFIG_DIR / f"push_{t['ip'].replace('.', '_')}_{fname}"
+        tmp.write_text(rewritten, encoding="latin1")
+        step(con, tid, 1, "rewrite", "ok", f"overlays={list(overlays)} identity={list(ident_map)}")
+        step(con, tid, 2, "restore", "running", fname)
+        if simulate:
+            detail = f"SIMULATE scp {fname} {user}@{t['ip']}:"
+        else:
+            detail = scp_put_config(t["ip"], user, pw, tmp, fname, simulate=False)
+        step(con, tid, 2, "restore", "ok", detail)
+        step(con, tid, 3, "wait_reboot", "running", "")
+        if not simulate:
+            time.sleep(8)
+            wait_ftp_alive(t["ip"], user, pw, timeout_s=180, simulate=False)
+        step(con, tid, 3, "wait_reboot", "ok", "")
+        step(con, tid, 4, "snmp_poll", "running", "")
+        sample = asyncio.run(poll_after(t["ip"], secrets))
+        step(con, tid, 4, "snmp_poll", "ok", json.dumps({
+            "model": sample.get("model"),
+            "firmware": sample.get("firmware"),
+            "agent_firmware": sample.get("agent_firmware"),
+            "snmp_name": sample.get("snmp_name"),
+            "sysLocation": sample.get("sysLocation"),
+        }))
+        con.execute(
+            """UPDATE write_job_targets SET status='ok', ended_at=?, post_model=?, post_firmware=?, post_name=?, post_location=?
+               WHERE id=?""",
+            (now(), sample.get("model"), sample.get("firmware"), sample.get("snmp_name"), sample.get("sysLocation"), tid),
+        )
         con.commit()
-        try:
-            ident_map = (payload.get("identity_maps") or {}).get(str(t["device_id"])) or {}
-            rewritten = doc.rewrite(overlays, strip_identity=True, identity_map=ident_map)
-            fname = datetime.now().strftime("%Y_%m_%d_%H%M.txt")
-            tmp = CONFIG_DIR / f"push_{t['ip'].replace('.', '_')}_{fname}"
-            tmp.write_text(rewritten, encoding="latin1")
-            step(con, tid, 1, "rewrite", "ok", f"overlays={list(overlays)} identity={list(ident_map)}")
-            step(con, tid, 2, "restore", "running", fname)
-            if simulate:
-                detail = f"SIMULATE scp {fname} {user}@{t['ip']}:"
-            else:
-                detail = scp_put_config(t["ip"], user, pw, tmp, fname, simulate=False)
-            step(con, tid, 2, "restore", "ok", detail)
-            step(con, tid, 3, "wait_reboot", "running", "")
-            if not simulate:
-                time.sleep(8)
-                wait_ftp_alive(t["ip"], user, pw, timeout_s=180, simulate=False)
-            step(con, tid, 3, "wait_reboot", "ok", "")
-            step(con, tid, 4, "snmp_poll", "running", "")
-            sample = asyncio.run(poll_after(t["ip"], secrets))
-            step(con, tid, 4, "snmp_poll", "ok", json.dumps({
-                "model": sample.get("model"),
-                "firmware": sample.get("firmware"),
-                "agent_firmware": sample.get("agent_firmware"),
-                "snmp_name": sample.get("snmp_name"),
-                "sysLocation": sample.get("sysLocation"),
-            }))
-            con.execute(
-                """UPDATE write_job_targets SET status='ok', ended_at=?, post_model=?, post_firmware=?, post_name=?, post_location=?
-                   WHERE id=?""",
-                (now(), sample.get("model"), sample.get("firmware"), sample.get("snmp_name"), sample.get("sysLocation"), tid),
-            )
-            con.commit()
-        except Exception as e:
-            step(con, tid, 99, "error", "fail", str(e))
-            con.execute(
-                "UPDATE write_job_targets SET status='fail', ended_at=?, error=? WHERE id=?",
-                (now(), str(e)[:500], tid),
-            )
-            con.commit()
-            if job_truthy(job, "stop_on_error"):
-                raise
+
+    run_targets_parallel(job, secrets, targets, one)
 
 
 def run_mass_edit(con, job: dict, secrets: dict) -> None:
@@ -451,10 +587,9 @@ def run_push_snmpv3(con, job: dict, secrets: dict) -> None:
     wu = (str(prof["web_user"] or "").strip() or sec.get("web_user") or du)
     wp = sec.get("web_pass") or dp
     targets = con.execute("SELECT * FROM write_job_targets WHERE job_id=? ORDER BY id", (job["id"],)).fetchall()
-    for t in targets:
+
+    def one(con, t) -> None:
         tid = t["id"]
-        con.execute("UPDATE write_job_targets SET status='running', started_at=? WHERE id=?", (now(), tid))
-        con.commit()
         sess = None
         try:
             step(con, tid, 1, "pull_config", "running", f"{t['ip']} writer={writer_version()}")
@@ -556,21 +691,14 @@ def run_push_snmpv3(con, job: dict, secrets: dict) -> None:
                 (now(), tid),
             )
             con.commit()
-        except Exception as e:
-            step(con, tid, 99, "error", "fail", str(e))
-            con.execute(
-                "UPDATE write_job_targets SET status='fail', ended_at=?, error=? WHERE id=?",
-                (now(), str(e)[:500], tid),
-            )
-            con.commit()
-            if job_truthy(job, "stop_on_error"):
-                raise
         finally:
             if sess is not None:
                 try:
                     sess.logout()
                 except Exception:
                     pass
+
+    run_targets_parallel(job, secrets, targets, one)
 
 
 def process_job(job_id: int) -> None:
