@@ -80,6 +80,36 @@ function ba_create_job(PDO $db, string $kind, array $deviceIds, array $extra, st
     return $jid;
 }
 
+/** Stop a queued or running job. Units already ok or fail are left as they are. */
+function ba_cancel_write_job(PDO $db, int $id, string $by): array
+{
+    $st = $db->prepare('SELECT id, kind, status FROM write_jobs WHERE id=?');
+    $st->execute([$id]);
+    $job = $st->fetch();
+    if (!$job) {
+        return ['ok' => false, 'message' => 'Job not found'];
+    }
+    $status = (string)$job['status'];
+    if (!in_array($status, ['queued', 'running'], true)) {
+        return ['ok' => false, 'message' => 'Job '.$id.' is '.$status.' (not running)'];
+    }
+    $now = gmdate('Y-m-d H:i:s');
+    $note = 'stopped by '.$by;
+    $db->prepare("UPDATE write_job_targets SET status='cancelled', ended_at=?, error=? WHERE job_id=? AND status IN ('queued','running')")
+        ->execute([$now, $note, $id]);
+    $db->prepare("UPDATE write_jobs SET status='cancelled', ended_at=?, error=? WHERE id=? AND status IN ('queued','running')")
+        ->execute([$now, $note, $id]);
+    $dir = BA_ROOT . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'tmp';
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0775, true);
+    }
+    @file_put_contents($dir . DIRECTORY_SEPARATOR . 'cancel_job_' . $id . '.flag', $now);
+    if (function_exists('ba_audit')) {
+        ba_audit($db, 'write_job_cancel', (string)$job['kind'], (string)$id, $note);
+    }
+    return ['ok' => true, 'message' => 'Job '.$id.' cancelled. Units already ok or fail were left unchanged.'];
+}
+
 function page_fleet_writes(PDO $db, array $user): void {
     ba_require_admin();
     $msg = '';
@@ -292,8 +322,18 @@ function page_template_view(PDO $db): void {
 }
 
 function page_job_view(PDO $db): void {
-    ba_require_admin();
-    $id = (int)($_GET['id'] ?? 0);
+    $user = ba_require_admin();
+    $id = (int)($_GET['id'] ?? $_POST['id'] ?? 0);
+    $cancelMsg = '';
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && (string)($_POST['act'] ?? '') === 'cancel') {
+        if (trim((string)($_POST['confirm'] ?? '')) !== 'STOP JOB') {
+            $cancelMsg = 'Type STOP JOB to cancel the remaining units.';
+        } else {
+            $r = ba_cancel_write_job($db, $id, (string)($user['username'] ?? 'admin'));
+            header('Location: ' . ba_href('/writes/job?id=' . $id . '&note=' . rawurlencode((string)$r['message'])));
+            exit;
+        }
+    }
     $j = $db->prepare('SELECT * FROM write_jobs WHERE id=?');
     $j->execute([$id]);
     $job = $j->fetch();
@@ -308,8 +348,20 @@ function page_job_view(PDO $db): void {
     }
     echo '<p><a href="'.h(ba_href('/writes')).'">All jobs</a> · <a href="'.h(ba_href('/snmp')).'">SNMP page</a></p>';
     echo '<h1>Job '.$id.' · '.h($job['kind']).' · '.h($job['status']).($job['simulate']?' · simulate':'').'</h1>';
+    if (!empty($_GET['note'])) {
+        echo '<div class="flash">'.h((string)$_GET['note']).'</div>';
+    }
+    if ($cancelMsg !== '') {
+        echo '<div class="flash">'.h($cancelMsg).'</div>';
+    }
     if ($live) {
         echo '<p class="muted">Writer is still working. This page reloads every 4 seconds. There is no extra toast when it finishes — status here is the result (ok / fail per UPS, slot choice in the step detail).</p>';
+        echo '<form method="post" action="'.h(ba_href('/writes/job?id='.$id)).'" class="card">';
+        echo '<input type="hidden" name="act" value="cancel"><input type="hidden" name="id" value="'.$id.'">';
+        echo '<label>Stop remaining units</label> <input name="confirm" placeholder="STOP JOB" autocomplete="off"> ';
+        echo '<button type="submit">Stop job</button>';
+        echo '<p class="muted">Units already ok or fail stay that way. Queued units are cancelled. A card already restoring is left to finish on writer 0.5.36+. An older writer keeps going until the BackAisleWriter task is stopped.</p>';
+        echo '</form>';
     } else {
         echo '<p class="muted">Job finished. Per-UPS result and SNMPv3 slot notes are in the tables below.</p>';
     }
