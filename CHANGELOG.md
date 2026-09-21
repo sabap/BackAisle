@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.36] - 2026-09-21
+
+- Job page can cancel a queued or running write (type STOP JOB). Remaining queued/running units become cancelled; ok and fail stay. Writer 0.5.36 stops taking new units when the job is cancelled. `scripts/Cancel-StuckWriteJobs.ps1` stops the writer process and marks those jobs cancelled.
+
 ## [0.5.35] - 2026-09-21
 
 - Fleet config and SNMPv3 writes run several cards at once (default 4, `WRITE_WORKERS`, max 8). One card is never written by two workers. Transient login/connect/SCP/FTP failures retry (default 2 extra tries, `WRITE_RETRIES`). Firmware stays one card at a time.
