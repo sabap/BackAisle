@@ -121,6 +121,25 @@ def is_retryable(exc: BaseException) -> bool:
     return any(s in msg for s in soft)
 
 
+def _row_status(row) -> str:
+    if row is None:
+        return ""
+    if isinstance(row, dict):
+        return str(row.get("status") or "")
+    try:
+        return str(row["status"])
+    except Exception:
+        return ""
+
+
+def job_is_cancelled(con, job_id: int) -> bool:
+    flag = ROOT / "storage" / "tmp" / f"cancel_job_{int(job_id)}.flag"
+    if flag.is_file():
+        return True
+    row = con.execute("SELECT status FROM write_jobs WHERE id=?", (int(job_id),)).fetchone()
+    return _row_status(row).strip().lower() in ("cancelled", "canceled", "stopped")
+
+
 def _as_dict(row) -> dict:
     if isinstance(row, dict):
         return dict(row)
@@ -146,6 +165,10 @@ def run_targets_parallel(job: dict, secrets: dict, targets, fn) -> None:
         con = connect()
         try:
             while not stop.is_set():
+                if job_is_cancelled(con, int(job.get("id") or 0)):
+                    stop.set()
+                    log(f"job {job.get('id')} cancelled; workers stopping")
+                    return
                 try:
                     t = work.get_nowait()
                 except queue.Empty:
@@ -180,6 +203,12 @@ def _run_target_attempts(con, job: dict, secrets: dict, t: dict, fn, retries: in
     tid = int(t["id"])
     for attempt in range(1, attempts + 1):
         if stop.is_set() and attempt == 1:
+            return
+        if job_is_cancelled(con, int(job.get("id") or 0)):
+            stop.set()
+            return
+        existing = con.execute("SELECT status FROM write_job_targets WHERE id=?", (tid,)).fetchone()
+        if _row_status(existing).strip().lower() in ("cancelled", "canceled", "ok", "fail"):
             return
         if attempt == 1:
             con.execute(
