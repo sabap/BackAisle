@@ -249,6 +249,7 @@ class BackAisleUpdate
                     try { self::applyPendingReplacements(); } catch (Throwable $e) { }
                 });
             }
+            self::requestWriterRestart();
             $onDisk = self::parseSemver((string)@file_get_contents(BA_ROOT . DIRECTORY_SEPARATOR . 'VERSION'));
             if ($onDisk === null || version_compare($onDisk, $version, '<')) {
                 throw new RuntimeException(
@@ -293,7 +294,7 @@ class BackAisleUpdate
             if (($stats['deferred'] ?? 0) > 0 || $pendingLeft > 0) {
                 $msg .= ', some files finish on the next page load';
             }
-            $msg .= ').';
+            $msg .= '). Writer recycle requested (watchdog or restart BackAisleWriter).';
             return [
                 'ok' => true,
                 'message' => $msg,
@@ -304,6 +305,15 @@ class BackAisleUpdate
         } finally {
             BackAisleBackup::rrmdir($tmpDir);
         }
+    }
+
+    public static function requestWriterRestart(): void
+    {
+        $dir = BA_ROOT . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'tmp';
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0775, true);
+        }
+        @file_put_contents($dir . DIRECTORY_SEPARATOR . 'restart_writer.flag', date('c'));
     }
 
     public static function applyPendingReplacements(): int
