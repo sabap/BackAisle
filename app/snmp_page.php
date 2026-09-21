@@ -351,7 +351,7 @@ function page_snmp_body(PDO $db, array $user): void
         echo '<form method="post" action="/snmp.php" class="card stack" id="snmp-pushv3">';
         echo '<h3>Write SNMPv3 slot on the RMCARD</h3>';
         echo '<input type="hidden" name="act" value="push_snmpv3">';
-        echo '<p class="muted">CyberPower has <strong>4 SNMPv3 slots</strong>. This pulls the live config, then: if this username already exists, that slot is updated; else the first <em>empty</em> slot is used; if all four have other users, the unit is <strong>skipped</strong> (never overwritten). Each slot has one ACL IP/mask. Identity (card IP/hostname) is not changed. Requires the <strong>BackAisleWriter</strong> task. Config/firmware mass writes stay lab-gated; this SNMPv3 slot write does not.</p>';
+        echo '<p class="muted">CyberPower has <strong>4 SNMPv3 slots</strong>. This pulls the live config, then: if this username already exists, that slot is updated; else the first <em>empty</em> slot is used; if all four have other users, the unit is <strong>skipped</strong> (never overwritten). Each slot has one ACL IP/mask. Identity (card IP/hostname) is not changed. Requires the <strong>BackAisleWriter</strong> task. Several cards run at once (default 4, <code>WRITE_WORKERS</code> in secrets.env, max 8). A refused connection or a busy web login is retried (default 2 extra tries, <code>WRITE_RETRIES</code>). Config/firmware mass writes stay lab-gated; this SNMPv3 slot write does not. Firmware stays one card at a time.</p>';
         echo '<label>Profile</label><select name="snmp_profile_id" required><option value="">choose</option>';
         foreach ($profiles as $p) {
             echo '<option value="'.(int)$p['id'].'">'.h((string)$p['name']).'</option>';
