@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.34] - 2026-09-21
+
+- Job pull step records `writer=VERSION` so an old in-memory writer is obvious. In-app Update sets `restart_writer.flag`; watchdog recycles writer.py when the file is newer than the process. `scripts/Restart-BackAisleWriter.ps1` copies collector files from jsDelivr and restarts the task.
+
 ## [0.5.33] - 2026-09-18
 
 - RMCARD allows one web login. SNMPv3 push keeps that session from pull through HTTP restore (no second login on error.html). Logout after the target. Busy-page error tells you to close the UPS browser tab.

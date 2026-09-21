@@ -17,6 +17,13 @@ LOG = ROOT / "logs" / "writer.log"
 PID = ROOT / "logs" / "writer.pid"
 LAB_IP = ""  # set from secrets UPS_HOST in main()
 
+
+def writer_version() -> str:
+    try:
+        return (ROOT / "VERSION").read_text(encoding="utf-8").strip() or "unknown"
+    except Exception:
+        return "unknown"
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from config_file import (  # noqa: E402
     looks_like_rmcard_config,
@@ -450,7 +457,7 @@ def run_push_snmpv3(con, job: dict, secrets: dict) -> None:
         con.commit()
         sess = None
         try:
-            step(con, tid, 1, "pull_config", "running", t["ip"])
+            step(con, tid, 1, "pull_config", "running", f"{t['ip']} writer={writer_version()}")
             sess = RmcardSession(t["ip"], wu, wp)
             try:
                 sess.login()
@@ -625,7 +632,7 @@ def process_job(job_id: int) -> None:
 
 def daemon() -> None:
     PID.write_text(str(__import__("os").getpid()), encoding="utf-8")
-    log("writer starting (poller is separate)")
+    log(f"writer starting version={writer_version()} (poller is separate)")
     init_db()
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     FIRMWARE_DIR.mkdir(parents=True, exist_ok=True)
