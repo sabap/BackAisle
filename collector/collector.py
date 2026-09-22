@@ -32,11 +32,13 @@ HEARTBEAT = ROOT / "logs" / "collector.heartbeat.json"
 STATUS_INTERVAL = 60
 CLIMATE_INTERVAL = 300
 TRAP_PORT = 162
-POLL_TIMEOUT_S = 6.0
-CLIMATE_TIMEOUT_S = 12.0
+# A full enviro fallback is a few seconds. 24 workers keep a 60s cycle for ~150 UPS
+# as long as a typical card finishes in under ~8s. Dead cards still free a slot at SNMP_TIMEOUT_S.
+POLL_TIMEOUT_S = 12.0
+CLIMATE_TIMEOUT_S = 20.0
 SNMP_TIMEOUT_S = 1.0
 WORKER_MIN = 8
-WORKER_MAX = 16
+WORKER_MAX = 24
 
 
 def now() -> str:
