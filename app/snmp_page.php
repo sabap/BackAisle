@@ -134,10 +134,20 @@ function ba_poll_devices_now(array $ids): array
     }
     $run = ba_python_run([$script, '--once', '--ids', implode(',', $ids)], BA_ROOT);
     $blob = trim($run['stderr'] . "\n" . $run['stdout']);
+    $ok = null;
+    $fail = null;
+    if (preg_match('/ok=(\d+)\s+fail=(\d+)/', $blob, $m)) {
+        $ok = (int)$m[1];
+        $fail = (int)$m[2];
+    }
     if ($run['code'] !== 0) {
         throw new RuntimeException('Poll failed: ' . ($blob !== '' ? $blob : ('exit ' . $run['code'])));
     }
-    return ['ids' => $ids, 'output' => $blob, 'code' => $run['code']];
+    if ($fail !== null && $fail > 0 && ($ok === null || $ok === 0)) {
+        $tail = strlen($blob) > 500 ? substr($blob, -500) : $blob;
+        throw new RuntimeException('Poll reached the collector but every device failed (ok=0 fail=' . $fail . '). ' . $tail);
+    }
+    return ['ids' => $ids, 'output' => $blob, 'code' => $run['code'], 'ok' => $ok, 'fail' => $fail];
 }
 
 function page_snmp(PDO $db, array $user): void
@@ -172,6 +182,9 @@ function page_snmp_body(PDO $db, array $user): void
                 $id = (int)($_POST['id'] ?? 0);
                 $r = ba_poll_devices_now([$id]);
                 $msg = 'Polled device #' . $id . '.';
+                if ($r['ok'] !== null) {
+                    $msg .= ' Collector ok=' . (int)$r['ok'] . ' fail=' . (int)$r['fail'] . '.';
+                }
                 ba_audit($db, 'snmp_poll_one', 'device', (string)$id, $r['output']);
             } elseif ($act === 'poll_selected') {
                 $ids = $_POST['ids'] ?? [];
@@ -180,6 +193,9 @@ function page_snmp_body(PDO $db, array $user): void
                 }
                 $r = ba_poll_devices_now($ids);
                 $msg = 'Polled ' . count($r['ids']) . ' selected device(s).';
+                if ($r['ok'] !== null) {
+                    $msg .= ' Collector ok=' . (int)$r['ok'] . ' fail=' . (int)$r['fail'] . '.';
+                }
                 ba_audit($db, 'snmp_poll_selected', 'device', null, json_encode($r['ids']));
             } elseif ($act === 'poll_scheduled') {
                 $ids = [];
@@ -188,6 +204,9 @@ function page_snmp_body(PDO $db, array $user): void
                 }
                 $r = ba_poll_devices_now($ids);
                 $msg = 'Polled ' . count($r['ids']) . ' scheduled UPS.';
+                if ($r['ok'] !== null) {
+                    $msg .= ' Collector ok=' . (int)$r['ok'] . ' fail=' . (int)$r['fail'] . '.';
+                }
                 ba_audit($db, 'snmp_poll_scheduled', 'snmp', null, (string)count($r['ids']));
             } elseif ($act === 'schedule_on') {
                 $id = (int)($_POST['id'] ?? 0);
@@ -285,7 +304,7 @@ function page_snmp_body(PDO $db, array $user): void
             : "WHERE IFNULL(d.enabled,0)=0 AND IFNULL(d.kind,'ups')='ups'";
         $scheduled = $db->query(
             "SELECT d.id, d.ip, d.hostname, d.kind, d.enabled, d.snmp_profile_id, sp.name AS profile_name,
-                    ps.last_success, ps.last_attempt, ps.comm_state, ps.consecutive_failures,
+                    ps.last_success, ps.last_attempt, ps.comm_state, ps.consecutive_failures, ps.last_error,
                     NULL AS capacity_pct, NULL AS temp_f, NULL AS load_pct
              FROM devices d
              LEFT JOIN snmp_profiles sp ON sp.id=d.snmp_profile_id
@@ -417,8 +436,13 @@ function page_snmp_body(PDO $db, array $user): void
             echo '<td><a href="'.h(ba_href('/device?id='.$id)).'">'.h(ba_txt($d['hostname'] ?: $d['ip'], '')).'</a></td>';
             echo '<td>'.h(ba_txt($d['ip'])).'</td><td>'.h(ba_txt($d['kind'], 'ups')).'</td>';
             echo '<td>'.h(ba_txt($d['profile_name'] ?? null)).'</td>';
-            echo '<td>'.h(ba_txt($d['last_success'] ?? null)).'</td>';
-            echo '<td><span class="pill">'.h(ba_txt($d['comm_state'] ?? null)).'</span>';
+            echo '<td>'.h(ba_txt($d['last_success'] ?? null, 'never')).'</td>';
+            $cs = strtolower(trim((string)($d['comm_state'] ?? '')));
+            $pill = $cs === 'ok' ? 'ok' : ($cs === 'down' ? 'down' : ($cs === 'degraded' ? 'warn' : ''));
+            echo '<td><span class="pill '.$pill.'">'.h($cs !== '' ? $cs : 'unknown').'</span>';
+            if ($cs !== 'ok' && !empty($d['last_error'])) {
+                echo '<div class="muted">'.h(substr((string)$d['last_error'], 0, 160)).'</div>';
+            }
             if (($d['capacity_pct'] ?? null) !== null) {
                 echo ' '.h((string)(int)$d['capacity_pct']).'%';
             }

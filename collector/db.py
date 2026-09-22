@@ -427,7 +427,7 @@ class PhpPdoConn:
         return data
 
     def execute(self, sql, params=()):
-        data = self._rpc("query", sql, params)
+        data = self._rpc("query", adapt_sql(sql), params)
         rows = data.get("rows") or []
         return PhpPdoCursor(rows)
 
@@ -633,6 +633,14 @@ def init_db(con=None):
     own = con is None
     con = con or connect()
     if is_sqlsrv():
+        for stmt in (
+            "IF COL_LENGTH('samples','power_w') IS NULL ALTER TABLE samples ADD power_w FLOAT NULL",
+            "IF COL_LENGTH('samples_hourly','power_avg') IS NULL ALTER TABLE samples_hourly ADD power_avg FLOAT NULL",
+        ):
+            try:
+                con.execute(stmt)
+            except Exception:
+                pass
         if own:
             return con
         return con
