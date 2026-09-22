@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.41] - 2026-09-22
+
+- About half the EnviroSensor readings were still missing. A timed-out group request was abandoned, so a slow card never got a temperature-only retry. Temperature, unit, and humidity are read first and retried one OID at a time. Optional name and contact OIDs stay on the 5-minute climate pass and cannot drop a reading already in hand. The collector uses up to 24 workers, which covers about 150 UPS on a 60-second status interval.
+
 ## [0.5.40] - 2026-09-22
 
 - Climate showed one UPS because a CyberPower multi-get that hits an unsupported OID returns `noSuchName` and blank values for the temperature OID in that same request. The collector treated that as success and never read the probe. It now retries each sensor OID on its own. Temperature is requested before the optional name and contact OIDs.

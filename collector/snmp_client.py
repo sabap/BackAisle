@@ -116,13 +116,17 @@ def decode(raw: dict[str, Any]) -> dict[str, Any]:
         "tempF10", "humidity",
     )
     saw_env = any(k in raw for k in env_keys)
-    if not saw_env:
-        # This poll did not ask the sensor. Do not record "absent".
-        sensor_present = None
-    elif (env2_n and env2_n > 0) or envir_name or env2_raw is not None or env2_h is not None:
+    legacy_temp = _int(raw.get("tempF10"))
+    if env2_raw is not None or env2_h is not None or envir_name or (env2_n and env2_n > 0) or legacy_temp not in (None, 0):
         sensor_present = 1
-    else:
+    elif not saw_env:
+        # This poll did not get an answer from the probe. Do not record "absent".
+        sensor_present = None
+    elif env2_n == 0 and env2_raw is None and env2_h is None and not envir_name:
         sensor_present = 0
+    else:
+        # Blank varbinds from a noSuchName group are not a real "no sensor" answer.
+        sensor_present = None
     return {
         "model": _str(raw.get("model")),
         "snmp_name": _str(raw.get("name")) or _str(raw.get("sysName")),
@@ -162,10 +166,12 @@ IDENTITY_KEYS = (
     "timeOnBattery", "replaceIndicator", "outputPower",
 )
 # Tried on every poll, but a timeout here must not fail the UPS reading.
-# Temperature first. A card that rejects an earlier OID with noSuchName never
-# returns the later OIDs in that same request.
-ENV_KEYS = (
+# The reading, by itself. Optional name/contact OIDs are not in this set: a
+# noSuchName or a timeout on those used to blank the temperature for the whole card.
+ENV_READING_KEYS = (
     "envir2TempUnit", "envir2Temp", "envir2Humid",
+)
+ENV_EXTRA_KEYS = (
     "envir2IdentSize", "envir2Name",
     "envirName", "tempF10", "humidity", "envir2Contact1",
 )
@@ -197,28 +203,41 @@ def _snmp_err(err_stat) -> bool:
     return text not in ("0", "noerror")
 
 
-async def _snmp_batches(engine, creds, target, ctx, keys: tuple[str, ...], raw: dict[str, Any]) -> None:
+async def _snmp_one(engine, creds, target, ctx, name: str, raw: dict[str, Any]) -> None:
+    from pysnmp.hlapi.v3arch.asyncio import ObjectType, ObjectIdentity, get_cmd
+    try:
+        e1, e2, _e3, one = await get_cmd(
+            engine, creds, target, ctx, ObjectType(ObjectIdentity(OIDS[name]))
+        )
+    except Exception:
+        return
+    if e1 or _snmp_err(e2) or not one:
+        return
+    raw[name] = one[0][1]
+
+
+async def _snmp_batches(
+    engine, creds, target, ctx, keys: tuple[str, ...], raw: dict[str, Any], *, fallback_singles: bool = False,
+) -> None:
     from pysnmp.hlapi.v3arch.asyncio import ObjectType, ObjectIdentity, get_cmd
     names = list(keys)
     objs = [ObjectType(ObjectIdentity(OIDS[n])) for n in names]
     for i in range(0, len(objs), 4):
         batch_names = names[i:i + 4]
         batch_objs = objs[i:i + 4]
-        err_ind, err_stat, err_idx, var_binds = await get_cmd(
-            engine, creds, target, ctx, *batch_objs
-        )
-        if err_ind:
-            raise RuntimeError(str(err_ind))
-        if _snmp_err(err_stat):
-            # One OID in a multi-get (tooBig / genErr) must not drop the rest of the probe.
-            for name, obj in zip(batch_names, batch_objs):
-                try:
-                    e1, e2, _e3, one = await get_cmd(engine, creds, target, ctx, obj)
-                except Exception:
-                    continue
-                if e1 or _snmp_err(e2) or not one:
-                    continue
-                raw[name] = one[0][1]
+        try:
+            err_ind, err_stat, err_idx, var_binds = await get_cmd(
+                engine, creds, target, ctx, *batch_objs
+            )
+        except Exception:
+            err_ind, err_stat, var_binds = "timeout", None, None
+        if err_ind or _snmp_err(err_stat):
+            if not fallback_singles:
+                raise RuntimeError(str(err_ind or err_stat))
+            # A timed-out or noSuchName group read must not skip temperature.
+            for name in batch_names:
+                if name not in raw:
+                    await _snmp_one(engine, creds, target, ctx, name, raw)
             continue
         if var_binds:
             for name, vb in zip(batch_names, var_binds):
@@ -249,18 +268,25 @@ async def snmp_get(
             privProtocol=usmAesCfb128Protocol,
         )
         target = await UdpTransportTarget.create((host, 161), timeout=timeout, retries=retries)
-        # Sensor GETs are slower than UPS status. A 1s timeout only the nearest card answers.
-        env_timeout = 4.0 if climate else max(timeout, 2.0)
-        env_target = await UdpTransportTarget.create((host, 161), timeout=env_timeout, retries=1)
+        # One retry on the group doubles the wait before we ever ask for temperature alone.
+        env_timeout = 5.0 if climate else 3.0
+        env_target = await UdpTransportTarget.create((host, 161), timeout=env_timeout, retries=0)
         ctx = ContextData()
         raw: dict[str, Any] = {}
         await _snmp_batches(engine, creds, target, ctx, STATUS_KEYS, raw)
         try:
-            await _snmp_batches(engine, creds, env_target, ctx, ENV_KEYS, raw)
+            await _snmp_batches(
+                engine, creds, env_target, ctx, ENV_READING_KEYS, raw, fallback_singles=True,
+            )
         except Exception:
-            # A missing or slow EnviroSensor must not fail the UPS poll.
-            pass
+            for name in ENV_READING_KEYS:
+                if name not in raw:
+                    await _snmp_one(engine, creds, env_target, ctx, name, raw)
         if climate:
+            try:
+                await _snmp_batches(engine, creds, env_target, ctx, ENV_EXTRA_KEYS, raw)
+            except Exception:
+                pass
             try:
                 await _snmp_batches(engine, creds, target, ctx, IDENTITY_KEYS, raw)
             except Exception:
