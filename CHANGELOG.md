@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.40] - 2026-09-22
+
+- Climate showed one UPS because a CyberPower multi-get that hits an unsupported OID returns `noSuchName` and blank values for the temperature OID in that same request. The collector treated that as success and never read the probe. It now retries each sensor OID on its own. Temperature is requested before the optional name and contact OIDs.
+
 ## [0.5.39] - 2026-09-22
 
 - Climate readings were kept for only the fastest UPS. The enviro GET used a 1 second timeout, and the next UPS poll stored a blank sample that hid the last real temperature. Sensor reads now get up to 4 seconds on the climate pass, a failed sensor GET does not erase the last reading, and the climate page shows the latest sample that actually has a temperature.
