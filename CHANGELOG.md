@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.39] - 2026-09-22
+
+- Climate readings were kept for only the fastest UPS. The enviro GET used a 1 second timeout, and the next UPS poll stored a blank sample that hid the last real temperature. Sensor reads now get up to 4 seconds on the climate pass, a failed sensor GET does not erase the last reading, and the climate page shows the latest sample that actually has a temperature.
+
 ## [0.5.38] - 2026-09-22
 
 - Climate is one row per IDF, from the UPS that has the ENVIROSENSOR. Other UPS in that closet are not listed. A probe counts as attached when temperature or humidity is read, not only when the name OID is present. A poll that never reaches the sensor OIDs no longer marks the closet absent. EnviroSensor timeouts do not fail the UPS poll.
