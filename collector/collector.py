@@ -32,8 +32,8 @@ HEARTBEAT = ROOT / "logs" / "collector.heartbeat.json"
 STATUS_INTERVAL = 60
 CLIMATE_INTERVAL = 300
 TRAP_PORT = 162
-POLL_TIMEOUT_S = 3.0
-CLIMATE_TIMEOUT_S = 6.0
+POLL_TIMEOUT_S = 6.0
+CLIMATE_TIMEOUT_S = 12.0
 SNMP_TIMEOUT_S = 1.0
 WORKER_MIN = 8
 WORKER_MAX = 16
@@ -270,15 +270,37 @@ def evaluate(con, device, sample, secrets):
     fire("humidity_low", "warn", f"Humidity {hum}% below {th.get('humidity_low')}", hum is not None and hum < float(th["humidity_low"]))
     expected = device["sensor_expected"]
     present = sample.get("sensor_present")
-    fire("sensor_missing", "warn", "Sensor expected but not attached", expected and not present)
+    # None means this poll did not read the probe. Do not call that "absent".
+    fire("sensor_missing", "warn", "Sensor expected but not attached", expected and present == 0)
     fire("poll_fail", "crit", "unreachable", False)
     for code, msg in new_alerts:
         insert_pending_alert(con, did, code, now())
 
 
+def _carry_climate(con, device_id: int, sample: dict) -> dict:
+    """A later UPS poll that missed the sensor must not erase the last real temp/humidity."""
+    if sample.get("sensor_present") is not None or sample.get("temp_f") is not None:
+        return sample
+    prev = con.execute(
+        """SELECT temp_f, humidity_pct, sensor_present FROM samples
+           WHERE device_id=? AND temp_f IS NOT NULL ORDER BY ts DESC LIMIT 1""",
+        (device_id,),
+    ).fetchone()
+    if not prev:
+        return sample
+    sample = dict(sample)
+    sample["temp_f"] = prev["temp_f"] if isinstance(prev, dict) else prev[0]
+    sample["humidity_pct"] = prev["humidity_pct"] if isinstance(prev, dict) else prev[1]
+    carried = prev["sensor_present"] if isinstance(prev, dict) else prev[2]
+    if carried is not None:
+        sample["sensor_present"] = carried
+    return sample
+
+
 def store_sample(con, device_id, sample, va_rating=2000):
     device_id = _db_int(device_id)
     ts = now()
+    sample = _carry_climate(con, device_id, sample)
     # Record the success even if the sample row insert fails (missing column, etc.).
     upsert_poll_state_ok(con, device_id, ts)
     load = sample.get("load_pct")

@@ -182,18 +182,36 @@ def close_engine(engine) -> None:
         pass
 
 
+def _snmp_err(err_stat) -> bool:
+    if not err_stat:
+        return False
+    text = str(err_stat).strip().lower()
+    return text not in ("0", "noerror", "nosuchname")
+
+
 async def _snmp_batches(engine, creds, target, ctx, keys: tuple[str, ...], raw: dict[str, Any]) -> None:
     from pysnmp.hlapi.v3arch.asyncio import ObjectType, ObjectIdentity, get_cmd
     names = list(keys)
     objs = [ObjectType(ObjectIdentity(OIDS[n])) for n in names]
-    for i in range(0, len(objs), 8):
-        batch_names = names[i:i + 8]
-        batch_objs = objs[i:i + 8]
+    for i in range(0, len(objs), 4):
+        batch_names = names[i:i + 4]
+        batch_objs = objs[i:i + 4]
         err_ind, err_stat, err_idx, var_binds = await get_cmd(
             engine, creds, target, ctx, *batch_objs
         )
         if err_ind:
             raise RuntimeError(str(err_ind))
+        if _snmp_err(err_stat):
+            # One OID in a multi-get (tooBig / genErr) must not drop the rest of the probe.
+            for name, obj in zip(batch_names, batch_objs):
+                try:
+                    e1, e2, _e3, one = await get_cmd(engine, creds, target, ctx, obj)
+                except Exception:
+                    continue
+                if e1 or _snmp_err(e2) or not one:
+                    continue
+                raw[name] = one[0][1]
+            continue
         if var_binds:
             for name, vb in zip(batch_names, var_binds):
                 raw[name] = vb[1]
@@ -223,11 +241,14 @@ async def snmp_get(
             privProtocol=usmAesCfb128Protocol,
         )
         target = await UdpTransportTarget.create((host, 161), timeout=timeout, retries=retries)
+        # Sensor GETs are slower than UPS status. A 1s timeout only the nearest card answers.
+        env_timeout = 4.0 if climate else max(timeout, 2.0)
+        env_target = await UdpTransportTarget.create((host, 161), timeout=env_timeout, retries=1)
         ctx = ContextData()
         raw: dict[str, Any] = {}
         await _snmp_batches(engine, creds, target, ctx, STATUS_KEYS, raw)
         try:
-            await _snmp_batches(engine, creds, target, ctx, ENV_KEYS, raw)
+            await _snmp_batches(engine, creds, env_target, ctx, ENV_KEYS, raw)
         except Exception:
             # A missing or slow EnviroSensor must not fail the UPS poll.
             pass

@@ -6,12 +6,16 @@ function ba_latest_join(): string {
 SELECT d.*, p.comm_state, p.last_success, p.last_attempt, p.consecutive_failures, p.last_error, p.last_trap,
       s.output_status, s.battery_status, s.capacity_pct, s.runtime_min, s.load_pct, s.input_voltage, s.output_voltage,
       s.temp_f, s.humidity_pct, s.on_battery, s.sensor_present AS sample_sensor, s.ts AS sample_ts, s.power_w,
+      c.temp_f AS climate_temp, c.humidity_pct AS climate_hum, c.sensor_present AS climate_sensor,
       g.name AS group_name, g.id AS gid
       FROM devices d
       LEFT JOIN groups g ON g.id = d.group_id
       LEFT JOIN poll_state p ON p.device_id = d.id
       LEFT JOIN samples s ON s.id = (
         SELECT id FROM samples WHERE device_id = d.id ORDER BY ts DESC LIMIT 1
+      )
+      LEFT JOIN samples c ON c.id = (
+        SELECT id FROM samples WHERE device_id = d.id AND temp_f IS NOT NULL ORDER BY ts DESC LIMIT 1
       )
 SQL;
 }
@@ -328,9 +332,31 @@ function page_fleet(PDO $db): void {
     ba_layout_end();
 }
 
+function ba_climate_temp(array $r)
+{
+    if (array_key_exists('climate_temp', $r) && $r['climate_temp'] !== null && $r['climate_temp'] !== '') {
+        return $r['climate_temp'];
+    }
+    return $r['temp_f'] ?? null;
+}
+
+function ba_climate_hum(array $r)
+{
+    if (array_key_exists('climate_hum', $r) && $r['climate_hum'] !== null && $r['climate_hum'] !== '') {
+        return $r['climate_hum'];
+    }
+    return $r['humidity_pct'] ?? null;
+}
+
 function ba_climate_sensor_state(array $r): string
 {
+    if (ba_climate_temp($r) !== null && ba_climate_temp($r) !== '') {
+        return 'present';
+    }
     $pres = $r['sensor_present'] ?? null;
+    if ($pres === null || $pres === '') {
+        $pres = $r['climate_sensor'] ?? null;
+    }
     if ($pres === null || $pres === '') {
         $pres = $r['sample_sensor'] ?? null;
     }
@@ -369,10 +395,10 @@ function ba_climate_closets(array $rows): array
             if ($state === 'present') {
                 $score += 4;
             }
-            if ($r['temp_f'] !== null && $r['temp_f'] !== '') {
+            if (ba_climate_temp($r) !== null && ba_climate_temp($r) !== '') {
                 $score += 2;
             }
-            if ($r['humidity_pct'] !== null && $r['humidity_pct'] !== '') {
+            if (ba_climate_hum($r) !== null && ba_climate_hum($r) !== '') {
                 $score += 1;
             }
             if ($score > $bestScore) {
@@ -406,13 +432,15 @@ function page_climate(PDO $db): void {
     foreach ($closets as $c) {
         $r = $c['row'];
         $state = ba_climate_sensor_state($r);
-        $showReading = $state === 'present' || ($r['temp_f'] !== null && $r['temp_f'] !== '');
+        $temp = ba_climate_temp($r);
+        $hum = ba_climate_hum($r);
+        $showReading = $state === 'present' || ($temp !== null && $temp !== '');
         echo '<tr class="'.h(ba_worst($r)).'">';
         echo '<td><a href="/device.php?id='.(int)$r['id'].'">'.h(trim((string)$r['building'].' / '.$r['idf_closet'], ' /')).'</a></td>';
         if ($showReading) {
             echo '<td>attached</td>';
-            echo '<td>'.($r['temp_f'] === null || $r['temp_f'] === '' ? '<span class="muted">no reading</span>' : h(ba_fmt($r['temp_f'], '°F'))).'</td>';
-            echo '<td>'.($r['humidity_pct'] === null || $r['humidity_pct'] === '' ? '<span class="muted">no reading</span>' : h(ba_fmt($r['humidity_pct'], '%', 0))).'</td>';
+            echo '<td>'.($temp === null || $temp === '' ? '<span class="muted">no reading</span>' : h(ba_fmt($temp, '°F'))).'</td>';
+            echo '<td>'.($hum === null || $hum === '' ? '<span class="muted">no reading</span>' : h(ba_fmt($hum, '%', 0))).'</td>';
         } elseif (!$c['expected']) {
             echo '<td class="muted">not expected</td><td>—</td><td>—</td>';
         } elseif (!$c['known']) {
@@ -629,10 +657,11 @@ function page_device(PDO $db, array $user): void {
       <div class="kpi"><span>Temp</span><b><?php
         $presRaw = $r['sensor_present'] ?? $r['sample_sensor'] ?? null;
         $pres = ($presRaw === null || $presRaw === '') ? null : (int)$presRaw;
-        if ($pres === 1 && ($r['temp_f'] === null || $r['temp_f'] === '')) echo 'n/a';
+        $tempShow = (isset($r['climate_temp']) && $r['climate_temp'] !== null && $r['climate_temp'] !== '') ? $r['climate_temp'] : ($r['temp_f'] ?? null);
+        if ($pres === 1 && ($tempShow === null || $tempShow === '')) echo 'n/a';
         elseif ($pres === 0 && $r['sensor_expected']) echo 'absent';
         elseif ($pres === null && $r['sensor_expected']) echo '—';
-        else echo h(ba_fmt($r['temp_f']??null,'°F'));
+        else echo h(ba_fmt($tempShow,'°F'));
       ?></b></div>
     </div>
     <p class="muted">Closet <?= h($r['site'].' / '.$r['building'].' / '.$r['idf_closet']) ?>
