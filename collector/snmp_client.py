@@ -162,8 +162,11 @@ IDENTITY_KEYS = (
     "timeOnBattery", "replaceIndicator", "outputPower",
 )
 # Tried on every poll, but a timeout here must not fail the UPS reading.
+# Temperature first. A card that rejects an earlier OID with noSuchName never
+# returns the later OIDs in that same request.
 ENV_KEYS = (
-    "envir2IdentSize", "envir2Name", "envir2TempUnit", "envir2Temp", "envir2Humid",
+    "envir2TempUnit", "envir2Temp", "envir2Humid",
+    "envir2IdentSize", "envir2Name",
     "envirName", "tempF10", "humidity", "envir2Contact1",
 )
 
@@ -183,10 +186,15 @@ def close_engine(engine) -> None:
 
 
 def _snmp_err(err_stat) -> bool:
+    """noSuchName aborts a multi-get at the first OID that card does not have.
+
+    CyberPower does this instead of returning noSuchObject for the rest of the
+    request, so a later temperature OID is never delivered. That is not success.
+    """
     if not err_stat:
         return False
     text = str(err_stat).strip().lower()
-    return text not in ("0", "noerror", "nosuchname")
+    return text not in ("0", "noerror")
 
 
 async def _snmp_batches(engine, creds, target, ctx, keys: tuple[str, ...], raw: dict[str, Any]) -> None:
