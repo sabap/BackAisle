@@ -279,8 +279,21 @@ def evaluate(con, device, sample, secrets):
         insert_pending_alert(con, did, code, now())
 
 
+def _blank_false_zero(sample: dict) -> dict:
+    """A probe that did not answer is not 0°F or 0% RH."""
+    sample = dict(sample)
+    if sample.get("sensor_present") == 1:
+        return sample
+    if sample.get("temp_f") in (0, 0.0):
+        sample["temp_f"] = None
+    if sample.get("humidity_pct") in (0, 0.0):
+        sample["humidity_pct"] = None
+    return sample
+
+
 def _carry_climate(con, device_id: int, sample: dict) -> dict:
     """A later UPS poll that missed the sensor must not erase the last real temp/humidity."""
+    sample = _blank_false_zero(sample)
     if sample.get("sensor_present") is not None or sample.get("temp_f") is not None:
         return sample
     prev = con.execute(
@@ -441,7 +454,7 @@ def _housekeep(con, secrets) -> None:
         con.execute(
             """INSERT INTO samples_hourly (device_id, hour_ts, capacity_avg, runtime_avg, load_avg, input_voltage_avg, temp_f_avg, humidity_avg, power_avg)
                SELECT device_id, CONVERT(varchar(13), ts, 120) + ':00:00',
-                      AVG(capacity_pct), AVG(runtime_min), AVG(load_pct), AVG(input_voltage), AVG(temp_f), AVG(humidity_pct), AVG(power_w)
+                      AVG(capacity_pct), AVG(runtime_min), AVG(load_pct), AVG(input_voltage), AVG(NULLIF(temp_f, 0)), AVG(NULLIF(humidity_pct, 0)), AVG(power_w)
                FROM samples WHERE ts >= DATEADD(hour, -2, SYSUTCDATETIME())
                GROUP BY device_id, CONVERT(varchar(13), ts, 120) + ':00:00'"""
         )
@@ -450,7 +463,7 @@ def _housekeep(con, secrets) -> None:
         con.execute(
             """INSERT OR REPLACE INTO samples_hourly (device_id, hour_ts, capacity_avg, runtime_avg, load_avg, input_voltage_avg, temp_f_avg, humidity_avg, power_avg)
                SELECT device_id, strftime('%Y-%m-%d %H:00:00', ts),
-                      AVG(capacity_pct), AVG(runtime_min), AVG(load_pct), AVG(input_voltage), AVG(temp_f), AVG(humidity_pct), AVG(power_w)
+                      AVG(capacity_pct), AVG(runtime_min), AVG(load_pct), AVG(input_voltage), AVG(NULLIF(temp_f, 0)), AVG(NULLIF(humidity_pct, 0)), AVG(power_w)
                FROM samples WHERE ts >= datetime('now','-2 hours')
                GROUP BY device_id, strftime('%Y-%m-%d %H:00:00', ts)"""
         )
