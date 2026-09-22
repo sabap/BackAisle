@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.38] - 2026-09-22
+
+- Climate is one row per IDF, from the UPS that has the ENVIROSENSOR. Other UPS in that closet are not listed. A probe counts as attached when temperature or humidity is read, not only when the name OID is present. A poll that never reaches the sensor OIDs no longer marks the closet absent. EnviroSensor timeouts do not fail the UPS poll.
+
 ## [0.5.37] - 2026-09-22
 
 - SNMP Last OK / State: SQL Server was returning `is_simulated` and device ids as the text `"0"`. Python treated that as simulated, the fake poll crashed, and every unit stayed Degraded with no Last OK. Numbers are coerced, a real success is stored before the sample insert, and the poll toast reports collector ok/fail. The row shows the last error when state is not ok.
