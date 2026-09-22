@@ -59,7 +59,38 @@ def insert_pending_alert(con, device_id, code, ts) -> None:
     )
 
 
+def _db_int(v, default: int = 0) -> int:
+    """SQL Server PDO often returns numbers as strings. '0' must not be truthy."""
+    if v is None or v is False:
+        return default
+    if isinstance(v, bool):
+        return int(v)
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def _device_row(r) -> dict:
+    d = dict(r)
+    for key in (
+        "id", "is_simulated", "enabled", "sensor_expected", "sensor_present",
+        "snmp_profile_id", "group_id", "consecutive_failures", "kind",
+    ):
+        if key == "kind":
+            continue
+        if key in d and d[key] is not None and d[key] != "":
+            d[key] = _db_int(d[key], 0 if key != "id" else 0)
+    if "va_rating" in d and d["va_rating"] not in (None, ""):
+        try:
+            d["va_rating"] = float(d["va_rating"])
+        except (TypeError, ValueError):
+            pass
+    return d
+
+
 def upsert_poll_state_ok(con, device_id, ts) -> None:
+    device_id = _db_int(device_id)
     if is_sqlsrv():
         con.execute(
             "UPDATE poll_state SET last_success=?, last_attempt=?, consecutive_failures=0, last_error=NULL, comm_state='ok' WHERE device_id=?",
@@ -246,23 +277,38 @@ def evaluate(con, device, sample, secrets):
 
 
 def store_sample(con, device_id, sample, va_rating=2000):
+    device_id = _db_int(device_id)
+    ts = now()
+    # Record the success even if the sample row insert fails (missing column, etc.).
+    upsert_poll_state_ok(con, device_id, ts)
     load = sample.get("load_pct")
     power = sample.get("power_w")
     if power is None and load is not None:
         power = float(load) / 100.0 * float(va_rating or 2000)
-    con.execute(
-        """INSERT INTO samples (device_id, ts, output_status, battery_status, capacity_pct, runtime_min,
-           load_pct, input_voltage, output_voltage, temp_f, humidity_pct, on_battery, sensor_present, replace_battery, power_w)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        (
-            device_id, now(), sample.get("output_status"), sample.get("battery_status"),
-            sample.get("capacity_pct"), sample.get("runtime_min"), sample.get("load_pct"),
-            sample.get("input_voltage"), sample.get("output_voltage"), sample.get("temp_f"),
-            sample.get("humidity_pct"), sample.get("on_battery"), sample.get("sensor_present"),
-            sample.get("replace_battery"), power,
-        ),
+    row = (
+        device_id, ts, sample.get("output_status"), sample.get("battery_status"),
+        sample.get("capacity_pct"), sample.get("runtime_min"), sample.get("load_pct"),
+        sample.get("input_voltage"), sample.get("output_voltage"), sample.get("temp_f"),
+        sample.get("humidity_pct"), sample.get("on_battery"), sample.get("sensor_present"),
+        sample.get("replace_battery"), power,
     )
-    upsert_poll_state_ok(con, device_id, now())
+    try:
+        con.execute(
+            """INSERT INTO samples (device_id, ts, output_status, battery_status, capacity_pct, runtime_min,
+               load_pct, input_voltage, output_voltage, temp_f, humidity_pct, on_battery, sensor_present, replace_battery, power_w)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            row,
+        )
+    except Exception as e:
+        if "power_w" not in str(e).lower() and "invalid column" not in str(e).lower():
+            log(f"sample insert device {device_id}: {e}")
+        else:
+            con.execute(
+                """INSERT INTO samples (device_id, ts, output_status, battery_status, capacity_pct, runtime_min,
+                   load_pct, input_voltage, output_voltage, temp_f, humidity_pct, on_battery, sensor_present, replace_battery)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                row[:-1],
+            )
     # identity autofill
     fields = []
     args = []
@@ -279,9 +325,16 @@ def store_sample(con, device_id, sample, va_rating=2000):
 
 
 def mark_fail(con, device, err, secrets):
-    st = con.execute("SELECT consecutive_failures FROM poll_state WHERE device_id=?", (device["id"],)).fetchone()
-    n = (st["consecutive_failures"] if st else 0) + 1
-    upsert_poll_state_fail(con, device["id"], now(), n, str(err)[:500], "down" if n >= 3 else "degraded")
+    did = _db_int(device["id"])
+    st = con.execute("SELECT consecutive_failures FROM poll_state WHERE device_id=?", (did,)).fetchone()
+    prev = 0
+    if st:
+        try:
+            prev = _db_int(st["consecutive_failures"] if isinstance(st, dict) else list(st)[0])
+        except Exception:
+            prev = 0
+    n = prev + 1
+    upsert_poll_state_fail(con, did, now(), n, str(err)[:500], "down" if n >= 3 else "degraded")
     th = thresholds_for(con, device)
     if n >= int(th.get("poll_fail_count") or 3):
         if set_alert(con, device["id"], "poll_fail", "crit", f"Unreachable: {err}"):
@@ -404,7 +457,7 @@ def load_devices_by_ids(ids: list[int]) -> list[dict]:
     con = connect()
     try:
         q = ",".join("?" * len(ids))
-        rows = [dict(r) for r in con.execute(
+        rows = [_device_row(r) for r in con.execute(
             f"""SELECT d.*, sp.username AS snmp_username, ps.comm_state
                FROM devices d
                LEFT JOIN snmp_profiles sp ON sp.id=d.snmp_profile_id
@@ -420,7 +473,7 @@ def load_devices_by_ids(ids: list[int]) -> list[dict]:
 def load_enabled_devices() -> list[dict]:
     con = connect()
     try:
-        rows = [dict(r) for r in con.execute(
+        rows = [_device_row(r) for r in con.execute(
             """SELECT d.*, sp.username AS snmp_username, ps.comm_state
                FROM devices d
                LEFT JOIN snmp_profiles sp ON sp.id=d.snmp_profile_id
