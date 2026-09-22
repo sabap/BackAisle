@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.42] - 2026-09-22
+
+- Dashboard temperature and humidity averages no longer treat a missing reading as 0. SQL Server was storing a PHP null as 0 in the sample row, and the hourly average included those zeros. The graph and the hottest-IDF list skip null and 0. New polls store a real null when the probe did not answer.
+
 ## [0.5.41] - 2026-09-22
 
 - About half the EnviroSensor readings were still missing. A timed-out group request was abandoned, so a slow card never got a temperature-only retry. Temperature, unit, and humidity are read first and retried one OID at a time. Optional name and contact OIDs stay on the 5-minute climate pass and cannot drop a reading already in hand. The collector uses up to 24 workers, which covers about 150 UPS on a 60-second status interval.

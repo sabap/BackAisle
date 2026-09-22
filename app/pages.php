@@ -65,8 +65,10 @@ function ba_idf_summaries(PDO $db): array {
         elseif ($cls === 'st-hot') $slot['hot']++;
         elseif ($cls === 'st-ok') $slot['ok']++;
         if (ba_cls_rank($cls) > ba_cls_rank($slot['worst'])) $slot['worst'] = $cls;
-        if ($r['temp_f'] !== null && $r['temp_f'] !== '') $slot['temps'][] = (float)$r['temp_f'];
-        if ($r['humidity_pct'] !== null && $r['humidity_pct'] !== '') $slot['rhs'][] = (float)$r['humidity_pct'];
+        $temp = ba_climate_temp($r);
+        $hum = ba_climate_hum($r);
+        if ($temp !== null && $temp !== '' && (float)$temp != 0.0) $slot['temps'][] = (float)$temp;
+        if ($hum !== null && $hum !== '' && (float)$hum != 0.0) $slot['rhs'][] = (float)$hum;
         $pw = $r['power_w'] ?? null;
         if ($pw === null && $r['load_pct'] !== null) $pw = (float)$r['load_pct'] * 20.0;
         if ($pw !== null && $pw !== '') $slot['powers'][] = (float)$pw;
@@ -1069,14 +1071,32 @@ function page_admin(PDO $db, array $user): void {
     ba_layout_end();
 }
 
+function ba_chart_num(mixed $v, bool $zeroMissing = false): ?float
+{
+    if ($v === null || $v === false || $v === '') {
+        return null;
+    }
+    if (is_string($v) && trim($v) === '') {
+        return null;
+    }
+    if (!is_numeric($v)) {
+        return null;
+    }
+    $n = (float)$v;
+    if ($zeroMissing && $n == 0.0) {
+        return null;
+    }
+    return $n;
+}
+
 function page_api_series(PDO $db): void {
     $id = (int)($_GET['id'] ?? 0);
     $st = $db->prepare("SELECT ts, capacity_pct, runtime_min, load_pct, input_voltage, temp_f, humidity_pct FROM samples WHERE device_id=? ORDER BY ts DESC LIMIT 720");
     $st->execute([$id]);
     $rows = array_reverse($st->fetchAll());
-    $pack = function (string $k) use ($rows) {
+    $pack = function (string $k, bool $zeroMissing = false) use ($rows) {
         $out = [];
-        foreach ($rows as $r) $out[] = ['t' => $r['ts'], 'v' => $r[$k] === null ? null : (float)$r[$k]];
+        foreach ($rows as $r) $out[] = ['t' => $r['ts'], 'v' => ba_chart_num($r[$k] ?? null, $zeroMissing)];
         return $out;
     };
     header('Content-Type: application/json');
@@ -1085,8 +1105,8 @@ function page_api_series(PDO $db): void {
         'runtime' => $pack('runtime_min'),
         'load' => $pack('load_pct'),
         'vin' => $pack('input_voltage'),
-        'temp' => $pack('temp_f'),
-        'rh' => $pack('humidity_pct'),
+        'temp' => $pack('temp_f', true),
+        'rh' => $pack('humidity_pct', true),
     ]);
 }
 
@@ -1095,10 +1115,14 @@ function page_api_dashboard(PDO $db): void {
     $power = [];
     $temp = [];
     $humid = [];
-    foreach ($db->query("SELECT hour_ts, AVG(power_avg) pw, AVG(temp_f_avg) tf, AVG(humidity_avg) rh FROM samples_hourly WHERE hour_ts >= datetime('now','-7 days') GROUP BY hour_ts ORDER BY hour_ts") as $r) {
-        $power[] = ['t' => $r['hour_ts'], 'v' => $r['pw'] === null ? null : (float)$r['pw']];
-        $temp[] = ['t' => $r['hour_ts'], 'v' => $r['tf'] === null ? null : (float)$r['tf']];
-        $humid[] = ['t' => $r['hour_ts'], 'v' => $r['rh'] === null ? null : (float)$r['rh']];
+    $hourSql = "SELECT hour_ts, AVG(power_avg) pw,
+            AVG(CASE WHEN temp_f_avg IS NULL OR temp_f_avg = 0 THEN NULL ELSE temp_f_avg END) tf,
+            AVG(CASE WHEN humidity_avg IS NULL OR humidity_avg = 0 THEN NULL ELSE humidity_avg END) rh
+            FROM samples_hourly WHERE hour_ts >= datetime('now','-7 days') GROUP BY hour_ts ORDER BY hour_ts";
+    foreach ($db->query($hourSql) as $r) {
+        $power[] = ['t' => $r['hour_ts'], 'v' => ba_chart_num($r['pw'] ?? null)];
+        $temp[] = ['t' => $r['hour_ts'], 'v' => ba_chart_num($r['tf'] ?? null, true)];
+        $humid[] = ['t' => $r['hour_ts'], 'v' => ba_chart_num($r['rh'] ?? null, true)];
     }
     $powerHas = false;
     foreach ($power as $pt) { if ($pt['v'] !== null) { $powerHas = true; break; } }
@@ -1106,15 +1130,15 @@ function page_api_dashboard(PDO $db): void {
         $power = [];
         $temp = [];
         $humid = [];
-        foreach ($db->query("SELECT strftime('%Y-%m-%d %H:00:00', ts) h, AVG(power_w) pw, AVG(temp_f) tf, AVG(humidity_pct) rh FROM samples WHERE ts >= datetime('now','-2 days') GROUP BY h ORDER BY h") as $r) {
-            $power[] = ['t' => $r['h'], 'v' => $r['pw'] === null ? null : (float)$r['pw']];
-            $temp[] = ['t' => $r['h'], 'v' => $r['tf'] === null ? null : (float)$r['tf']];
-            $humid[] = ['t' => $r['h'], 'v' => $r['rh'] === null ? null : (float)$r['rh']];
+        foreach ($db->query("SELECT strftime('%Y-%m-%d %H:00:00', ts) h, AVG(power_w) pw, AVG(NULLIF(temp_f, 0)) tf, AVG(NULLIF(humidity_pct, 0)) rh FROM samples WHERE ts >= datetime('now','-2 days') GROUP BY h ORDER BY h") as $r) {
+            $power[] = ['t' => $r['h'], 'v' => ba_chart_num($r['pw'] ?? null)];
+            $temp[] = ['t' => $r['h'], 'v' => ba_chart_num($r['tf'] ?? null, true)];
+            $humid[] = ['t' => $r['h'], 'v' => ba_chart_num($r['rh'] ?? null, true)];
         }
     }
     $hottest = $db->query("SELECT g.id, g.name, AVG(s.temp_f) t FROM devices d JOIN groups g ON g.id=d.group_id
-        JOIN samples s ON s.id = (SELECT id FROM samples WHERE device_id=d.id ORDER BY ts DESC LIMIT 1)
-        WHERE s.temp_f IS NOT NULL AND ".ba_ups_only_sql()." GROUP BY g.id, g.name ORDER BY t DESC LIMIT 5")->fetchAll();
+        JOIN samples s ON s.id = (SELECT id FROM samples WHERE device_id=d.id AND temp_f IS NOT NULL AND temp_f <> 0 ORDER BY ts DESC LIMIT 1)
+        WHERE s.temp_f IS NOT NULL AND s.temp_f <> 0 AND ".ba_ups_only_sql()." GROUP BY g.id, g.name ORDER BY t DESC LIMIT 5")->fetchAll();
     $powerTop = $db->query("SELECT g.id, g.name, AVG(COALESCE(s.power_w, s.load_pct*20.0)) w FROM devices d JOIN groups g ON g.id=d.group_id
         JOIN samples s ON s.id = (SELECT id FROM samples WHERE device_id=d.id ORDER BY ts DESC LIMIT 1)
         WHERE ".ba_ups_only_sql()." GROUP BY g.id, g.name ORDER BY w DESC LIMIT 5")->fetchAll();

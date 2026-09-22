@@ -52,7 +52,16 @@ while (($line = fgets(STDIN)) !== false) {
         if ($op === 'query' || $op === 'exec') {
             $isSelect = (bool)preg_match('/^\s*SELECT\b/i', $sql);
             $st = $db->prepare($sql);
-            $st->execute($params);
+            // pdo_sqlsrv/odbc turns a PHP null into 0 for FLOAT columns. Missing
+            // temp and humidity were stored as 0°F / 0% and pulled the averages down.
+            foreach ($params as $i => $p) {
+                if ($p === null) {
+                    $st->bindValue($i + 1, null, PDO::PARAM_NULL);
+                } else {
+                    $st->bindValue($i + 1, $p);
+                }
+            }
+            $st->execute();
             $rows = [];
             if ($isSelect) {
                 $rows = $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
