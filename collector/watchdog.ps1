@@ -1,5 +1,6 @@
 # BackAisle collector/writer watchdog. Runs as SYSTEM via BackAisleCollectorWatch.
-# Recycles writer.py when the file is newer than the process or restart_writer.flag exists.
+# Recycles collector.py when that file is newer than the process.
+# Recycles writer.py when that file is newer or restart_writer.flag exists.
 $ErrorActionPreference = 'Stop'
 $SiteRoot = 'C:\inetpub\BackAisle'
 $CollectorDir = Join-Path $SiteRoot 'collector'
@@ -69,13 +70,14 @@ function Stop-BaPythonScript([string]$ScriptLeaf, [string]$PidFile) {
     }
 }
 
-function Ensure-Proc([string]$script, [string]$pidFile, [string]$stdoutLog, [string]$stderrLog, [switch]$RecycleIfStale) {
+function Ensure-Proc([string]$script, [string]$pidFile, [string]$stdoutLog, [string]$stderrLog, [switch]$RecycleIfStale, [switch]$RecycleIfNewer) {
     $leaf = Split-Path -Leaf $script
     $live = @(Get-BaPythonByScript -ScriptLeaf $leaf)
     $running = ($live.Count -gt 0)
     $wantRestart = $false
-    if ($RecycleIfStale -and (Test-Path -LiteralPath $Flag)) { $wantRestart = $true }
-    if ($running -and $RecycleIfStale -and (Test-Path -LiteralPath $script)) {
+    $usedFlag = $false
+    if ($RecycleIfStale -and (Test-Path -LiteralPath $Flag)) { $wantRestart = $true; $usedFlag = $true }
+    if ($running -and ($RecycleIfStale -or $RecycleIfNewer) -and (Test-Path -LiteralPath $script)) {
         $mtime = (Get-Item -LiteralPath $script).LastWriteTime
         foreach ($row in $live) {
             $gp = Get-Process -Id $row.ProcessId -ErrorAction SilentlyContinue
@@ -86,7 +88,7 @@ function Ensure-Proc([string]$script, [string]$pidFile, [string]$stdoutLog, [str
         Stop-BaPythonScript -ScriptLeaf $leaf -PidFile $pidFile
         $running = $false
         $live = @()
-        if (Test-Path -LiteralPath $Flag) {
+        if ($usedFlag -and (Test-Path -LiteralPath $Flag)) {
             Remove-Item -LiteralPath $Flag -Force -ErrorAction SilentlyContinue
         }
         Start-Sleep -Seconds 2
@@ -99,7 +101,7 @@ function Ensure-Proc([string]$script, [string]$pidFile, [string]$stdoutLog, [str
 }
 
 $pendingOk = Promote-BaPending -Dir $CollectorDir
-Ensure-Proc (Join-Path $CollectorDir 'collector.py') (Join-Path $LogDir 'collector.pid') (Join-Path $LogDir 'collector.stdout.log') (Join-Path $LogDir 'collector.stderr.log')
+Ensure-Proc (Join-Path $CollectorDir 'collector.py') (Join-Path $LogDir 'collector.pid') (Join-Path $LogDir 'collector.stdout.log') (Join-Path $LogDir 'collector.stderr.log') -RecycleIfNewer
 Ensure-Proc (Join-Path $CollectorDir 'writer.py') (Join-Path $LogDir 'writer.pid') (Join-Path $LogDir 'writer.stdout.log') (Join-Path $LogDir 'writer.stderr.log') -RecycleIfStale
 if (-not $pendingOk -and -not (Test-Path -LiteralPath $Flag)) {
     New-Item -ItemType File -Force -Path $Flag | Out-Null
