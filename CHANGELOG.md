@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.43] - 2026-09-22
+
+- One-device poll on SQL Server logged `julianday is not a recognized built-in function` from alert housekeeping and pasted that into the poll toast. Alert age now uses DATEDIFF on SQL Server. The toast shows the device poll failure, not the housekeeping query.
+
 ## [0.5.42] - 2026-09-22
 
 - Dashboard temperature and humidity averages no longer treat a missing reading as 0. SQL Server was storing a PHP null as 0 in the sample row, and the hourly average included those zeros. The graph and the hottest-IDF list skip null and 0. New polls store a real null when the probe did not answer.
