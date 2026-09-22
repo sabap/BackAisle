@@ -631,6 +631,7 @@ class WorkerPool:
                     err = str(e).lower()
                     if "timeout" in err or "timed out" in err:
                         self.timeouts += 1
+                    log(f"poll fail {device.get('ip')}: {e}")
                     close_engine(engine)
                     engine = new_engine()
                 finally:
@@ -747,6 +748,24 @@ def _group_descendants(con, gid: int) -> list[int]:
     return ids
 
 
+def _seconds_since(con, ts: str) -> int | None:
+    """Age of a 'YYYY-MM-DD HH:MM:SS' UTC stamp. julianday is SQLite-only."""
+    if is_sqlsrv():
+        sql = "SELECT DATEDIFF(second, TRY_CAST(? AS datetime2), SYSUTCDATETIME()) AS age_sec"
+    else:
+        sql = "SELECT CAST((julianday('now') - julianday(?))*86400 AS INT) AS age_sec"
+    row = con.execute(sql, (ts,)).fetchone()
+    if not row:
+        return None
+    if isinstance(row, dict):
+        for key in ("age_sec", "s", "S"):
+            if row.get(key) is not None:
+                return int(row[key])
+        vals = list(row.values())
+        return int(vals[0]) if vals and vals[0] is not None else None
+    return int(row[0]) if row[0] is not None else None
+
+
 def process_group_alerts(con, secrets) -> None:
     hold_row = con.execute("SELECT v FROM settings WHERE k='alert_hold_sec'").fetchone()
     hold = int(hold_row["v"] if hold_row else 180)
@@ -754,10 +773,7 @@ def process_group_alerts(con, secrets) -> None:
         "SELECT pa.*, d.group_id, d.hostname, d.ip FROM pending_alerts pa JOIN devices d ON d.id=pa.device_id WHERE pa.mailed_at IS NULL"
     ).fetchall()
     for pa in pending:
-        age = con.execute(
-            "SELECT CAST((julianday('now') - julianday(?))*86400 AS INT) s",
-            (pa["first_seen"],),
-        ).fetchone()["s"]
+        age = _seconds_since(con, str(pa["first_seen"]))
         ghold = hold
         if pa["group_id"]:
             gh = con.execute("SELECT alert_hold_sec FROM groups WHERE id=?", (pa["group_id"],)).fetchone()

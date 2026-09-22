@@ -144,8 +144,15 @@ function ba_poll_devices_now(array $ids): array
         throw new RuntimeException('Poll failed: ' . ($blob !== '' ? $blob : ('exit ' . $run['code'])));
     }
     if ($fail !== null && $fail > 0 && ($ok === null || $ok === 0)) {
-        $tail = strlen($blob) > 500 ? substr($blob, -500) : $blob;
-        throw new RuntimeException('Poll reached the collector but every device failed (ok=0 fail=' . $fail . '). ' . $tail);
+        $lines = preg_split('/\R/', $blob) ?: [];
+        $interesting = [];
+        foreach ($lines as $line) {
+            if (stripos($line, 'poll fail ') !== false || stripos($line, 'poll cycle ') !== false) {
+                $interesting[] = trim($line);
+            }
+        }
+        $detail = $interesting !== [] ? implode(' | ', $interesting) : (strlen($blob) > 500 ? substr($blob, -500) : $blob);
+        throw new RuntimeException('Poll did not succeed (ok=0 fail=' . $fail . '). ' . $detail);
     }
     return ['ids' => $ids, 'output' => $blob, 'code' => $run['code'], 'ok' => $ok, 'fail' => $fail];
 }
