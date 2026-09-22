@@ -111,7 +111,18 @@ def decode(raw: dict[str, Any]) -> dict[str, Any]:
     out_st = _int(raw.get("outputStatus"))
     envir_name = _str(raw.get("envir2Name")) or _str(raw.get("envirName"))
     env2_n = _int(raw.get("envir2IdentSize"))
-    sensor_present = 1 if (env2_n and env2_n > 0) or envir_name else 0
+    env_keys = (
+        "envir2IdentSize", "envir2Name", "envirName", "envir2Temp", "envir2Humid",
+        "tempF10", "humidity",
+    )
+    saw_env = any(k in raw for k in env_keys)
+    if not saw_env:
+        # This poll did not ask the sensor. Do not record "absent".
+        sensor_present = None
+    elif (env2_n and env2_n > 0) or envir_name or env2_raw is not None or env2_h is not None:
+        sensor_present = 1
+    else:
+        sensor_present = 0
     return {
         "model": _str(raw.get("model")),
         "snmp_name": _str(raw.get("name")) or _str(raw.get("sysName")),
@@ -142,19 +153,18 @@ def decode(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 # Status poll stays small so a dead card frees the worker in ~2s.
-# Env2 temp/humidity ride along every cycle so the UI does not blank between 5-min identity walks.
 STATUS_KEYS = (
     "capacity", "runtimeTicks", "rfcRuntimeMin", "batteryStatus",
     "outputStatus", "outputLoad", "inputVoltage", "outputVoltage",
-    "envir2TempUnit", "envir2Temp", "envir2Humid", "envir2IdentSize",
 )
 IDENTITY_KEYS = (
     "sysName", "ifPhysAddress", "model", "name", "firmware", "serial",
     "timeOnBattery", "replaceIndicator", "outputPower",
 )
-CLIMATE_KEYS = (
-    "envirName", "tempF10", "humidity",
-    "envir2Name", "envir2Contact1",
+# Tried on every poll, but a timeout here must not fail the UPS reading.
+ENV_KEYS = (
+    "envir2IdentSize", "envir2Name", "envir2TempUnit", "envir2Temp", "envir2Humid",
+    "envirName", "tempF10", "humidity", "envir2Contact1",
 )
 
 
@@ -216,12 +226,15 @@ async def snmp_get(
         ctx = ContextData()
         raw: dict[str, Any] = {}
         await _snmp_batches(engine, creds, target, ctx, STATUS_KEYS, raw)
+        try:
+            await _snmp_batches(engine, creds, target, ctx, ENV_KEYS, raw)
+        except Exception:
+            # A missing or slow EnviroSensor must not fail the UPS poll.
+            pass
         if climate:
-            extra = IDENTITY_KEYS + CLIMATE_KEYS
             try:
-                await _snmp_batches(engine, creds, target, ctx, extra, raw)
+                await _snmp_batches(engine, creds, target, ctx, IDENTITY_KEYS, raw)
             except Exception:
-                # Keep the status PDU even if climate/identity OIDs time out.
                 pass
         if not raw:
             raise RuntimeError("empty SNMP GET")

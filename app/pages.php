@@ -312,9 +312,11 @@ function page_fleet(PDO $db): void {
           ?></td>
           <td><?php
             $exp = (int)($r['sensor_expected'] ?? 0);
-            $pres = (int)($r['sensor_present'] ?? $r['sample_sensor'] ?? 0);
-            if (!$exp && !$pres) echo '<span class="muted">not expected</span>';
-            elseif ($pres) echo 'attached';
+            $presRaw = $r['sensor_present'] ?? $r['sample_sensor'] ?? null;
+            if ($presRaw === null || $presRaw === '') {
+                echo $exp ? '<span class="muted">not seen yet</span>' : '<span class="muted">not expected</span>';
+            } elseif ((int)$presRaw === 1) echo 'attached';
+            elseif (!$exp) echo '<span class="muted">not expected</span>';
             else echo '<span class="pill warn">absent</span>';
           ?></td>
           <td class="muted"><?= h($r['last_success'] ?? 'never') ?></td>
@@ -326,24 +328,106 @@ function page_fleet(PDO $db): void {
     ba_layout_end();
 }
 
-function page_climate(PDO $db): void {
-    $rows = $db->query(ba_latest_join() . ' WHERE '.ba_ups_only_sql()." ORDER BY CASE WHEN s.temp_f IS NULL THEN 1 ELSE 0 END, s.temp_f DESC")->fetchAll();
-    ba_layout_start('Climate', 'climate');
-    echo '<h1>Closet climate</h1><p class="muted">Temperature and humidity from ENVIROSENSOR probes on UPS units in each IDF. Environment is tracked here; UPS state lives under Power.</p>';
-    echo '<table><thead><tr><th>Closet</th><th>Sensor</th><th>Temp</th><th>RH</th><th>Host</th></tr></thead><tbody>';
+function ba_climate_sensor_state(array $r): string
+{
+    $pres = $r['sensor_present'] ?? null;
+    if ($pres === null || $pres === '') {
+        $pres = $r['sample_sensor'] ?? null;
+    }
+    if ($pres === null || $pres === '') {
+        return 'unknown';
+    }
+    return ((int)$pres) === 1 ? 'present' : 'absent';
+}
+
+/** One row per IDF. Prefer the UPS that actually has the EnviroSensor. */
+function ba_climate_closets(array $rows): array
+{
+    $groups = [];
     foreach ($rows as $r) {
-        $pres = (int)($r['sensor_present'] ?? $r['sample_sensor'] ?? 0);
-        $exp = (int)$r['sensor_expected'];
-        echo '<tr class="'.h(ba_worst($r)).'">';
-        echo '<td><a href="/device.php?id='.(int)$r['id'].'">'.h($r['building'].' / '.$r['idf_closet']).'</a></td>';
-        if (!$exp) echo '<td class="muted">not expected</td><td>—</td><td>—</td>';
-        elseif (!$pres) echo '<td class="pill warn">absent</td><td>—</td><td>—</td>';
-        else {
-            echo '<td>attached</td>';
-            echo '<td>'.($r['temp_f'] === null ? '<span class="muted">no reading</span>' : h(ba_fmt($r['temp_f'], '°F'))).'</td>';
-            echo '<td>'.($r['humidity_pct'] === null ? '<span class="muted">no reading</span>' : h(ba_fmt($r['humidity_pct'], '%', 0))).'</td>';
+        $closet = trim((string)($r['idf_closet'] ?? ''));
+        $key = $closet === ''
+            ? 'device:' . (int)$r['id']
+            : strtolower(trim((string)($r['building'] ?? '')) . '|' . $closet);
+        $groups[$key][] = $r;
+    }
+    $out = [];
+    foreach ($groups as $members) {
+        $best = null;
+        $bestScore = -1;
+        $anyExpected = false;
+        $anyKnown = false;
+        foreach ($members as $r) {
+            if ((int)($r['sensor_expected'] ?? 0) === 1) {
+                $anyExpected = true;
+            }
+            $state = ba_climate_sensor_state($r);
+            if ($state !== 'unknown') {
+                $anyKnown = true;
+            }
+            $score = 0;
+            if ($state === 'present') {
+                $score += 4;
+            }
+            if ($r['temp_f'] !== null && $r['temp_f'] !== '') {
+                $score += 2;
+            }
+            if ($r['humidity_pct'] !== null && $r['humidity_pct'] !== '') {
+                $score += 1;
+            }
+            if ($score > $bestScore) {
+                $best = $r;
+                $bestScore = $score;
+            }
         }
-        echo '<td><a href="/device.php?id='.(int)$r['id'].'">'.h($r['hostname'] ?: $r['ip']).'</a></td></tr>';
+        $out[] = [
+            'row' => $best,
+            'count' => count($members),
+            'expected' => $anyExpected,
+            'known' => $anyKnown,
+            'score' => $bestScore,
+        ];
+    }
+    usort($out, static function (array $a, array $b): int {
+        return ($b['score'] <=> $a['score']) ?: strcasecmp(
+            (string)($a['row']['idf_closet'] ?? ''),
+            (string)($b['row']['idf_closet'] ?? '')
+        );
+    });
+    return $out;
+}
+
+function page_climate(PDO $db): void {
+    $rows = $db->query(ba_latest_join() . ' WHERE '.ba_ups_only_sql()." ORDER BY d.building, d.idf_closet, d.hostname")->fetchAll();
+    $closets = ba_climate_closets($rows);
+    ba_layout_start('Climate', 'climate');
+    echo '<h1>Closet climate</h1><p class="muted">One row per IDF. Temperature and humidity come from the UPS that has the ENVIROSENSOR. Other UPS in the same closet are not listed. A closet stays “not seen yet” until a poll actually reads the probe.</p>';
+    echo '<table><thead><tr><th>Closet</th><th>Sensor</th><th>Temp</th><th>RH</th><th>Host</th></tr></thead><tbody>';
+    foreach ($closets as $c) {
+        $r = $c['row'];
+        $state = ba_climate_sensor_state($r);
+        $showReading = $state === 'present' || ($r['temp_f'] !== null && $r['temp_f'] !== '');
+        echo '<tr class="'.h(ba_worst($r)).'">';
+        echo '<td><a href="/device.php?id='.(int)$r['id'].'">'.h(trim((string)$r['building'].' / '.$r['idf_closet'], ' /')).'</a></td>';
+        if ($showReading) {
+            echo '<td>attached</td>';
+            echo '<td>'.($r['temp_f'] === null || $r['temp_f'] === '' ? '<span class="muted">no reading</span>' : h(ba_fmt($r['temp_f'], '°F'))).'</td>';
+            echo '<td>'.($r['humidity_pct'] === null || $r['humidity_pct'] === '' ? '<span class="muted">no reading</span>' : h(ba_fmt($r['humidity_pct'], '%', 0))).'</td>';
+        } elseif (!$c['expected']) {
+            echo '<td class="muted">not expected</td><td>—</td><td>—</td>';
+        } elseif (!$c['known']) {
+            echo '<td class="muted">not seen yet</td><td>—</td><td>—</td>';
+        } else {
+            echo '<td class="pill warn">absent</td><td>—</td><td>—</td>';
+        }
+        $host = (string)($r['hostname'] ?: $r['ip']);
+        if ($c['count'] > 1 && $showReading) {
+            $host .= ' · 1 of ' . (int)$c['count'] . ' UPS';
+        }
+        echo '<td><a href="/device.php?id='.(int)$r['id'].'">'.h($host).'</a></td></tr>';
+    }
+    if (!$closets) {
+        echo '<tr><td colspan="5" class="muted">No UPS on the schedule.</td></tr>';
     }
     echo '</tbody></table>';
     ba_layout_end();
@@ -543,9 +627,11 @@ function page_device(PDO $db, array $user): void {
       <div class="kpi"><span>Load</span><b><?= h(ba_fmt($r['load_pct']??null,'%',0)) ?></b></div>
       <div class="kpi"><span>Input</span><b><?= h(ba_fmt($r['input_voltage']??null,'V')) ?></b></div>
       <div class="kpi"><span>Temp</span><b><?php
-        $pres = (int)($r['sensor_present'] ?? $r['sample_sensor'] ?? 0);
-        if ($pres && $r['temp_f'] === null) echo 'n/a';
-        elseif (!$pres && $r['sensor_expected']) echo 'absent';
+        $presRaw = $r['sensor_present'] ?? $r['sample_sensor'] ?? null;
+        $pres = ($presRaw === null || $presRaw === '') ? null : (int)$presRaw;
+        if ($pres === 1 && ($r['temp_f'] === null || $r['temp_f'] === '')) echo 'n/a';
+        elseif ($pres === 0 && $r['sensor_expected']) echo 'absent';
+        elseif ($pres === null && $r['sensor_expected']) echo '—';
         else echo h(ba_fmt($r['temp_f']??null,'°F'));
       ?></b></div>
     </div>
