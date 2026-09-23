@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.44] - 2026-09-23
+
+- Climate was one row per UPS hostname, so the other units in an IDF never dropped off after a sensor reading. Rows now group by the PowerPanel IDF. When any UPS in that IDF has a temperature or humidity, the rest of that IDF is hidden. Legacy EnviroSensor scalars and table index 2 are polled too, which is what PowerPanel still shows on older cards.
+
 ## [0.5.43] - 2026-09-22
 
 - One-device poll on SQL Server logged `julianday is not a recognized built-in function` from alert housekeeping and pasted that into the poll toast. Alert age now uses DATEDIFF on SQL Server. The toast shows the device poll failure, not the housekeeping query.

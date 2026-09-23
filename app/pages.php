@@ -368,16 +368,42 @@ function ba_climate_sensor_state(array $r): string
     return ((int)$pres) === 1 ? 'present' : 'absent';
 }
 
-/** One row per IDF. Prefer the UPS that actually has the EnviroSensor. */
+function ba_climate_has_reading(array $r): bool
+{
+    $temp = ba_climate_temp($r);
+    $hum = ba_climate_hum($r);
+    if ($temp !== null && $temp !== '' && (float)$temp != 0.0) {
+        return true;
+    }
+    if ($hum !== null && $hum !== '' && (float)$hum != 0.0) {
+        return true;
+    }
+    return false;
+}
+
+/** IDF is the PowerPanel group. idf_closet was stored as each UPS hostname, so it does not group a closet. */
+function ba_climate_group_key(array $r): string
+{
+    $gid = (int)($r['group_id'] ?? 0);
+    if ($gid < 1) {
+        $gid = (int)($r['gid'] ?? 0);
+    }
+    if ($gid > 0) {
+        return 'g' . $gid;
+    }
+    $closet = trim((string)($r['idf_closet'] ?? ''));
+    if ($closet !== '') {
+        return 'c:' . strtolower(trim((string)($r['building'] ?? '')) . '|' . $closet);
+    }
+    return 'd:' . (int)$r['id'];
+}
+
+/** One row per IDF once any UPS in that IDF has an EnviroSensor reading. Until then each UPS stays listed. */
 function ba_climate_closets(array $rows): array
 {
     $groups = [];
     foreach ($rows as $r) {
-        $closet = trim((string)($r['idf_closet'] ?? ''));
-        $key = $closet === ''
-            ? 'device:' . (int)$r['id']
-            : strtolower(trim((string)($r['building'] ?? '')) . '|' . $closet);
-        $groups[$key][] = $r;
+        $groups[ba_climate_group_key($r)][] = $r;
     }
     $out = [];
     foreach ($groups as $members) {
@@ -385,6 +411,7 @@ function ba_climate_closets(array $rows): array
         $bestScore = -1;
         $anyExpected = false;
         $anyKnown = false;
+        $anyReading = false;
         foreach ($members as $r) {
             if ((int)($r['sensor_expected'] ?? 0) === 1) {
                 $anyExpected = true;
@@ -393,14 +420,17 @@ function ba_climate_closets(array $rows): array
             if ($state !== 'unknown') {
                 $anyKnown = true;
             }
+            if (ba_climate_has_reading($r)) {
+                $anyReading = true;
+            }
             $score = 0;
             if ($state === 'present') {
                 $score += 4;
             }
-            if (ba_climate_temp($r) !== null && ba_climate_temp($r) !== '') {
+            if (ba_climate_temp($r) !== null && ba_climate_temp($r) !== '' && (float)ba_climate_temp($r) != 0.0) {
                 $score += 2;
             }
-            if (ba_climate_hum($r) !== null && ba_climate_hum($r) !== '') {
+            if (ba_climate_hum($r) !== null && ba_climate_hum($r) !== '' && (float)ba_climate_hum($r) != 0.0) {
                 $score += 1;
             }
             if ($score > $bestScore) {
@@ -408,13 +438,23 @@ function ba_climate_closets(array $rows): array
                 $bestScore = $score;
             }
         }
-        $out[] = [
-            'row' => $best,
-            'count' => count($members),
-            'expected' => $anyExpected,
-            'known' => $anyKnown,
-            'score' => $bestScore,
-        ];
+        $pack = static function (array $row, int $count, bool $expected, bool $known, int $score, bool $collapsed) : array {
+            return [
+                'row' => $row,
+                'count' => $count,
+                'expected' => $expected,
+                'known' => $known,
+                'score' => $score,
+                'collapsed' => $collapsed,
+            ];
+        };
+        if ($anyReading && $best !== null) {
+            $out[] = $pack($best, count($members), $anyExpected, $anyKnown, $bestScore, count($members) > 1);
+            continue;
+        }
+        foreach ($members as $r) {
+            $out[] = $pack($r, 1, (int)($r['sensor_expected'] ?? 0) === 1, ba_climate_sensor_state($r) !== 'unknown', 0, false);
+        }
     }
     usort($out, static function (array $a, array $b): int {
         return ($b['score'] <=> $a['score']) ?: strcasecmp(
@@ -429,7 +469,7 @@ function page_climate(PDO $db): void {
     $rows = $db->query(ba_latest_join() . ' WHERE '.ba_ups_only_sql()." ORDER BY d.building, d.idf_closet, d.hostname")->fetchAll();
     $closets = ba_climate_closets($rows);
     ba_layout_start('Climate', 'climate');
-    echo '<h1>Closet climate</h1><p class="muted">One row per IDF. Temperature and humidity come from the UPS that has the ENVIROSENSOR. Other UPS in the same closet are not listed. A closet stays “not seen yet” until a poll actually reads the probe.</p>';
+    echo '<h1>Closet climate</h1><p class="muted">Grouped by IDF. When any UPS in that IDF reports an EnviroSensor, the other UPS in the same IDF drop off this list. Until then each UPS stays visible. Not every UPS has a probe.</p>';
     echo '<table><thead><tr><th>Closet</th><th>Sensor</th><th>Temp</th><th>RH</th><th>Host</th></tr></thead><tbody>';
     foreach ($closets as $c) {
         $r = $c['row'];
@@ -437,8 +477,16 @@ function page_climate(PDO $db): void {
         $temp = ba_climate_temp($r);
         $hum = ba_climate_hum($r);
         $showReading = $state === 'present' || ($temp !== null && $temp !== '');
+        $gid = (int)($r['group_id'] ?? 0);
+        if ($gid < 1) {
+            $gid = (int)($r['gid'] ?? 0);
+        }
+        $label = ($gid > 0 && function_exists('ba_group_path')) ? ba_group_path($db, $gid) : '';
+        if ($label === '') {
+            $label = trim((string)$r['building'].' / '.$r['idf_closet'], ' /');
+        }
         echo '<tr class="'.h(ba_worst($r)).'">';
-        echo '<td><a href="/device.php?id='.(int)$r['id'].'">'.h(trim((string)$r['building'].' / '.$r['idf_closet'], ' /')).'</a></td>';
+        echo '<td><a href="/device.php?id='.(int)$r['id'].'">'.h($label).'</a></td>';
         if ($showReading) {
             echo '<td>attached</td>';
             echo '<td>'.($temp === null || $temp === '' ? '<span class="muted">no reading</span>' : h(ba_fmt($temp, '°F'))).'</td>';
@@ -451,8 +499,8 @@ function page_climate(PDO $db): void {
             echo '<td class="pill warn">absent</td><td>—</td><td>—</td>';
         }
         $host = (string)($r['hostname'] ?: $r['ip']);
-        if ($c['count'] > 1 && $showReading) {
-            $host .= ' · 1 of ' . (int)$c['count'] . ' UPS';
+        if (!empty($c['collapsed'])) {
+            $host .= ' · sensor UPS, ' . (int)$c['count'] . ' in this IDF';
         }
         echo '<td><a href="/device.php?id='.(int)$r['id'].'">'.h($host).'</a></td></tr>';
     }
