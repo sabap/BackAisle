@@ -33,6 +33,9 @@ OIDS = {
     "envir2TempUnit": (1, 3, 6, 1, 4, 1, 3808, 1, 1, 8, 2, 2, 0),
     "envir2Temp": (1, 3, 6, 1, 4, 1, 3808, 1, 1, 8, 2, 3, 1, 3, 1),
     "envir2Humid": (1, 3, 6, 1, 4, 1, 3808, 1, 1, 8, 3, 2, 1, 3, 1),
+    # Some cards put the only probe at table index 2. Ask only if index 1 is empty.
+    "envir2Temp2": (1, 3, 6, 1, 4, 1, 3808, 1, 1, 8, 2, 3, 1, 3, 2),
+    "envir2Humid2": (1, 3, 6, 1, 4, 1, 3808, 1, 1, 8, 3, 2, 1, 3, 2),
     "envir2Contact1": (1, 3, 6, 1, 4, 1, 3808, 1, 1, 8, 4, 2, 1, 5, 1),
 }
 
@@ -86,6 +89,8 @@ def decode(raw: dict[str, Any]) -> dict[str, Any]:
     # Legacy scalar: tenths of °F. Never display 784 as 784°F.
     temp_f = (temp_raw / 10.0) if temp_raw is not None else None
     env2_raw = _int(raw.get("envir2Temp"))
+    if env2_raw is None:
+        env2_raw = _int(raw.get("envir2Temp2"))
     env2_unit = _int(raw.get("envir2TempUnit"))  # 1=C 2=F
     if env2_raw is not None:
         # envir2Temperature is 1/100 of the unit in envir2TempUnit
@@ -102,6 +107,8 @@ def decode(raw: dict[str, Any]) -> dict[str, Any]:
     humid = _int(raw.get("humidity"))
     humidity_pct = float(humid) if humid is not None else None
     env2_h = _int(raw.get("envir2Humid"))
+    if env2_h is None:
+        env2_h = _int(raw.get("envir2Humid2"))
     if env2_h is not None:
         humidity_pct = round(env2_h / 100.0, 1)
         if humidity_pct > 100:
@@ -170,6 +177,8 @@ IDENTITY_KEYS = (
 # noSuchName or a timeout on those used to blank the temperature for the whole card.
 ENV_READING_KEYS = (
     "envir2TempUnit", "envir2Temp", "envir2Humid",
+    # Older cards report the probe on the legacy scalars PowerPanel still shows.
+    "tempF10", "humidity",
 )
 ENV_EXTRA_KEYS = (
     "envir2IdentSize", "envir2Name",
@@ -282,6 +291,9 @@ async def snmp_get(
             for name in ENV_READING_KEYS:
                 if name not in raw:
                     await _snmp_one(engine, creds, env_target, ctx, name, raw)
+        if _int(raw.get("envir2Temp")) is None and _int(raw.get("tempF10")) is None:
+            await _snmp_one(engine, creds, env_target, ctx, "envir2Temp2", raw)
+            await _snmp_one(engine, creds, env_target, ctx, "envir2Humid2", raw)
         if climate:
             try:
                 await _snmp_batches(engine, creds, env_target, ctx, ENV_EXTRA_KEYS, raw)
