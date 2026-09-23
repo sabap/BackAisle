@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.46] - 2026-09-23
+
+- Climate rows were still one per UPS. SQL Server column names did not match, so the IDF id was ignored, and `idf_closet` is the UPS hostname (`DMC-UPS-01`). Rows now group by that hostname stem (`DMC`). If any UPS in the stem is flagged or has a real reading, the others drop off. A stored 0 is shown as no reading, not a bare °F.
+
 ## [0.5.45] - 2026-09-23
 
 - Climate no longer shows "attached" with a bare °F or % when the stored value is 0 or missing. A UPS counts as the IDF sensor only when it has a real temperature or humidity. Sibling UPS stay listed until that happens, then drop off. A sensor name or table-size counter alone does not mark the probe attached.
