@@ -334,20 +334,61 @@ function page_fleet(PDO $db): void {
     ba_layout_end();
 }
 
+function ba_row_lower(array $r): array
+{
+    $out = [];
+    foreach ($r as $k => $v) {
+        $out[strtolower((string)$k)] = $v;
+    }
+    return $out;
+}
+
+function ba_climate_num(mixed $v): ?float
+{
+    if ($v === null || $v === false || $v === '') {
+        return null;
+    }
+    if (is_string($v) && trim($v) === '') {
+        return null;
+    }
+    if (!is_numeric($v)) {
+        return null;
+    }
+    $n = (float)$v;
+    if ($n == 0.0) {
+        return null;
+    }
+    return $n;
+}
+
 function ba_climate_temp(array $r)
 {
-    if (array_key_exists('climate_temp', $r) && $r['climate_temp'] !== null && $r['climate_temp'] !== '') {
-        return $r['climate_temp'];
+    $r = ba_row_lower($r);
+    $n = ba_climate_num($r['climate_temp'] ?? null);
+    if ($n !== null) {
+        return $n;
     }
-    return $r['temp_f'] ?? null;
+    return ba_climate_num($r['temp_f'] ?? null);
 }
 
 function ba_climate_hum(array $r)
 {
-    if (array_key_exists('climate_hum', $r) && $r['climate_hum'] !== null && $r['climate_hum'] !== '') {
-        return $r['climate_hum'];
+    $r = ba_row_lower($r);
+    $n = ba_climate_num($r['climate_hum'] ?? null);
+    if ($n !== null) {
+        return $n;
     }
-    return $r['humidity_pct'] ?? null;
+    return ba_climate_num($r['humidity_pct'] ?? null);
+}
+
+function ba_climate_measure(mixed $v, string $unit, int $dec = 1): string
+{
+    $n = ba_climate_num($v);
+    if ($n === null) {
+        return '<span class="muted">no reading</span>';
+    }
+    $s = $dec === 0 ? (string)(int)round($n) : number_format($n, $dec, '.', '');
+    return h($s) . ' ' . h($unit);
 }
 
 function ba_climate_sensor_state(array $r): string
@@ -370,32 +411,41 @@ function ba_climate_sensor_state(array $r): string
 
 function ba_climate_has_reading(array $r): bool
 {
-    $temp = ba_climate_temp($r);
-    $hum = ba_climate_hum($r);
-    if ($temp !== null && $temp !== '' && (float)$temp != 0.0) {
-        return true;
-    }
-    if ($hum !== null && $hum !== '' && (float)$hum != 0.0) {
-        return true;
+    return ba_climate_temp($r) !== null || ba_climate_hum($r) !== null;
+}
+
+function ba_climate_flagged(array $r): bool
+{
+    $r = ba_row_lower($r);
+    foreach (['sensor_present', 'sample_sensor', 'climate_sensor'] as $key) {
+        if ((int)($r[$key] ?? 0) === 1) {
+            return true;
+        }
     }
     return false;
 }
 
-/** IDF is the PowerPanel group. idf_closet was stored as each UPS hostname, so it does not group a closet. */
+/** DMC-UPS-01 and DMC-UPS-02 are one IDF. idf_closet was stored as the UPS hostname. */
 function ba_climate_group_key(array $r): string
 {
+    $r = ba_row_lower($r);
     $gid = (int)($r['group_id'] ?? 0);
     if ($gid < 1) {
         $gid = (int)($r['gid'] ?? 0);
     }
+    $host = trim((string)($r['hostname'] ?? ''));
+    if ($host === '') {
+        $host = trim((string)($r['idf_closet'] ?? ''));
+    }
+    $stem = preg_replace('/[-_\s]*UPS[-_\s]*\d*$/i', '', $host);
+    $stem = strtolower(trim((string)$stem, "-_ \t"));
+    if ($stem !== '') {
+        return 'h:' . $stem;
+    }
     if ($gid > 0) {
         return 'g' . $gid;
     }
-    $closet = trim((string)($r['idf_closet'] ?? ''));
-    if ($closet !== '') {
-        return 'c:' . strtolower(trim((string)($r['building'] ?? '')) . '|' . $closet);
-    }
-    return 'd:' . (int)$r['id'];
+    return 'd:' . (int)($r['id'] ?? 0);
 }
 
 /** One row per IDF once any UPS in that IDF has an EnviroSensor reading. Until then each UPS stays listed. */
@@ -403,6 +453,7 @@ function ba_climate_closets(array $rows): array
 {
     $groups = [];
     foreach ($rows as $r) {
+        $r = ba_row_lower($r);
         $groups[ba_climate_group_key($r)][] = $r;
     }
     $out = [];
@@ -412,6 +463,7 @@ function ba_climate_closets(array $rows): array
         $anyExpected = false;
         $anyKnown = false;
         $anyReading = false;
+        $anyFlag = false;
         foreach ($members as $r) {
             if ((int)($r['sensor_expected'] ?? 0) === 1) {
                 $anyExpected = true;
@@ -420,8 +472,9 @@ function ba_climate_closets(array $rows): array
             if ($state !== 'unknown') {
                 $anyKnown = true;
             }
-            if (ba_climate_has_reading($r)) {
+            if (ba_climate_has_reading($r) || ba_climate_flagged($r)) {
                 $anyReading = true;
+                $anyFlag = true;
             }
             $score = 0;
             if ($state === 'present') {
@@ -448,7 +501,7 @@ function ba_climate_closets(array $rows): array
                 'collapsed' => $collapsed,
             ];
         };
-        if ($anyReading && $best !== null) {
+        if (($anyReading || $anyFlag) && $best !== null) {
             $out[] = $pack($best, count($members), $anyExpected, $anyKnown, $bestScore, count($members) > 1);
             continue;
         }
@@ -475,21 +528,22 @@ function page_climate(PDO $db): void {
         $r = $c['row'];
         $temp = ba_climate_temp($r);
         $hum = ba_climate_hum($r);
-        $showReading = ba_climate_has_reading($r);
-        $gid = (int)($r['group_id'] ?? 0);
-        if ($gid < 1) {
-            $gid = (int)($r['gid'] ?? 0);
-        }
-        $label = ($gid > 0 && function_exists('ba_group_path')) ? ba_group_path($db, $gid) : '';
-        if ($label === '') {
-            $label = trim((string)$r['building'].' / '.$r['idf_closet'], ' /');
+        $showReading = ba_climate_has_reading($r) || ba_climate_flagged($r);
+        $hostName = trim((string)($r['hostname'] ?? ''));
+        $stem = preg_replace('/[-_\s]*UPS[-_\s]*\d*$/i', '', $hostName);
+        $stem = trim((string)$stem, "-_ \t");
+        $building = trim((string)($r['building'] ?? ''));
+        if (!empty($c['collapsed']) && $stem !== '') {
+            $label = $building !== '' ? $building . ' / ' . $stem : $stem;
+        } else {
+            $label = trim($building . ' / ' . (string)($r['idf_closet'] ?? $hostName), ' /');
         }
         echo '<tr class="'.h(ba_worst($r)).'">';
         echo '<td><a href="/device.php?id='.(int)$r['id'].'">'.h($label).'</a></td>';
         if ($showReading) {
             echo '<td>attached</td>';
-            echo '<td>'.($temp === null || $temp === '' ? '<span class="muted">no reading</span>' : h(ba_fmt($temp, '°F'))).'</td>';
-            echo '<td>'.($hum === null || $hum === '' ? '<span class="muted">no reading</span>' : h(ba_fmt($hum, '%', 0))).'</td>';
+            echo '<td>'.ba_climate_measure($temp, '°F').'</td>';
+            echo '<td>'.ba_climate_measure($hum, '%', 0).'</td>';
         } elseif (!$c['expected']) {
             echo '<td class="muted">not expected</td><td>—</td><td>—</td>';
         } elseif (!$c['known']) {
