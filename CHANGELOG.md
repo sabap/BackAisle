@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.45] - 2026-09-23
+
+- Climate no longer shows "attached" with a bare °F or % when the stored value is 0 or missing. A UPS counts as the IDF sensor only when it has a real temperature or humidity. Sibling UPS stay listed until that happens, then drop off. A sensor name or table-size counter alone does not mark the probe attached.
+
 ## [0.5.44] - 2026-09-23
 
 - Climate was one row per UPS hostname, so the other units in an IDF never dropped off after a sensor reading. Rows now group by the PowerPanel IDF. When any UPS in that IDF has a temperature or humidity, the rest of that IDF is hidden. Legacy EnviroSensor scalars and table index 2 are polled too, which is what PowerPanel still shows on older cards.

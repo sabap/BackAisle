@@ -473,10 +473,9 @@ function page_climate(PDO $db): void {
     echo '<table><thead><tr><th>Closet</th><th>Sensor</th><th>Temp</th><th>RH</th><th>Host</th></tr></thead><tbody>';
     foreach ($closets as $c) {
         $r = $c['row'];
-        $state = ba_climate_sensor_state($r);
         $temp = ba_climate_temp($r);
         $hum = ba_climate_hum($r);
-        $showReading = $state === 'present' || ($temp !== null && $temp !== '');
+        $showReading = ba_climate_has_reading($r);
         $gid = (int)($r['group_id'] ?? 0);
         if ($gid < 1) {
             $gid = (int)($r['gid'] ?? 0);
