@@ -124,15 +124,15 @@ def decode(raw: dict[str, Any]) -> dict[str, Any]:
     )
     saw_env = any(k in raw for k in env_keys)
     legacy_temp = _int(raw.get("tempF10"))
-    if env2_raw is not None or env2_h is not None or envir_name or (env2_n and env2_n > 0) or legacy_temp not in (None, 0):
+    # A name or a table-size counter is not a temperature. Only a real reading
+    # marks the probe attached. Otherwise every UPS in the IDF stays on the list.
+    if env2_raw is not None or env2_h is not None or legacy_temp not in (None, 0):
         sensor_present = 1
     elif not saw_env:
-        # This poll did not get an answer from the probe. Do not record "absent".
         sensor_present = None
-    elif env2_n == 0 and env2_raw is None and env2_h is None and not envir_name:
+    elif env2_n == 0 and env2_raw is None and env2_h is None:
         sensor_present = 0
     else:
-        # Blank varbinds from a noSuchName group are not a real "no sensor" answer.
         sensor_present = None
     return {
         "model": _str(raw.get("model")),
