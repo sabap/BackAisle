@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.50] - 2026-09-24
+
+- Clicking an empty rack U went to `/rack?...`, which IIS has no rewrite for, so it 404s. Those links now go to `rack.php`, the same way the rest of the site does.
+
 ## [0.5.49] - 2026-09-24
 
 - PowerPanel re-import no longer fails on SQL Server with "text is incompatible with int". Group and device ids are bound as integers. A missing group does not clear one that is already set.
