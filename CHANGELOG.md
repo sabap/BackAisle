@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.54] - 2026-09-24
+
+- UPS polls were calling cards unreachable when PowerPanel still got a reply. The status request waited 1 second and did not retry, and a slow sensor read could cancel a poll that already had battery and output data. Status now waits 3 seconds, retries once, and keeps that card's SNMP session. Temperature is read on the 5-minute pass and cannot by itself raise an unreachable alert. A card that truly does not answer still alerts after three failed polls.
+
 ## [0.5.53] - 2026-09-24
 
 - Alerts has Ack all and Clear all. Ack all marks every open alert acknowledged. Clear all removes every open and acknowledged alert from the list. Already cleared alerts are left alone.

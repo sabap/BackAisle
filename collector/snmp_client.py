@@ -163,11 +163,13 @@ def decode(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-# Status poll stays small so a dead card frees the worker in ~2s.
+# CyberPower enterprise OIDs only. rfcRuntimeMin is standard UPS-MIB and is
+# asked separately: a noSuchName anywhere in a multi-get blanks the whole reply.
 STATUS_KEYS = (
-    "capacity", "runtimeTicks", "rfcRuntimeMin", "batteryStatus",
-    "outputStatus", "outputLoad", "inputVoltage", "outputVoltage",
+    "capacity", "runtimeTicks", "batteryStatus", "outputStatus",
+    "outputLoad", "inputVoltage", "outputVoltage",
 )
+OPTIONAL_STATUS_KEYS = ("rfcRuntimeMin",)
 IDENTITY_KEYS = (
     "sysName", "ifPhysAddress", "model", "name", "firmware", "serial",
     "timeOnBattery", "replaceIndicator", "outputPower",
@@ -198,6 +200,15 @@ def close_engine(engine) -> None:
         engine.close_dispatcher()
     except Exception:
         pass
+
+
+def _is_timeout(err) -> bool:
+    return "timeout" in str(err or "").lower() or "timed out" in str(err or "").lower()
+
+
+def _status_reached(raw: dict[str, Any]) -> bool:
+    """The card answered a power OID. A missing sensor must not undo that."""
+    return any(k in raw for k in ("capacity", "outputStatus", "batteryStatus", "outputLoad", "inputVoltage"))
 
 
 def _snmp_err(err_stat) -> bool:
@@ -241,16 +252,42 @@ async def _snmp_batches(
         except Exception:
             err_ind, err_stat, var_binds = "timeout", None, None
         if err_ind or _snmp_err(err_stat):
-            if not fallback_singles:
-                raise RuntimeError(str(err_ind or err_stat))
-            # A timed-out or noSuchName group read must not skip temperature.
-            for name in batch_names:
-                if name not in raw:
-                    await _snmp_one(engine, creds, target, ctx, name, raw)
-            continue
+            # A timeout already used the transport retries. More single-OID
+            # waits just hold the worker. noSuchName did answer, so ask
+            # each OID on its own — that is how these cards skip one missing name.
+            if fallback_singles and not _is_timeout(err_ind):
+                for name in batch_names:
+                    if name not in raw:
+                        await _snmp_one(engine, creds, target, ctx, name, raw)
+                continue
+            if _is_timeout(err_ind):
+                raise TimeoutError(str(err_ind))
+            raise RuntimeError(str(err_ind or err_stat))
         if var_binds:
             for name, vb in zip(batch_names, var_binds):
                 raw[name] = vb[1]
+
+
+async def _read_climate(engine, creds, env_target, status_target, ctx, raw: dict[str, Any]) -> None:
+    try:
+        await _snmp_batches(
+            engine, creds, env_target, ctx, ENV_READING_KEYS, raw, fallback_singles=True,
+        )
+    except Exception:
+        for name in ENV_READING_KEYS:
+            if name not in raw:
+                await _snmp_one(engine, creds, env_target, ctx, name, raw)
+    if _int(raw.get("envir2Temp")) is None and _int(raw.get("tempF10")) is None:
+        await _snmp_one(engine, creds, env_target, ctx, "envir2Temp2", raw)
+        await _snmp_one(engine, creds, env_target, ctx, "envir2Humid2", raw)
+    try:
+        await _snmp_batches(engine, creds, env_target, ctx, ENV_EXTRA_KEYS, raw)
+    except Exception:
+        pass
+    try:
+        await _snmp_batches(engine, creds, status_target, ctx, IDENTITY_KEYS, raw)
+    except Exception:
+        pass
 
 
 async def snmp_get(
@@ -258,8 +295,8 @@ async def snmp_get(
     user: str,
     auth: str,
     priv: str,
-    timeout: float = 1.0,
-    retries: int = 0,
+    timeout: float = 3.0,
+    retries: int = 1,
     climate: bool = True,
     engine=None,
 ) -> dict[str, Any]:
@@ -276,35 +313,37 @@ async def snmp_get(
             authProtocol=usmHMACSHAAuthProtocol,
             privProtocol=usmAesCfb128Protocol,
         )
+        # 3s and one retry. A 1s wait with no retry marked every card
+        # unreachable while PowerPanel, polling the same cards, still got a reply.
         target = await UdpTransportTarget.create((host, 161), timeout=timeout, retries=retries)
-        # One retry on the group doubles the wait before we ever ask for temperature alone.
-        env_timeout = 5.0 if climate else 3.0
-        env_target = await UdpTransportTarget.create((host, 161), timeout=env_timeout, retries=0)
+        env_target = await UdpTransportTarget.create((host, 161), timeout=5.0, retries=0)
         ctx = ContextData()
         raw: dict[str, Any] = {}
-        await _snmp_batches(engine, creds, target, ctx, STATUS_KEYS, raw)
         try:
-            await _snmp_batches(
-                engine, creds, env_target, ctx, ENV_READING_KEYS, raw, fallback_singles=True,
-            )
+            await _snmp_batches(engine, creds, target, ctx, STATUS_KEYS, raw, fallback_singles=True)
+        except TimeoutError:
+            if not _status_reached(raw):
+                raise RuntimeError("No SNMP response received before timeout")
         except Exception:
-            for name in ENV_READING_KEYS:
-                if name not in raw:
-                    await _snmp_one(engine, creds, env_target, ctx, name, raw)
-        if _int(raw.get("envir2Temp")) is None and _int(raw.get("tempF10")) is None:
-            await _snmp_one(engine, creds, env_target, ctx, "envir2Temp2", raw)
-            await _snmp_one(engine, creds, env_target, ctx, "envir2Humid2", raw)
+            if not _status_reached(raw):
+                raise
+        if "runtimeTicks" not in raw:
+            try:
+                await _snmp_batches(engine, creds, target, ctx, OPTIONAL_STATUS_KEYS, raw, fallback_singles=True)
+            except Exception:
+                pass
+        if not _status_reached(raw):
+            raise RuntimeError("empty SNMP GET")
+        # Sensor OIDs are the slow part. They run on the 5-minute climate pass
+        # and must not turn a good power reading into an unreachable alert.
         if climate:
             try:
-                await _snmp_batches(engine, creds, env_target, ctx, ENV_EXTRA_KEYS, raw)
+                await asyncio.wait_for(
+                    _read_climate(engine, creds, env_target, target, ctx, raw),
+                    timeout=10,
+                )
             except Exception:
                 pass
-            try:
-                await _snmp_batches(engine, creds, target, ctx, IDENTITY_KEYS, raw)
-            except Exception:
-                pass
-        if not raw:
-            raise RuntimeError("empty SNMP GET")
         return decode(raw)
     finally:
         if own:
