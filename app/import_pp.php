@@ -23,6 +23,25 @@ function ba_pp_table(array $data, string $name): array
     return [];
 }
 
+/** pdo_odbc sends every PHP value as text. SQL Server then refuses that text for an INT column. */
+function ba_pp_exec(PDO $db, string $sql, array $params): PDOStatement
+{
+    $st = $db->prepare($sql);
+    $i = 1;
+    foreach ($params as $p) {
+        if ($p === null) {
+            $st->bindValue($i, null, PDO::PARAM_NULL);
+        } elseif (is_int($p)) {
+            $st->bindValue($i, $p, PDO::PARAM_INT);
+        } else {
+            $st->bindValue($i, (string)$p, PDO::PARAM_STR);
+        }
+        $i++;
+    }
+    $st->execute();
+    return $st;
+}
+
 function ba_pp_is_root(mixed $parent): bool
 {
     $p = strtolower(trim((string)$parent));
@@ -148,16 +167,14 @@ function ba_import_powerpanel_zip(PDO $db, string $zipPath): array
         $note = $oid !== '' ? ('pp:' . $oid) : 'PowerPanel import';
         $nid = 0;
         if ($oid !== '') {
-            $st = $db->prepare('SELECT id FROM groups WHERE notes=?');
-            $st->execute([$note]);
+            $st = ba_pp_exec($db, 'SELECT id FROM groups WHERE notes=?', [$note]);
             $hit = $st->fetch();
             if ($hit) {
                 $nid = (int)(is_array($hit) ? ($hit['id'] ?? $hit['ID'] ?? 0) : 0);
             }
         }
         if ($nid < 1) {
-            $st = $db->prepare('SELECT id, parent_id FROM groups WHERE name=?');
-            $st->execute([$name]);
+            $st = ba_pp_exec($db, 'SELECT id, parent_id FROM groups WHERE name=?', [$name]);
             $cands = $st->fetchAll() ?: [];
             foreach ($cands as $cand) {
                 $cid = (int)($cand['id'] ?? $cand['ID'] ?? 0);
@@ -168,15 +185,20 @@ function ba_import_powerpanel_zip(PDO $db, string $zipPath): array
             }
         }
         if ($nid > 0) {
-            $db->prepare('UPDATE groups SET parent_id=?, name=?, notes=? WHERE id=?')
-                ->execute([$parentNew, $name, $note, $nid]);
+            ba_pp_exec(
+                $db,
+                'UPDATE groups SET parent_id=?, name=?, notes=? WHERE id=?',
+                [$parentNew === null ? null : (int)$parentNew, $name, $note, (int)$nid]
+            );
         } else {
-            $db->prepare('INSERT INTO groups (parent_id, name, notes) VALUES (?,?,?)')
-                ->execute([$parentNew, $name, $note]);
+            ba_pp_exec(
+                $db,
+                'INSERT INTO groups (parent_id, name, notes) VALUES (?,?,?)',
+                [$parentNew === null ? null : (int)$parentNew, $name, $note]
+            );
             $nid = ba_last_id($db);
             if ($nid < 1) {
-                $st = $db->prepare('SELECT MAX(id) FROM groups WHERE name=? AND notes=?');
-                $st->execute([$name, $note]);
+                $st = ba_pp_exec($db, 'SELECT MAX(id) FROM groups WHERE name=? AND notes=?', [$name, $note]);
                 $nid = (int)$st->fetchColumn();
             }
             $stats['groups']++;
@@ -200,30 +222,43 @@ function ba_import_powerpanel_zip(PDO $db, string $zipPath): array
         $loc = trim((string)ba_pp_get($d, 'location', ''));
         $gid = $groupMap[(string)ba_pp_get($d, 'belongGroupId', ba_pp_get($d, 'groupId', ''))] ?? null;
         $closetName = $host;
-        if ($gid) {
-            $gn = $db->prepare('SELECT name FROM groups WHERE id=?');
-            $gn->execute([$gid]);
+        $gidInt = $gid ? (int)$gid : null;
+        if ($gidInt) {
+            $gn = ba_pp_exec($db, 'SELECT name FROM groups WHERE id=?', [$gidInt]);
             $got = trim((string)$gn->fetchColumn());
             if ($got !== '') {
                 $closetName = $got;
             }
         }
         $sid = $snmpMap[(string)ba_pp_get($d, 'snmpId', '')] ?? null;
-        $st = $db->prepare('SELECT id FROM devices WHERE ip=?');
-        $st->execute([$ip]);
+        $sidInt = $sid ? (int)$sid : null;
+        $st = ba_pp_exec($db, 'SELECT id FROM devices WHERE ip=?', [$ip]);
         $exist = $st->fetch();
         if ($exist) {
-            $db->prepare(
-                'UPDATE devices SET hostname=COALESCE(NULLIF(hostname,\'\'), ?), group_id=COALESCE(?, group_id), '
-                . 'snmp_profile_id=COALESCE(snmp_profile_id, ?), load_notes=COALESCE(load_notes, ?), '
-                . 'idf_closet=CASE WHEN idf_closet IS NULL OR idf_closet=\'\' OR idf_closet=hostname THEN ? ELSE idf_closet END '
-                . 'WHERE id=?'
-            )->execute([$host, $gid, $sid, $loc, $closetName, $exist['id']]);
+            $existId = (int)(is_array($exist) ? ($exist['id'] ?? $exist['ID'] ?? 0) : 0);
+            $sets = ['hostname=COALESCE(NULLIF(hostname,\'\'), ?)'];
+            $params = [$host];
+            if ($gidInt) {
+                $sets[] = 'group_id=?';
+                $params[] = $gidInt;
+            }
+            if ($sidInt) {
+                $sets[] = 'snmp_profile_id=?';
+                $params[] = $sidInt;
+            }
+            $sets[] = 'load_notes=COALESCE(load_notes, ?)';
+            $params[] = $loc;
+            $sets[] = 'idf_closet=CASE WHEN idf_closet IS NULL OR idf_closet=\'\' OR idf_closet=hostname THEN ? ELSE idf_closet END';
+            $params[] = $closetName;
+            $params[] = $existId;
+            ba_pp_exec($db, 'UPDATE devices SET ' . implode(', ', $sets) . ' WHERE id=?', $params);
         } else {
-            $db->prepare(
+            ba_pp_exec(
+                $db,
                 'INSERT INTO devices (ip, hostname, site, building, idf_closet, load_notes, group_id, snmp_profile_id, '
-                . 'sensor_expected, is_simulated, enabled, va_rating) VALUES (?,?,?,?,?,?,?,?,1,0,1,2000)'
-            )->execute([$ip, $host, 'Imported', $loc, $closetName, $loc, $gid, $sid]);
+                . 'sensor_expected, is_simulated, enabled, va_rating) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+                [$ip, $host, 'Imported', $loc, $closetName, $loc, $gidInt, $sidInt, 1, 0, 1, 2000]
+            );
             $stats['devices']++;
         }
     }
