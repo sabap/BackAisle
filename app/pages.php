@@ -596,16 +596,35 @@ function page_alerts(PDO $db, array $user): void {
             $db->prepare("UPDATE alerts SET status='acked', acked_at=datetime('now') WHERE id=? AND status='open'")->execute([$id]);
             ba_audit($db, 'ack_alert', 'alert', (string)$id);
         }
+        if ($act === 'ack_all') {
+            $n = (int)$db->query("SELECT COUNT(*) FROM alerts WHERE status='open'")->fetchColumn();
+            $db->exec("UPDATE alerts SET status='acked', acked_at=datetime('now') WHERE status='open'");
+            ba_audit($db, 'ack_all_alerts', 'alert', null, (string)$n);
+        }
         if ($act === 'clear') {
             $db->prepare("UPDATE alerts SET status='cleared', cleared_at=datetime('now') WHERE id=?")->execute([$id]);
             ba_audit($db, 'clear_alert', 'alert', (string)$id);
+        }
+        if ($act === 'clear_all') {
+            $n = (int)$db->query("SELECT COUNT(*) FROM alerts WHERE status IN ('open','acked')")->fetchColumn();
+            $db->exec("UPDATE alerts SET status='cleared', cleared_at=datetime('now') WHERE status IN ('open','acked')");
+            ba_audit($db, 'clear_all_alerts', 'alert', null, (string)$n);
         }
         header('Location: ' . ba_href('/alerts'));
         exit;
     }
     $rows = $db->query("SELECT a.*, d.hostname, d.ip, d.idf_closet FROM alerts a JOIN devices d ON d.id=a.device_id WHERE a.status IN ('open','acked') ORDER BY a.opened_at DESC")->fetchAll();
     ba_layout_start('Alerts', 'alerts');
-    echo '<h1>Alerts</h1>';
+    echo '<div class="dash-hero"><div><h1>Alerts</h1>';
+    echo '<p class="muted">Ack keeps an alert on this list. Clear takes it off.</p></div>';
+    if (($user['role'] ?? '') === 'admin' && $rows) {
+        echo '<form method="post" class="filters">';
+        echo '<button name="act" value="ack_all">Ack all</button>';
+        echo '<button name="act" value="clear_all" onclick="return confirm(\'Clear every alert on this page?\')">Clear all</button>';
+        echo '</form></div>';
+    } else {
+        echo '</div>';
+    }
     if (!$rows) echo '<div class="empty">No open alerts.</div>';
     else {
         echo '<table><thead><tr><th>Opened</th><th>Sev</th><th>Closet</th><th>Code</th><th>Message</th><th></th></tr></thead><tbody>';
