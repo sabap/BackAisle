@@ -126,6 +126,7 @@ function ba_import_powerpanel_zip(PDO $db, string $zipPath): array
     }
 
     $groupMap = [];
+    $usedGroupIds = [];
     $pending = array_values(array_filter(ba_pp_table($data, 'DbGroup'), 'is_array'));
     $knownIds = [];
     foreach ($pending as $g) {
@@ -144,32 +145,43 @@ function ba_import_powerpanel_zip(PDO $db, string $zipPath): array
         }
         $parentNew = $isRoot ? null : $groupMap[$parentOld];
         $name = trim((string)ba_pp_get($g, 'name', 'group-' . $oid));
-        if ($parentNew === null) {
-            $st = $db->prepare('SELECT id FROM groups WHERE name=? AND parent_id IS NULL');
-            $st->execute([$name]);
-        } else {
-            $st = $db->prepare('SELECT id FROM groups WHERE name=? AND parent_id=?');
-            $st->execute([$name, $parentNew]);
+        $note = $oid !== '' ? ('pp:' . $oid) : 'PowerPanel import';
+        $nid = 0;
+        if ($oid !== '') {
+            $st = $db->prepare('SELECT id FROM groups WHERE notes=?');
+            $st->execute([$note]);
+            $hit = $st->fetch();
+            if ($hit) {
+                $nid = (int)(is_array($hit) ? ($hit['id'] ?? $hit['ID'] ?? 0) : 0);
+            }
         }
-        $exist = $st->fetch();
-        if ($exist) {
-            $nid = (int)$exist['id'];
+        if ($nid < 1) {
+            $st = $db->prepare('SELECT id, parent_id FROM groups WHERE name=?');
+            $st->execute([$name]);
+            $cands = $st->fetchAll() ?: [];
+            foreach ($cands as $cand) {
+                $cid = (int)($cand['id'] ?? $cand['ID'] ?? 0);
+                if ($cid > 0 && !in_array($cid, $usedGroupIds, true)) {
+                    $nid = $cid;
+                    break;
+                }
+            }
+        }
+        if ($nid > 0) {
+            $db->prepare('UPDATE groups SET parent_id=?, name=?, notes=? WHERE id=?')
+                ->execute([$parentNew, $name, $note, $nid]);
         } else {
             $db->prepare('INSERT INTO groups (parent_id, name, notes) VALUES (?,?,?)')
-                ->execute([$parentNew, $name, 'PowerPanel import']);
+                ->execute([$parentNew, $name, $note]);
             $nid = ba_last_id($db);
             if ($nid < 1) {
-                if ($parentNew === null) {
-                    $st = $db->prepare('SELECT MAX(id) FROM groups WHERE name=? AND parent_id IS NULL');
-                    $st->execute([$name]);
-                } else {
-                    $st = $db->prepare('SELECT MAX(id) FROM groups WHERE name=? AND parent_id=?');
-                    $st->execute([$name, $parentNew]);
-                }
+                $st = $db->prepare('SELECT MAX(id) FROM groups WHERE name=? AND notes=?');
+                $st->execute([$name, $note]);
                 $nid = (int)$st->fetchColumn();
             }
             $stats['groups']++;
         }
+        $usedGroupIds[] = $nid;
         if ($oid !== '') {
             $groupMap[$oid] = $nid;
         }
@@ -202,7 +214,7 @@ function ba_import_powerpanel_zip(PDO $db, string $zipPath): array
         $exist = $st->fetch();
         if ($exist) {
             $db->prepare(
-                'UPDATE devices SET hostname=COALESCE(NULLIF(hostname,\'\'), ?), group_id=COALESCE(group_id, ?), '
+                'UPDATE devices SET hostname=COALESCE(NULLIF(hostname,\'\'), ?), group_id=COALESCE(?, group_id), '
                 . 'snmp_profile_id=COALESCE(snmp_profile_id, ?), load_notes=COALESCE(load_notes, ?), '
                 . 'idf_closet=CASE WHEN idf_closet IS NULL OR idf_closet=\'\' OR idf_closet=hostname THEN ? ELSE idf_closet END '
                 . 'WHERE id=?'

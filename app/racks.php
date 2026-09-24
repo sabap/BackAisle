@@ -367,7 +367,7 @@ function page_idfs(PDO $db, array $user): void {
     <div class="dash-hero">
       <div>
         <h1>Locations</h1>
-        <p class="muted">Expand a campus or building, then open a closet to see its racks.</p>
+        <p class="muted">Informational view of the tree managed under <a href="<?= h(ba_href('/org?tab=groups')) ?>">Org</a>. Expand a campus, then open an IDF.</p>
       </div>
     </div>
     <div class="kpis dash-kpis">
@@ -388,15 +388,7 @@ function page_idfs(PDO $db, array $user): void {
       ?>
     </div>
     <?php
-    if ($admin) {
-        echo '<form method="post" class="card stack"><h3>Add network rack</h3>';
-        echo '<input type="hidden" name="act" value="add_rack">';
-        echo '<label>Closet / group</label><select name="group_id" required><option value="">choose</option>'.ba_group_options($groups).'</select>';
-        echo '<label>Name</label><input name="name" placeholder="Rack A" required>';
-        echo '<label>Height (U)</label><input type="number" name="u_height" min="4" max="58" value="42">';
-        echo '<label>Left-to-right order</label><input type="number" name="sort_order" value="1">';
-        echo '<button>Add rack</button></form>';
-    }
+    echo '<p class="muted"><a href="'.h(ba_href('/org?tab=groups')).'">Add, move, or remove IDFs on the Org page.</a> Re-upload the PowerPanel profile there if a campus has no closets under it.</p>';
     ba_layout_end();
 }
 

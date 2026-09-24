@@ -1,25 +1,57 @@
 <?php
 declare(strict_types=1);
 
-function ba_groups(PDO $db): array {
-    return $db->query('SELECT * FROM groups ORDER BY name')->fetchAll();
+function ba_group_norm(array $g): array {
+    $n = [];
+    foreach ($g as $k => $v) {
+        $n[strtolower((string)$k)] = $v;
+    }
+    $n['id'] = (int)($n['id'] ?? 0);
+    $raw = $n['parent_id'] ?? null;
+    if ($raw === null || $raw === '' || $raw === false || (int)$raw === 0) {
+        $n['parent_id'] = null;
+    } else {
+        $n['parent_id'] = (int)$raw;
+    }
+    return $n;
 }
 
-function ba_group_children(array $groups, ?int $parent): array {
+function ba_groups(PDO $db): array {
+    $rows = $db->query('SELECT * FROM groups ORDER BY name')->fetchAll() ?: [];
     $out = [];
-    foreach ($groups as $g) {
-        $pid = $g['parent_id'] === null ? null : (int)$g['parent_id'];
-        if ($pid === $parent) $out[] = $g;
+    foreach ($rows as $g) {
+        if (is_array($g)) {
+            $out[] = ba_group_norm($g);
+        }
     }
     return $out;
 }
 
-function ba_group_options(array $groups, ?int $parent = null, string $prefix = '', ?int $skip = null): string {
+function ba_group_children(array $groups, ?int $parent): array {
+    $ids = [];
+    foreach ($groups as $g) {
+        $ids[(int)$g['id']] = true;
+    }
+    $out = [];
+    foreach ($groups as $g) {
+        $pid = $g['parent_id'] ?? null;
+        if ($pid !== null && !isset($ids[(int)$pid])) {
+            $pid = null;
+        }
+        if ($pid === $parent) {
+            $out[] = $g;
+        }
+    }
+    return $out;
+}
+
+function ba_group_options(array $groups, ?int $parent = null, string $prefix = '', ?int $skip = null, ?int $selected = null): string {
     $html = '';
     foreach (ba_group_children($groups, $parent) as $g) {
         if ($skip && (int)$g['id'] === $skip) continue;
-        $html .= '<option value="'.(int)$g['id'].'">'.h($prefix.$g['name']).'</option>';
-        $html .= ba_group_options($groups, (int)$g['id'], $prefix.'— ', $skip);
+        $sel = ($selected !== null && (int)$g['id'] === $selected) ? ' selected' : '';
+        $html .= '<option value="'.(int)$g['id'].'"'.$sel.'>'.h($prefix.$g['name']).'</option>';
+        $html .= ba_group_options($groups, (int)$g['id'], $prefix.'— ', $skip, $selected);
     }
     return $html;
 }
@@ -70,6 +102,27 @@ function page_org(PDO $db, array $user): void {
                     ->execute([$parent, trim($_POST['name']), (int)($_POST['alert_hold_sec'] ?? 180), trim($_POST['notes'] ?? '')]);
                 ba_audit($db, 'add_group', 'group', trim($_POST['name']));
                 $msg = 'Group created';
+            } elseif ($act === 'save_group') {
+                $id = (int)($_POST['id'] ?? 0);
+                $name = trim((string)($_POST['name'] ?? ''));
+                $parent = ($_POST['parent_id'] ?? '') === '' ? null : (int)$_POST['parent_id'];
+                if ($id < 1 || $name === '') {
+                    throw new RuntimeException('Name and group are required');
+                }
+                if ($parent === $id) {
+                    throw new RuntimeException('A location cannot be its own parent');
+                }
+                if ($parent !== null) {
+                    $all = ba_groups($db);
+                    $desc = ba_group_descendant_ids($all, $id);
+                    if (in_array($parent, $desc, true)) {
+                        throw new RuntimeException('That parent is inside this location');
+                    }
+                }
+                $db->prepare('UPDATE groups SET name=?, parent_id=?, alert_hold_sec=? WHERE id=?')
+                    ->execute([$name, $parent, (int)($_POST['alert_hold_sec'] ?? 180), $id]);
+                ba_audit($db, 'save_group', 'group', (string)$id, $name);
+                $msg = 'Location updated';
             } elseif ($act === 'del_group') {
                 $id = (int)$_POST['id'];
                 $kids = $db->prepare('SELECT COUNT(*) n FROM groups WHERE parent_id=?');
@@ -265,18 +318,34 @@ PY);
         echo '<label>Parent</label><select name="parent_id"><option value="">(top level)</option>'.ba_group_options($groups).'</select>';
         echo '<label>Alert hold (seconds)</label><input type="number" name="alert_hold_sec" value="180">';
         echo '<input type="hidden" name="act" value="add_group"><button>Create</button></form>';
-        echo '<div class="card"><h3>Tree</h3>';
-        $walk = function ($parent, $prefix) use (&$walk, $groups, $db) {
+        echo '<div class="card"><h3>IDF tree</h3>';
+        echo '<p class="muted">Campuses and buildings are the top of the tree. IDFs sit under them. Rename, move, or remove a location here. The IDFs page only shows this tree.</p>';
+        $walk = function ($parent) use (&$walk, $groups, $db) {
             foreach (ba_group_children($groups, $parent) as $g) {
-                $n = $db->prepare('SELECT COUNT(*) c FROM devices WHERE group_id=?');
-                $n->execute([$g['id']]);
-                echo '<div style="margin:.25rem 0 0 '.strlen($prefix)*8 .'px">'.h($prefix.$g['name']).' <span class="muted">'.$n->fetch()['c'].' units · hold '.$g['alert_hold_sec'].'s</span> ';
-                echo '<a href="'.h(ba_href('/idfs?group='.(int)$g['id'])).'">racks</a> ';
-                echo '<form method="post" style="display:inline"><input type="hidden" name="act" value="del_group"><input type="hidden" name="id" value="'.(int)$g['id'].'"><button>remove</button></form></div>';
-                $walk((int)$g['id'], $prefix.'— ');
+                $id = (int)$g['id'];
+                $n = $db->prepare('SELECT COUNT(*) FROM devices WHERE group_id=?');
+                $n->execute([$id]);
+                $units = (int)$n->fetchColumn();
+                $kids = ba_group_children($groups, $id);
+                echo '<details class="loc-branch"'.($parent === null ? ' open' : '').'>';
+                echo '<summary class="loc-sum"><span class="loc-title">'.h($g['name']).'</span>';
+                echo '<span class="loc-meta">'.$units.' units'.($kids ? ' · '.count($kids).' below' : '').'</span></summary>';
+                echo '<div class="loc-kids">';
+                echo '<form method="post" class="filters">';
+                echo '<input type="hidden" name="act" value="save_group"><input type="hidden" name="id" value="'.$id.'">';
+                echo '<input name="name" value="'.h($g['name']).'" required>';
+                $topSel = empty($g['parent_id']) ? ' selected' : '';
+                echo '<select name="parent_id"><option value=""'.$topSel.'>(top level)</option>'.ba_group_options($groups, null, '', $id, $g['parent_id'] ?? null).'</select>';
+                echo '<input type="number" name="alert_hold_sec" value="'.(int)($g['alert_hold_sec'] ?? 180).'" title="Alert hold seconds">';
+                echo '<button>Save</button>';
+                echo '<a href="'.h(ba_href('/idfs?group='.$id)).'">view</a>';
+                echo '</form>';
+                echo '<form method="post" style="display:inline"><input type="hidden" name="act" value="del_group"><input type="hidden" name="id" value="'.$id.'"><button>Remove</button></form>';
+                $walk($id);
+                echo '</div></details>';
             }
         };
-        $walk(null, '');
+        $walk(null);
         echo '</div></div>';
         echo '<div class="card"><h3>Move a unit</h3><form method="post" class="filters">';
         echo '<select name="device_id">';
@@ -359,7 +428,7 @@ PY);
 
     if ($tab === 'import') {
         echo '<form method="post" action="/org.php?tab=import" enctype="multipart/form-data" class="card stack"><h3>Import PowerPanel site</h3>';
-        echo '<p class="muted">Accepts PowerPanel Business <code>profile.zip</code> (DbGroup, DbDevice, DbSNMPSetting). Nested groups preserved. Existing IPs are updated in place, not duplicated.</p>';
+        echo '<p class="muted">Upload the same PowerPanel <code>profile.zip</code> again to rebuild the tree. Campuses stay at the top. Each IDF is moved back under its campus, and each UPS is pointed at that IDF. Existing IPs are not duplicated.</p>';
         echo '<input type="file" name="zip" accept=".zip" required>';
         echo '<input type="hidden" name="tab" value="import">';
         echo '<input type="hidden" name="act" value="import_pp"><button>Import</button></form>';
