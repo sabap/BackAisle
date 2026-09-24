@@ -1237,13 +1237,68 @@ function page_api_dashboard(PDO $db): void {
             $humid[] = ['t' => $r['h'], 'v' => ba_chart_num($r['rh'] ?? null, true)];
         }
     }
-    $hottest = $db->query("SELECT g.id, g.name, AVG(s.temp_f) t FROM devices d JOIN groups g ON g.id=d.group_id
-        JOIN samples s ON s.id = (SELECT id FROM samples WHERE device_id=d.id AND temp_f IS NOT NULL AND temp_f <> 0 ORDER BY ts DESC LIMIT 1)
-        WHERE s.temp_f IS NOT NULL AND s.temp_f <> 0 AND ".ba_ups_only_sql()." GROUP BY g.id, g.name ORDER BY t DESC LIMIT 5")->fetchAll();
-    $powerTop = $db->query("SELECT g.id, g.name, AVG(COALESCE(s.power_w, s.load_pct*20.0)) w FROM devices d JOIN groups g ON g.id=d.group_id
-        JOIN samples s ON s.id = (SELECT id FROM samples WHERE device_id=d.id ORDER BY ts DESC LIMIT 1)
-        WHERE ".ba_ups_only_sql()." GROUP BY g.id, g.name ORDER BY w DESC LIMIT 5")->fetchAll();
+    [$hottest, $powerTop] = ba_dashboard_ranks($db);
     echo json_encode(['power' => $power, 'temp' => $temp, 'humid' => $humid, 'hottest' => $hottest, 'power_top' => $powerTop]);
+}
+
+/** Top IDFs by temperature and watts. Built in PHP so a missing group_id or SQL Server column case cannot blank the cards. */
+function ba_dashboard_ranks(PDO $db): array
+{
+    $rows = [];
+    try {
+        $rows = $db->query(ba_latest_join() . ' WHERE ' . ba_ups_only_sql())->fetchAll() ?: [];
+    } catch (Throwable $e) {
+        return [[], []];
+    }
+    $by = [];
+    foreach ($rows as $r) {
+        $r = ba_row_lower($r);
+        $key = ba_climate_group_key($r);
+        if (!isset($by[$key])) {
+            $host = trim((string)($r['hostname'] ?? ''));
+            $stem = preg_replace('/[-_\s]*UPS[-_\s]*\d*$/i', '', $host);
+            $stem = trim((string)$stem, "-_ \t");
+            $name = $stem !== '' ? $stem : trim((string)($r['group_name'] ?: ($r['idf_closet'] ?: $host)));
+            $by[$key] = [
+                'id' => (int)($r['group_id'] ?? 0),
+                'name' => $name !== '' ? $name : 'IDF',
+                'temps' => [],
+                'powers' => [],
+            ];
+        }
+        $temp = ba_climate_temp($r);
+        if ($temp !== null) {
+            $by[$key]['temps'][] = $temp;
+        }
+        $watts = ba_chart_num($r['power_w'] ?? null);
+        if ($watts === null && is_numeric($r['load_pct'] ?? null)) {
+            $watts = (float)$r['load_pct'] * 20.0;
+        }
+        if ($watts !== null) {
+            $by[$key]['powers'][] = $watts;
+        }
+    }
+    $hot = [];
+    $pwr = [];
+    foreach ($by as $slot) {
+        if ($slot['temps']) {
+            $hot[] = [
+                'id' => $slot['id'],
+                'name' => $slot['name'],
+                't' => round(array_sum($slot['temps']) / count($slot['temps']), 1),
+            ];
+        }
+        if ($slot['powers']) {
+            $pwr[] = [
+                'id' => $slot['id'],
+                'name' => $slot['name'],
+                'w' => round(array_sum($slot['powers']), 1),
+            ];
+        }
+    }
+    usort($hot, static fn (array $a, array $b): int => $b['t'] <=> $a['t']);
+    usort($pwr, static fn (array $a, array $b): int => $b['w'] <=> $a['w']);
+    return [array_slice($hot, 0, 5), array_slice($pwr, 0, 5)];
 }
 
 function page_api_health(PDO $db): void {

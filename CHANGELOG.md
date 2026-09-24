@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.47] - 2026-09-24
+
+- Hottest IDFs and Highest power IDFs stayed on "No readings yet" because those queries required a group id and a SQL Server LIMIT that did not survive translation. They are now built from the same polled UPS rows as the IDF table, including closets stored only as a UPS hostname.
+
 ## [0.5.46] - 2026-09-23
 
 - Climate rows were still one per UPS. SQL Server column names did not match, so the IDF id was ignored, and `idf_closet` is the UPS hostname (`DMC-UPS-01`). Rows now group by that hostname stem (`DMC`). If any UPS in the stem is flagged or has a real reading, the others drop off. A stored 0 is shown as no reading, not a bare °F.
