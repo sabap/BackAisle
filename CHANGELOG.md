@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.51] - 2026-09-24
+
+- UPS templates now have a plug type, a count of output outlets, data ports, and environmental ports. The outlet count adds one line per output, numbered from 01, and each line has its own plug type and label. Those fields are stored when the template is saved. Open Templates once after updating so the new columns are added.
+
 ## [0.5.50] - 2026-09-24
 
 - Clicking an empty rack U went to `/rack?...`, which IIS has no rewrite for, so it 404s. Those links now go to `rack.php`, the same way the rest of the site does.

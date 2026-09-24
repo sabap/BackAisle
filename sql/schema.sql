@@ -190,8 +190,21 @@ CREATE TABLE device_templates (
   front_picture NVARCHAR(255) NULL,
   rear_picture NVARCHAR(255) NULL,
   is_active INT NOT NULL DEFAULT 1,
+  plug_type NVARCHAR(32) NULL,
+  outlet_count INT NULL,
+  data_port_count INT NULL,
+  env_port_count INT NULL,
   created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
   updated_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+);
+GO
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'device_template_outlets')
+CREATE TABLE device_template_outlets (
+  template_id INT NOT NULL,
+  port_no INT NOT NULL,
+  plug_type NVARCHAR(32) NULL,
+  label NVARCHAR(128) NULL,
+  PRIMARY KEY (template_id, port_no)
 );
 GO
 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'snmp_profiles')
