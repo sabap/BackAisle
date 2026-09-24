@@ -117,11 +117,13 @@ function renderRank(el, title, rows, key, unit, color) {
   let html = '<div class="dash-chart-head"><div class="legend">' + title + '</div></div><div class="dash-rank">';
   if (!list.length) html += '<p class="muted">No readings yet.</p>';
   list.forEach(row => {
-    const v = row[key];
-    const pct = v == null ? 0 : Math.max(4, (Number(v) / max) * 100);
-    const href = row.id ? '/idfs?group=' + encodeURIComponent(row.id) : '#';
+    const v = row[key] != null ? row[key] : row[key.toUpperCase()];
+    const name = row.name || row.NAME || 'IDF';
+    const id = row.id || row.ID || 0;
+    const pct = v == null || Number(v) === 0 ? 0 : Math.max(4, (Number(v) / max) * 100);
+    const href = id ? '/idfs?group=' + encodeURIComponent(id) : '#';
     html += '<a class="dash-rank-row" href="' + href + '">';
-    html += '<span class="dash-rank-name">' + (row.name || 'IDF') + '</span>';
+    html += '<span class="dash-rank-name">' + name + '</span>';
     html += '<span class="dash-rank-track"><span class="dash-rank-fill" style="width:' + pct.toFixed(1) + '%;background:' + color + '"></span></span>';
     html += '<span class="dash-rank-val">' + (v == null ? '—' : Number(v).toFixed(1) + ' ' + unit) + '</span>';
     html += '</a>';
