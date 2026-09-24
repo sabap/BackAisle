@@ -123,7 +123,7 @@ function ba_leaf_groups(array $groups): array {
     return $leaves;
 }
 
-function ba_render_elevation(array $rack, array $devices, string $face, bool $compact, bool $admin): void {
+function ba_render_elevation(array $rack, array $devices, string $face, bool $compact, bool $admin, int $focusU = 0): void {
     $units = max(1, (int)$rack['u_height']);
     $occ = ba_occupied_map($devices, $face);
     $rackId = (int)$rack['id'];
@@ -144,9 +144,11 @@ function ba_render_elevation(array $rack, array $devices, string $face, bool $co
         if (!empty($occ[$u])) continue;
         $bottom = (($u - 1) / $units) * 100;
         $h = (1 / $units) * 100;
-        $href = ba_href('/rack?id='.$rackId.'&u='.$u.'&face='.urlencode($face));
+        $href = ba_href('/rack?id='.$rackId.'&u='.$u.'&face='.urlencode($face).(ba_tech_mode() ? '#place' : ''));
+        $hot = !$compact && $focusU === $u;
         if ($admin) {
-            echo '<a class="idf-empty" style="bottom:'.$bottom.'%;height:'.$h.'%" href="'.h($href).'" title="Place at U'.$u.' ('.$face.')"></a>';
+            $num = (ba_tech_mode() && !$compact) ? '<span>'.$u.'</span>' : '';
+            echo '<a class="idf-empty'.($hot ? ' is-focus' : '').'" style="bottom:'.$bottom.'%;height:'.$h.'%" href="'.h($href).'" title="Place at U'.$u.' ('.$face.')">'.$num.'</a>';
         } else {
             echo '<span class="idf-empty" style="bottom:'.$bottom.'%;height:'.$h.'%"></span>';
         }
@@ -301,10 +303,13 @@ function page_idfs(PDO $db, array $user): void {
         $racks = ba_racks_in_group($db, $gid);
         $maxU = 1;
         foreach ($racks as $rk) $maxU = max($maxU, (int)$rk['u_height']);
+        echo '<div class="idf-page">';
         echo '<div class="dash-hero"><div>';
         echo '<p class="muted"><a href="'.h(ba_href('/idfs')).'">Locations</a> / '.h(ba_group_path($db, $gid)).'</p>';
         echo '<h1>'.h($g['name']).'</h1>';
-        echo '<p class="muted">Click an empty U to place a UPS, switch, or patch panel. U1 is the bottom of the rack.</p>';
+        echo '<p class="muted">'.(ba_tech_mode()
+            ? 'Add a rack, open it, then tap a U to place a device. U1 is the bottom.'
+            : 'Click an empty U to place a UPS, switch, or patch panel. U1 is the bottom of the rack.').'</p>';
         echo '</div></div>';
 
         if ($racks) {
@@ -334,15 +339,16 @@ function page_idfs(PDO $db, array $user): void {
         }
 
         if ($admin) {
-            echo '<form method="post" class="card stack"><h3>Add network rack</h3>';
+            echo '<form method="post" class="card stack idf-add-rack"><h3>Add network rack</h3>';
             echo '<input type="hidden" name="act" value="add_rack">';
             echo '<input type="hidden" name="group_id" value="'.$gid.'">';
-            echo '<label>Name</label><input name="name" value="Rack '.chr(65 + count($racks)).'" required>';
-            echo '<label>Height (U)</label><input type="number" name="u_height" min="4" max="58" value="42">';
-            echo '<label>Left-to-right order</label><input type="number" name="sort_order" value="'.(count($racks)+1).'">';
-            echo '<label>Notes</label><input name="notes" placeholder="optional">';
+            echo '<div class="tech-field"><label>Name</label><input name="name" value="Rack '.chr(65 + count($racks)).'" required></div>';
+            echo '<div class="tech-field"><label>Height (U)</label><input type="number" name="u_height" min="4" max="58" value="42"></div>';
+            echo '<div class="tech-field"><label>Left-to-right order</label><input type="number" name="sort_order" value="'.(count($racks)+1).'"></div>';
+            echo '<div class="tech-field"><label>Notes</label><input name="notes" placeholder="optional"></div>';
             echo '<button>Add rack</button></form>';
         }
+        echo '</div>';
         ba_layout_end();
         return;
     }
@@ -388,8 +394,37 @@ function page_idfs(PDO $db, array $user): void {
       ?>
     </div>
     <?php
-    echo '<p class="muted"><a href="'.h(ba_href('/org?tab=groups')).'">Add, move, or remove IDFs on the Org page.</a> Re-upload the PowerPanel profile there if a campus has no closets under it.</p>';
+    if (ba_tech_mode()) {
+        echo '<p class="muted">Open a closet to add a rack, then tap a U to place a device.</p>';
+    } else {
+        echo '<p class="muted"><a href="'.h(ba_href('/org?tab=groups')).'">Add, move, or remove IDFs on the Org page.</a> Re-upload the PowerPanel profile there if a campus has no closets under it.</p>';
+    }
     ba_layout_end();
+}
+
+function ba_render_tech_u_picker(array $rack, array $devices, int $focusU, string $focusFace): void {
+    $face = $focusFace === 'rear' ? 'rear' : 'front';
+    $units = max(1, (int)$rack['u_height']);
+    $occ = ba_occupied_map($devices, $face);
+    $id = (int)$rack['id'];
+    echo '<div class="tech-u-picker">';
+    echo '<div class="tech-u-head"><strong>Tap a U to place gear</strong><span class="tech-u-faces">';
+    foreach (['front' => 'Front', 'rear' => 'Rear'] as $f => $lab) {
+        $href = ba_href('/rack?id='.$id.'&face='.$f.($focusU > 0 ? '&u='.$focusU : '').'#place');
+        echo '<a class="btn'.($face === $f ? ' on' : '').'" href="'.h($href).'">'.h($lab).'</a>';
+    }
+    echo '</span></div><div class="tech-u-grid">';
+    for ($u = $units; $u >= 1; $u--) {
+        $busy = !empty($occ[$u]);
+        $on = $focusU === $u ? ' on' : '';
+        if ($busy) {
+            echo '<span class="tech-u busy'.$on.'">'.$u.'</span>';
+        } else {
+            $href = ba_href('/rack?id='.$id.'&u='.$u.'&face='.$face.'#place');
+            echo '<a class="tech-u'.$on.'" href="'.h($href).'">'.$u.'</a>';
+        }
+    }
+    echo '</div></div>';
 }
 
 function page_rack(PDO $db, array $user): void {
@@ -566,12 +601,12 @@ function page_rack(PDO $db, array $user): void {
     <div class="idf-detail-grid">
       <div class="card idf-col">
         <div class="card-body">
-          <?php ba_render_elevation($rack, $devices, 'front', false, $admin); ?>
+          <?php ba_render_elevation($rack, $devices, 'front', false, $admin, $focusFace === 'rear' ? 0 : $focusU); ?>
         </div>
       </div>
       <div class="card idf-col">
         <div class="card-body">
-          <?php ba_render_elevation($rack, $devices, 'rear', false, $admin); ?>
+          <?php ba_render_elevation($rack, $devices, 'rear', false, $admin, $focusFace === 'rear' ? $focusU : 0); ?>
         </div>
       </div>
       <div class="card idf-col idf-props-col">
@@ -662,7 +697,9 @@ function page_rack(PDO $db, array $user): void {
     </div>
 
     <?php if ($admin): ?>
-    <div id="place" class="idf-place-grid">
+    <div id="place">
+      <?php if (ba_tech_mode()) { ba_render_tech_u_picker($rack, $devices, $focusU, $focusFace); } ?>
+    <div class="idf-place-grid">
       <form method="post" class="card stack">
         <h3>Place existing UPS</h3>
         <?php if ($focusU): ?><p class="muted">Clicked U<?= $focusU ?> (<?= h($focusFace) ?>).</p><?php endif; ?>
@@ -712,6 +749,7 @@ function page_rack(PDO $db, array $user): void {
         <button>Add to rack</button>
         <p class="muted">Inventory on the U grid only. SNMPv3 polling stays UPS-only.</p>
       </form>
+    </div>
     </div>
     <?php endif; ?>
     <?php

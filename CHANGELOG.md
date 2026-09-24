@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.52] - 2026-09-24
+
+- The dashboard has a Tech Mode switch for a tablet layout. Admin and Templates leave the navigation. An IDF shows a larger Add rack form, and a rack has a tappable U grid for placing a UPS, switch, or patch panel.
+
 ## [0.5.51] - 2026-09-24
 
 - UPS templates now have a plug type, a count of output outlets, data ports, and environmental ports. The outlet count adds one line per output, numbered from 01, and each line has its own plug type and label. Those fields are stored when the template is saved. Open Templates once after updating so the new columns are added.

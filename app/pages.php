@@ -122,6 +122,11 @@ function ba_idf_summaries(PDO $db): array {
 }
 
 function page_dashboard(PDO $db): void {
+    if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && ($_POST['act'] ?? '') === 'tech_mode') {
+        ba_tech_set(($_POST['on'] ?? '') === '1');
+        header('Location: ' . ba_safe_next((string)($_POST['next'] ?? '')));
+        exit;
+    }
     $q = trim($_GET['q'] ?? '');
     try {
         $idfs = ba_idf_summaries($db);
@@ -157,6 +162,7 @@ function page_dashboard(PDO $db): void {
         <h1>Campus IDFs</h1>
         <p class="muted">Power and climate across closets. Click an IDF to open its racks.</p>
       </div>
+      <?php ba_tech_toggle(false); ?>
     </div>
     <div class="kpis dash-kpis">
       <div class="kpi"><span>IDFs</span><b><?= count($idfs) ?></b></div>
