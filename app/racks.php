@@ -144,7 +144,7 @@ function ba_render_elevation(array $rack, array $devices, string $face, bool $co
         if (!empty($occ[$u])) continue;
         $bottom = (($u - 1) / $units) * 100;
         $h = (1 / $units) * 100;
-        $href = '/rack?id='.$rackId.'&u='.$u.'&face='.urlencode($face);
+        $href = ba_href('/rack?id='.$rackId.'&u='.$u.'&face='.urlencode($face));
         if ($admin) {
             echo '<a class="idf-empty" style="bottom:'.$bottom.'%;height:'.$h.'%" href="'.h($href).'" title="Place at U'.$u.' ('.$face.')"></a>';
         } else {
@@ -173,8 +173,8 @@ function ba_render_elevation(array $rack, array $devices, string $face, bool $co
         $label = $d['hostname'] ?: ($d['ip'] ?: ba_kind_label($kind));
         $uTxt = $pos === $topU ? 'U'.$pos : 'U'.$pos.'–'.$topU;
         $href = (( $kind ?? 'ups') === 'ups' && (int)$d['id'] > 0 && ($d['ip'] ?? '') !== '')
-            ? '/device?id='.(int)$d['id']
-            : '/rack?id='.$rackId.'&item='.(int)$d['id'];
+            ? ba_href('/device?id='.(int)$d['id'])
+            : ba_href('/rack?id='.$rackId.'&item='.(int)$d['id']);
         echo '<a class="idf-dev kind-'.h($kind).$health.'" href="'.h($href).'" style="bottom:'.$bottom.'%;height:'.$h.'%" title="'.h($label.' · '.$uTxt.' · '.ba_kind_label($kind)).'">';
         $pic = ($face === 'rear') ? ($d['rear_picture'] ?? '') : ($d['front_picture'] ?? '');
         if ($pic === '' && $face === 'rear') $pic = $d['front_picture'] ?? '';
@@ -619,7 +619,7 @@ function page_rack(PDO $db, array $user): void {
                 $uLabel = $d['position_u'] === null ? '—' : ($pos === $top ? (string)$pos : $pos.'–'.$top);
                 $kind = $d['kind'] ?? 'ups';
                 $name = $d['hostname'] ?: ($d['ip'] ?: ba_kind_label($kind));
-                $href = $kind === 'ups' ? '/device?id='.(int)$d['id'] : '/rack?id='.$id.'&item='.(int)$d['id'];
+                $href = $kind === 'ups' ? ba_href('/device?id='.(int)$d['id']) : ba_href('/rack?id='.$id.'&item='.(int)$d['id']);
                 $st = $kind === 'ups' ? (ba_output_text(isset($d['output_status']) ? (int)$d['output_status'] : null).' · '.($d['comm_state'] ?: 'unknown')) : ba_kind_label($kind);
             ?>
               <tr>
