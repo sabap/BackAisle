@@ -132,6 +132,13 @@ canvas { width:100%; height:140px; background:#0e141c; border-radius:6px; }
 .flash.err a { color: #fecaca; }
 form.stack label { display:block; margin:.4rem 0 .15rem; color:var(--muted); font-size:.8rem; }
 form.stack { max-width:640px; }
+form.stack .outlet-row {
+  display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; margin:.35rem 0;
+}
+form.stack .outlet-row label { margin:0; min-width:5.5rem; }
+form.stack .outlet-row select { min-width:8.5rem; }
+form.stack .outlet-row input { flex:1 1 8rem; }
+#outlet-rows h3 { margin:.9rem 0 .25rem; font-size:1rem; }
 .btn.on { background:#2a5278; }
 .btn-quiet { background:transparent; border-color:transparent; color:var(--muted); padding:.15rem .4rem; }
 form.inline { display:inline; }
