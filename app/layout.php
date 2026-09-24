@@ -17,7 +17,7 @@ function ba_layout_start(string $title, string $nav = 'fleet'): void {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title><?= h($title) ?> · BackAisle</title>
-  <link rel="stylesheet" href="/assets/app.css?v=flash2">
+  <link rel="stylesheet" href="/assets/app.css?v=outlets1">
 </head>
 <body>
 <header class="top">
