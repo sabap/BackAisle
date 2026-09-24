@@ -32,11 +32,13 @@ HEARTBEAT = ROOT / "logs" / "collector.heartbeat.json"
 STATUS_INTERVAL = 60
 CLIMATE_INTERVAL = 300
 TRAP_PORT = 162
-# A full enviro fallback is a few seconds. 24 workers keep a 60s cycle for ~150 UPS
-# as long as a typical card finishes in under ~8s. Dead cards still free a slot at SNMP_TIMEOUT_S.
-POLL_TIMEOUT_S = 12.0
-CLIMATE_TIMEOUT_S = 20.0
-SNMP_TIMEOUT_S = 1.0
+# Status is a couple of CyberPower GETs. 3s plus one retry survives a busy
+# RMCARD (PowerPanel is often polling the same card) and one dropped UDP packet.
+# A dead card still frees its worker after the retries, inside POLL_TIMEOUT_S.
+POLL_TIMEOUT_S = 16.0
+CLIMATE_TIMEOUT_S = 30.0
+SNMP_TIMEOUT_S = 3.0
+SNMP_RETRIES = 1
 WORKER_MIN = 8
 WORKER_MAX = 24
 
@@ -419,7 +421,7 @@ async def poll_live(device, secrets, climate=False, engine=None):
             cred["auth_pass"],
             cred["priv_pass"],
             timeout=SNMP_TIMEOUT_S,
-            retries=0,
+            retries=SNMP_RETRIES,
             climate=climate,
             engine=engine,
         ),
@@ -583,6 +585,18 @@ class WorkerPool:
         self.ok = 0
         self.fail = 0
         self.timeouts = 0
+        # One SNMP engine per card. SNMPv3 discovery stays warm across polls.
+        # Throwing it away after a timeout forced a cold discovery next time,
+        # and that second round trip blew the old 1s wait.
+        self.engines: dict[str, object] = {}
+        self.engine_locks: dict[str, asyncio.Lock] = {}
+
+    def _lock_for(self, ip: str) -> asyncio.Lock:
+        lock = self.engine_locks.get(ip)
+        if lock is None:
+            lock = asyncio.Lock()
+            self.engine_locks[ip] = lock
+        return lock
 
     async def start(self, n: int) -> None:
         self.workers = [t for t in self.workers if not t.done()]
@@ -600,6 +614,10 @@ class WorkerPool:
         if self.workers:
             await asyncio.gather(*self.workers, return_exceptions=True)
         self.workers = []
+        for eng in self.engines.values():
+            close_engine(eng)
+        self.engines.clear()
+        self.engine_locks.clear()
 
     def enqueue(self, device: dict, climate: bool) -> bool:
         did = device["id"]
@@ -612,15 +630,32 @@ class WorkerPool:
     async def join(self) -> None:
         await self.queue.join()
 
+    async def _poll_one(self, device: dict, climate: bool):
+        ip = str(device.get("ip") or "")
+        lock = self._lock_for(ip)
+        async with lock:
+            engine = self.engines.get(ip)
+            if engine is None:
+                engine = new_engine()
+                self.engines[ip] = engine
+            try:
+                return await poll_live(device, self.secrets, climate=climate, engine=engine)
+            except Exception as e:
+                text = str(e).lower()
+                # Keep the engine across a timeout so the next poll is not a
+                # cold SNMPv3 discovery. Drop it on an auth or protocol error.
+                if "timeout" not in text and "timed out" not in text:
+                    old = self.engines.pop(ip, None)
+                    close_engine(old)
+                raise
+
     async def _worker(self, wid: int) -> None:
-        engine = None
         try:
-            engine = new_engine()
             while True:
                 device, climate = await self.queue.get()
                 t0 = time.time()
                 try:
-                    sample = await poll_live(device, self.secrets, climate=climate, engine=engine)
+                    sample = await self._poll_one(device, climate)
                     apply_result(self.secrets, "ok", device, sample)
                     self.ok += 1
                 except asyncio.CancelledError:
@@ -632,8 +667,6 @@ class WorkerPool:
                     if "timeout" in err or "timed out" in err:
                         self.timeouts += 1
                     log(f"poll fail {device.get('ip')}: {e}")
-                    close_engine(engine)
-                    engine = new_engine()
                 finally:
                     self.in_flight.discard(device["id"])
                     self.last_done[device["id"]] = time.time()
@@ -644,8 +677,6 @@ class WorkerPool:
             return
         except Exception:
             log(f"worker {wid} died\n" + traceback.format_exc())
-        finally:
-            close_engine(engine)
 
 
 def _due_live(live: list[dict], pool: WorkerPool, t0: float, force: bool = False) -> list[tuple[dict, bool]]:
