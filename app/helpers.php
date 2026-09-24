@@ -106,6 +106,46 @@ function ba_request_path(): string {
     return $uri;
 }
 
+function ba_tech_mode(): bool {
+    return (string)($_COOKIE['ba_tech'] ?? '') === '1';
+}
+
+function ba_tech_set(bool $on): void {
+    $secure = !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off';
+    setcookie('ba_tech', $on ? '1' : '0', [
+        'expires' => time() + 86400 * 400,
+        'path' => '/',
+        'secure' => $secure,
+        'httponly' => true,
+        'samesite' => 'Lax',
+    ]);
+    $_COOKIE['ba_tech'] = $on ? '1' : '0';
+}
+
+function ba_safe_next(string $next): string {
+    $next = str_replace(["\r", "\n", "\0"], '', trim($next));
+    if ($next === '' || $next[0] !== '/' || str_starts_with($next, '//') || str_contains($next, '\\') || str_contains($next, '://')) {
+        return ba_href('/');
+    }
+    return $next;
+}
+
+function ba_tech_toggle(bool $compact = false): void {
+    $on = ba_tech_mode();
+    $next = (string)($_SERVER['REQUEST_URI'] ?? '/index.php');
+    echo '<form method="post" action="'.h(ba_href('/')).'" class="tech-toggle'.($compact ? ' compact' : '').'">';
+    echo '<input type="hidden" name="act" value="tech_mode">';
+    echo '<input type="hidden" name="on" value="'.($on ? '0' : '1').'">';
+    echo '<input type="hidden" name="next" value="'.h($next).'">';
+    echo '<button type="submit" class="tech-switch'.($on ? ' on' : '').'" aria-pressed="'.($on ? 'true' : 'false').'">';
+    echo '<span class="tech-switch-ui" aria-hidden="true"><span></span></span>';
+    echo '<span class="tech-switch-copy"><strong>Tech Mode</strong>';
+    if (!$compact) {
+        echo '<small>'.($on ? 'Tablet layout on' : 'Tablet layout for racks and devices').'</small>';
+    }
+    echo '</span></button></form>';
+}
+
 function ba_version(): string {
     $path = BA_ROOT . DIRECTORY_SEPARATOR . 'VERSION';
     if (is_file($path)) {
