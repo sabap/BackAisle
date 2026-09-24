@@ -59,5 +59,5 @@ function ba_layout_start(string $title, string $nav = 'fleet'): void {
 
 function ba_layout_end(): void {
     echo '</main><footer class="site-foot">BackAisle v'.h(ba_version()).' · <a href="https://github.com/sabap/BackAisle" target="_blank" rel="noopener">GitHub</a></footer>';
-    echo '<script src="/assets/app.js?v=flash2"></script></body></html>';
+    echo '<script src="/assets/app.js?v=rank3"></script></body></html>';
 }

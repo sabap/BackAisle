@@ -53,7 +53,7 @@ function ba_adapt_sql(string $sql): string {
     if (preg_match('/^(.*)\s+LIMIT\s+(\d+)\s*$/is', $sql, $m)) {
         $inner = $m[1];
         $n = (int)$m[2];
-        if (preg_match('/^\s*SELECT\s+/i', $inner) && !preg_match('/\bSELECT\s+TOP\s+/i', $inner)) {
+        if (preg_match('/^\s*SELECT\s+/i', $inner) && !preg_match('/^\s*SELECT\s+TOP\s+/i', $inner)) {
             $inner = preg_replace('/^\s*SELECT\s+/i', 'SELECT TOP ' . $n . ' ', $inner, 1) ?? $inner;
         }
         $sql = $inner;
