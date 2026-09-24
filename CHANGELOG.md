@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.53] - 2026-09-24
+
+- Alerts has Ack all and Clear all. Ack all marks every open alert acknowledged. Clear all removes every open and acknowledged alert from the list. Already cleared alerts are left alone.
+
 ## [0.5.52] - 2026-09-24
 
 - The dashboard has a Tech Mode switch for a tablet layout. Admin and Templates leave the navigation. An IDF shows a larger Add rack form, and a rack has a tappable U grid for placing a UPS, switch, or patch panel.
