@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.48] - 2026-09-24
+
+- Org is where the IDF tree is added, renamed, moved, and removed. The IDFs page only displays that tree. Group parent ids from SQL Server are read as numbers, so closets show under their campus. Uploading the PowerPanel profile.zip again rewrites each IDF's parent and points each UPS at that IDF.
+
 ## [0.5.47] - 2026-09-24
 
 - Hottest IDFs and Highest power IDFs stayed on "No readings yet" because those queries required a group id and a SQL Server LIMIT that did not survive translation. They are now built from the same polled UPS rows as the IDF table, including closets stored only as a UPS hostname.
