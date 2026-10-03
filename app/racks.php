@@ -513,6 +513,9 @@ function page_rack(PDO $db, array $user): void {
                     $tid ?: null, $tpl['va_rating'] ?? null,
                 ]);
                 $did = ba_last_id($db);
+                if ($did > 0) {
+                    ba_pp_exec($db, 'UPDATE devices SET department_id=? WHERE id=?', [ba_device_department_choice($user), $did]);
+                }
                 ba_sync_location_from_group($db, $did, (int)$rack['group_id'], $rack['name']);
                 ba_audit($db, 'add_rack_item', 'device', (string)$did, $kind.' U'.$pos);
                 $msg = ba_kind_label($kind).' added at U'.$pos;
@@ -746,6 +749,7 @@ function page_rack(PDO $db, array $user): void {
         </select>
         <label>Ports (patch panels)</label><input type="number" name="port_count" min="0" placeholder="24 or 48">
         <label>Management IP (optional)</label><input name="ip" placeholder="not polled unless kind is UPS">
+        <?php ba_department_field($db, $user, null); ?>
         <button>Add to rack</button>
         <p class="muted">Inventory on the U grid only. SNMPv3 polling stays UPS-only.</p>
       </form>

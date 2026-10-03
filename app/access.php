@@ -68,7 +68,7 @@ function ba_system_roles(): array
         ],
         'idfm' => [
             'name' => 'IDFM Admin',
-            'description' => 'Edit racks, inventory, templates, SNMP, org data, and fleet writes. No users or site settings.',
+            'description' => 'Assign which department owns each device. Edit every device, racks, templates, SNMP, org, and fleet writes. No users or site settings.',
             'permissions' => array_merge($view, [
                 'edit_devices_all', 'edit_infrastructure', 'edit_templates', 'edit_snmp',
                 'edit_writes', 'edit_alerts', 'edit_org',
@@ -76,7 +76,7 @@ function ba_system_roles(): array
         ],
         'department' => [
             'name' => 'Department Admin',
-            'description' => 'View the site. Edit devices that belong to their department, and ack or clear alerts.',
+            'description' => 'View the site. Add, edit, and decommission devices their department owns, and ack or clear alerts for those devices.',
             'permissions' => array_merge($view, ['edit_devices_dept', 'edit_alerts']),
         ],
         'view' => [
@@ -254,9 +254,21 @@ function ba_can_edit_device(array $user, ?array $device): bool
     }
     $raw = ba_col($device, 'department_id');
     if ($raw === null || $raw === '') {
-        return true;
+        return false;
     }
     return (int)$raw === $userDept;
+}
+
+/** null means every device. 0 means this person has no department, so none of the department-owned devices. */
+function ba_alert_scope_id(array $user): ?int
+{
+    if (ba_can($user, 'edit_devices_all')) {
+        return null;
+    }
+    if (ba_can($user, 'edit_devices_dept')) {
+        return (int)($user['department_id'] ?? 0);
+    }
+    return null;
 }
 
 function ba_require_perm(string $perm): array
@@ -338,6 +350,7 @@ function ba_ensure_access_schema(PDO $db): void
         }
         if (function_exists('ba_ensure_column') && ba_table_exists($db, 'devices')) {
             ba_ensure_column($db, 'devices', 'department_id', 'INT NULL');
+            ba_ensure_column($db, 'devices', 'decommissioned_at', 'NVARCHAR(32) NULL');
         }
     } else {
         $db->exec(
@@ -396,6 +409,7 @@ function ba_ensure_access_schema(PDO $db): void
         }
         if (function_exists('ba_add_col') && ba_table_exists($db, 'devices')) {
             ba_add_col($db, 'devices', 'department_id', 'INTEGER');
+            ba_add_col($db, 'devices', 'decommissioned_at', 'TEXT');
         }
     }
     ba_seed_roles($db);
@@ -863,17 +877,91 @@ function ba_department_field(PDO $db, array $user, ?int $selected): void
             $st = ba_access_exec($db, 'SELECT name FROM departments WHERE id=?', [$id]);
             $name = (string)$st->fetchColumn();
         }
-        echo '<label>Department</label><input value="' . h($name) . '" disabled>';
+        echo '<label>Owning department</label><input value="' . h($name) . '" disabled>';
         echo '<input type="hidden" name="department_id" value="' . $id . '">';
+        echo '<p class="muted owner-hint">New devices are owned by your department. You can edit and decommission those devices. Alerts for them go to your department.</p>';
         return;
     }
-    echo '<label>Department</label><select name="department_id"><option value="">(none)</option>';
+    echo '<label>Owning department</label><select name="department_id"><option value="">(none)</option>';
     foreach ($db->query('SELECT id, name FROM departments WHERE is_active=1 ORDER BY name') as $d) {
         $id = (int)ba_col($d, 'id');
         $sel = $id === (int)$selected ? ' selected' : '';
         echo '<option value="' . $id . '"' . $sel . '>' . h((string)ba_col($d, 'name')) . '</option>';
     }
     echo '</select>';
+    echo '<p class="muted owner-hint">That department owns the device. Its manager and users are responsible for it, and they receive its alerts.</p>';
+}
+
+function ba_device_owner_card(PDO $db, array $user, array $device): void
+{
+    $deptId = (int)ba_col($device, 'department_id');
+    $dept = null;
+    if ($deptId > 0) {
+        $dept = ba_access_exec($db, 'SELECT * FROM departments WHERE id=?', [$deptId])->fetch() ?: null;
+    }
+    $people = [];
+    if ($dept) {
+        $people = ba_access_exec(
+            $db,
+            'SELECT username, display_name, email FROM users WHERE department_id=? AND is_active=1 ORDER BY username',
+            [$deptId]
+        )->fetchAll();
+    }
+    $retired = trim((string)ba_col($device, 'decommissioned_at', '')) !== '';
+    echo '<div class="card" id="owner"><h3>Owner</h3>';
+    if ($dept) {
+        $color = ba_color_hex((string)ba_col($dept, 'color_hex'));
+        echo '<p><span class="dept-swatch" style="background:' . h($color) . '"></span> <strong>' . h((string)ba_col($dept, 'name')) . '</strong>';
+        $code = trim((string)ba_col($dept, 'code', ''));
+        if ($code !== '') {
+            echo ' <span class="muted">' . h($code) . '</span>';
+        }
+        echo '</p>';
+        $mgr = trim((string)ba_col($dept, 'manager_name', ''));
+        $mail = trim((string)ba_col($dept, 'contact_email', ''));
+        $phone = trim((string)ba_col($dept, 'contact_phone', ''));
+        echo '<p class="muted">Responsible: ' . ($mgr !== '' ? h($mgr) : 'no manager listed');
+        if ($mail !== '') {
+            echo ' · ' . h($mail);
+        }
+        if ($phone !== '') {
+            echo ' · ' . h($phone);
+        }
+        echo '</p>';
+        if ($people) {
+            echo '<div class="owner-people">';
+            foreach ($people as $person) {
+                $label = trim((string)ba_col($person, 'display_name', ''));
+                if ($label === '') {
+                    $label = (string)ba_col($person, 'username');
+                }
+                $em = trim((string)ba_col($person, 'email', ''));
+                echo '<span>' . h($label) . ($em !== '' ? ' <span class="muted">' . h($em) . '</span>' : '') . '</span>';
+            }
+            echo '</div>';
+        } else {
+            echo '<p class="muted">No active users are in this department yet.</p>';
+        }
+        echo '<p class="muted">Alerts go to the department contact, to active users in the department who have an email, and to the site notification address.</p>';
+    } else {
+        echo '<p>No department owns this device. An IDFM Admin or Global Admin assigns one. Until then, only those roles can edit or decommission it, and alerts go to the site notification address.</p>';
+    }
+    if (ba_can($user, 'edit_devices_all')) {
+        echo '<form method="post" class="filters">';
+        echo '<input type="hidden" name="save_owner" value="1">';
+        ba_department_field($db, $user, $deptId > 0 ? $deptId : null);
+        echo '<button>Save owner</button></form>';
+    }
+    if (ba_can_edit_device($user, $device)) {
+        if ($retired) {
+            echo '<form method="post"><button name="recommission" value="1">Return to service</button></form>';
+            echo '<p class="muted">Decommissioned ' . h((string)ba_col($device, 'decommissioned_at')) . '. Polling is off. The record is kept.</p>';
+        } else {
+            echo '<form method="post" onsubmit="return confirm(\'Decommission this device? Polling stops. The record stays.\')">';
+            echo '<button name="decommission" value="1">Decommission</button></form>';
+        }
+    }
+    echo '</div>';
 }
 
 function ba_active_global_admins(PDO $db, int $exceptId = 0): int

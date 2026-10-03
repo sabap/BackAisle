@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.5.59] - 2026-10-03
+
+- A device's department owns it. IDFM Admin and Global Admin assign that department from the device page or from Inventory. Department Admin can add, edit, and decommission only the devices their department owns. A device with no department stays with IDFM Admin and Global Admin.
+- Decommission stops polling and keeps the device and its history. Inventory hides those devices until Show decommissioned. Return to service brings one back.
+- A Department Admin sees, acknowledges, and clears alerts only for devices their department owns. Alert mail also goes to that department's contact and to active users in the department who have an email, along with the site notification address. Restart the collector so those extra addresses are used.
+
 ## [0.5.58] - 2026-10-03
 
 - The Users page is cards with a bronze header. Add department, Add user, Add role mapping, and Add department mapping are buttons on those headers and open a dialog. Edit department and edit user open the same way.
