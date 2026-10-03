@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.5.56] - 2026-10-03
+
+- LDAPS can trust an enterprise certificate authority. Upload the root, and an intermediate if you have one, exported from AD Certificate Services as PEM, Base-64 .CER, or DER. The file stays in the site data folder, outside the web site. After it is saved, turn certificate checks back on.
+- Default Role applies only when a new directory user signs in and “Require a mapped security group” is off, or no role maps exist yet. A matching security group still sets the role. Someone who already has an account keeps their current role when no group matches.
+- Test connection checks the directory with the values on the form. It does not create a user. A newly chosen certificate is used after Save.
+
 ## [0.5.55] - 2026-10-03
 
 - Admin has a Users page for LDAPS sign-in, departments, local users, and platform roles. Active Directory security groups can set a person's role and department at sign-in. Global Admin still has the whole site. Data Center Admin can change racks, inventory, SNMP, and fleet writes. Department Admin can change devices in their own department. Viewer stays read-only.

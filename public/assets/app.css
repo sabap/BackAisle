@@ -512,3 +512,29 @@ body.tech .tech-u.busy { color: var(--muted); background: #0e141c; }
   body.tech .loc-sum .loc-meta, body.tech .loc-leaf .loc-meta,
   body.tech .loc-sum .loc-badge { display: none; }
 }
+#ldaps.stack { max-width: 44rem; }
+#ldaps .ldap-split { margin-top: .85rem; padding-top: .75rem; border-top: 1px solid var(--line); }
+#ldaps .ldap-actions { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .8rem; }
+#ldaps input[type=file] { width: 100%; }
+.ldaps-modal[hidden] { display: none; }
+.ldaps-modal { position: fixed; inset: 0; z-index: 40; display: flex; align-items: center; justify-content: center; padding: 1rem; }
+.ldaps-modal-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.55); }
+.ldaps-modal-panel {
+  position: relative; width: min(40rem, 100%); max-height: min(80vh, 36rem); overflow: auto;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 1rem;
+}
+.ldaps-modal-panel.ldaps-pass { border-color: var(--ok); }
+.ldaps-modal-panel.ldaps-fail { border-color: var(--crit); }
+.ldaps-modal-panel.ldaps-pending { border-color: var(--acc); }
+.ldaps-modal-head { display: flex; justify-content: space-between; align-items: center; gap: .5rem; margin-bottom: .6rem; }
+.ldaps-modal-head h3 { margin: 0; }
+.ldaps-summary { margin: 0 0 .6rem; font-weight: 600; }
+.ldaps-step { padding: .45rem 0; border-top: 1px solid var(--line); }
+.ldaps-step b { display: block; }
+.ldaps-step span { color: var(--muted); font-size: .85rem; }
+.ldaps-step.ok b { color: var(--ok); }
+.ldaps-step.bad b { color: var(--crit); }
+@media (max-width: 700px) {
+  .ldaps-modal { align-items: flex-end; padding: 0; }
+  .ldaps-modal-panel { width: 100%; max-height: 85vh; border-radius: 12px 12px 0 0; }
+}
