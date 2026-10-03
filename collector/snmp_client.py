@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import calendar
+import re
 import warnings
+from datetime import date
 from typing import Any
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -16,6 +19,10 @@ OIDS = {
     "serial": (1, 3, 6, 1, 4, 1, 3808, 1, 1, 1, 1, 2, 3, 0),
     "batteryStatus": (1, 3, 6, 1, 4, 1, 3808, 1, 1, 1, 2, 1, 1, 0),
     "timeOnBattery": (1, 3, 6, 1, 4, 1, 3808, 1, 1, 1, 2, 1, 2, 0),
+    # RMCARD web "battery replacement date" (mm/dd/yyyy) and recommended life in months.
+    # Kept out of STATUS_KEYS: a noSuchName in that multi-get blanks the power reading.
+    "batteryLastReplace": (1, 3, 6, 1, 4, 1, 3808, 1, 1, 1, 2, 1, 3, 0),
+    "batteryAgeMonths": (1, 3, 6, 1, 4, 1, 3808, 1, 1, 1, 2, 1, 4, 0),
     "capacity": (1, 3, 6, 1, 4, 1, 3808, 1, 1, 1, 2, 2, 1, 0),
     "runtimeTicks": (1, 3, 6, 1, 4, 1, 3808, 1, 1, 1, 2, 2, 4, 0),
     "replaceIndicator": (1, 3, 6, 1, 4, 1, 3808, 1, 1, 1, 2, 2, 5, 0),
@@ -78,6 +85,36 @@ def _str(val) -> str | None:
     return pretty
 
 
+def _cps_date(val) -> str | None:
+    """CyberPower date DisplayString (mm/dd/yyyy or mm/dd/yy) to YYYY-MM-DD."""
+    text = _str(val)
+    if not text:
+        return None
+    text = text.replace("\x00", "").strip()
+    match = re.fullmatch(r"(\d{1,2})[/-](\d{1,2})[/-](\d{2}|\d{4})", text)
+    if not match:
+        return None
+    month, day, year = int(match.group(1)), int(match.group(2)), int(match.group(3))
+    if year < 100:
+        year += 2000 if year < 80 else 1900
+    try:
+        return date(year, month, day).isoformat()
+    except ValueError:
+        return None
+
+
+def _add_months(iso: str, months: int) -> str | None:
+    try:
+        year, month, day = (int(part) for part in iso.split("-"))
+        cursor = month - 1 + months
+        year += cursor // 12
+        month = cursor % 12 + 1
+        day = min(day, calendar.monthrange(year, month)[1])
+        return date(year, month, day).isoformat()
+    except (TypeError, ValueError):
+        return None
+
+
 def decode(raw: dict[str, Any]) -> dict[str, Any]:
     cap = _int(raw.get("capacity"))
     ticks = _int(raw.get("runtimeTicks"))
@@ -134,6 +171,11 @@ def decode(raw: dict[str, Any]) -> dict[str, Any]:
         sensor_present = 0
     else:
         sensor_present = None
+    last_replace = _cps_date(raw.get("batteryLastReplace"))
+    age_months = _int(raw.get("batteryAgeMonths"))
+    replace_by = None
+    if last_replace and age_months is not None and 1 <= age_months <= 240:
+        replace_by = _add_months(last_replace, age_months)
     return {
         "model": _str(raw.get("model")),
         "snmp_name": _str(raw.get("name")) or _str(raw.get("sysName")),
@@ -160,6 +202,8 @@ def decode(raw: dict[str, Any]) -> dict[str, Any]:
         "contact1_status": _int(raw.get("envir2Contact1")),
         "replace_battery": 1 if _int(raw.get("replaceIndicator")) == 2 else 0,
         "time_on_battery_ticks": _int(raw.get("timeOnBattery")),
+        "battery_last_replace": last_replace,
+        "battery_replace_by": replace_by,
     }
 
 
@@ -344,6 +388,11 @@ async def snmp_get(
                 )
             except Exception:
                 pass
+            # One OID at a time. A card that has no date must not fail the poll,
+            # and a noSuchName must not wipe the status values already read.
+            date_target = await UdpTransportTarget.create((host, 161), timeout=2.0, retries=0)
+            for name in ("batteryLastReplace", "batteryAgeMonths"):
+                await _snmp_one(engine, creds, date_target, ctx, name, raw)
         return decode(raw)
     finally:
         if own:
