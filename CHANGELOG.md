@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.62] - 2026-10-03
+
+- The Organization IDF tree lists each location on its own row. Edit opens the name, the parent, and the alert hold, and each control says what it does. Remove is a text action inside Edit and asks before it removes a location. A location that still has locations or racks under it stays put.
+
 ## [0.5.61] - 2026-10-03
 
 - Pages use the same cards as Users. Each section has a bronze header. Short actions, such as Add device, New group, and Place existing UPS, are buttons on that header and open a dialog. Wider editors stay in the card.

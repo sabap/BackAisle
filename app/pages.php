@@ -34,7 +34,7 @@ function page_login(PDO $db): void {
     ?>
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Sign in · BackAisle</title><link rel="stylesheet" href="/assets/app.css?v=layout2"></head>
+<title>Sign in · BackAisle</title><link rel="stylesheet" href="/assets/app.css?v=layout3"></head>
 <body>
 <div class="login ucard">
   <div class="ucard-head"><h3>Sign in</h3></div>
