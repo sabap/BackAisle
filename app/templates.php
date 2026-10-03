@@ -275,7 +275,8 @@ function page_templates(PDO $db, array $user): void {
         echo '<h1>'.h($tpl ? $tpl['model'] : 'New device template').'</h1>';
         echo '<p class="muted">Catalog entry for IDF gear. Apply it to a UPS, switch, or patch panel to fill model, U height, and ports. A UPS template also stores the plug type, output outlets, data ports, and environmental ports.</p>';
         if ($admin) {
-            echo '<form method="post" enctype="multipart/form-data" class="card stack">';
+            echo '<form method="post" enctype="multipart/form-data" class="ucard stack">';
+            echo '<div class="ucard-head"><h3>Template</h3></div><div class="ucard-body">';
             echo '<input type="hidden" name="act" value="save">';
             if ($tpl) echo '<input type="hidden" name="id" value="'.(int)$tpl['id'].'">';
             echo '<label>Manufacturer</label><input name="manufacturer" value="'.h($tpl['manufacturer'] ?? '').'" placeholder="CyberPower, Cisco, Panduit">';
@@ -408,13 +409,13 @@ function page_templates(PDO $db, array $user): void {
             if (!empty($tpl['rear_picture'])) {
                 echo '<p><img class="idf-tpl-preview" src="'.h($tpl['rear_picture']).'" alt="rear"> <label><input type="checkbox" name="clear_rear_picture"> clear</label></p>';
             }
-            echo '<button>Save template</button></form>';
+            echo '<button>Save template</button></div></form>';
         } elseif ($tpl && (string)($tpl['kind'] ?? '') === 'ups') {
             $viewOutlets = ba_template_outlets($db, (int)$tpl['id']);
             $dash = static function ($v): string {
                 return ($v === null || $v === '') ? '—' : (string)$v;
             };
-            echo '<div class="card">';
+            echo '<section class="ucard"><div class="ucard-head"><h3>UPS ports</h3></div><div class="ucard-body">';
             echo '<p>Plug type: <strong>'.h($dash($tpl['plug_type'] ?? null)).'</strong></p>';
             echo '<p>Number of outlets (Output): <strong>'.h($dash($tpl['outlet_count'] ?? null)).'</strong></p>';
             echo '<p>Number of Data ports: <strong>'.h($dash($tpl['data_port_count'] ?? null)).'</strong></p>';
@@ -427,13 +428,13 @@ function page_templates(PDO $db, array $user): void {
                 }
                 echo '</tbody></table>';
             }
-            echo '</div>';
+            echo '</div></section>';
         }
         if ($tpl) {
             $used = $db->prepare('SELECT id, hostname, ip, kind FROM devices WHERE template_id=? ORDER BY hostname');
             $used->execute([(int)$tpl['id']]);
             $devs = $used->fetchAll();
-            echo '<div class="card"><h3>Applied to</h3>';
+            echo '<section class="ucard"><div class="ucard-head"><h3>Applied to</h3></div><div class="ucard-body">';
             if (!$devs) echo '<p class="muted">Not linked to any device yet.</p>';
             else {
                 echo '<table><thead><tr><th>Host</th><th>IP</th><th>Kind</th></tr></thead><tbody>';
@@ -442,7 +443,7 @@ function page_templates(PDO $db, array $user): void {
                 }
                 echo '</tbody></table>';
             }
-            echo '</div>';
+            echo '</div></section>';
         }
         ba_layout_end();
         return;
@@ -453,7 +454,7 @@ function page_templates(PDO $db, array $user): void {
     if ($msg) echo '<div class="flash">'.h($msg).'</div>';
     echo '<h1>Device templates</h1>';
     echo '<p class="muted">Reusable models for IDF racks — UPS, switches, and patch panels. Apply a template to fill U height, manufacturer, model, and ports.</p>';
-    if ($admin) echo '<p><a class="btn" href="/templates.php?action=new">+ New template</a></p>';
+    ba_card_open('Templates', $admin ? '<a class="btn" href="/templates.php?action=new">New template</a>' : '');
     echo '<table><thead><tr><th>Kind</th><th>Manufacturer</th><th>Model</th><th>U</th><th>Face</th><th>Ports</th><th>Outlets</th><th>VA</th><th></th></tr></thead><tbody>';
     foreach ($rows as $t) {
         $t = array_change_key_case($t, CASE_LOWER);
@@ -481,5 +482,6 @@ function page_templates(PDO $db, array $user): void {
     }
     if (!$rows) echo '<tr><td colspan="9" class="muted">No templates yet.</td></tr>';
     echo '</tbody></table>';
+    ba_card_close();
     ba_layout_end();
 }
