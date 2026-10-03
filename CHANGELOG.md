@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.63] - 2026-10-03
+
+- BackAisle is branded as IDF Management (IDFM). The header, sign-in page, and setup wizard show a rack mark with a bronze backslash, the aisle behind the equipment. The browser tab uses the same mark.
+
 ## [0.5.62] - 2026-10-03
 
 - The Organization IDF tree lists each location on its own row. Edit opens the name, the parent, and the alert hold, and each control says what it does. Remove is a text action inside Edit and asks before it removes a location. A location that still has locations or racks under it stays put.

@@ -1,6 +1,10 @@
+<p align="center">
+  <img src="public/assets/logo-lockup.png" alt="BackAisle — IDF Management" width="720">
+</p>
+
 # BackAisle
 
-Campus IDF infrastructure: network racks, UPS monitoring, and closet climate. **Not ColdAisle** (data center DCIM) and **not PowerPanel**.
+BackAisle is IDF Management (IDFM) for campus closets: network racks, UPS monitoring, and climate. **Not ColdAisle** (data center DCIM) and **not PowerPanel**.
 
 BackAisle installs as the IIS **Default Web Site** (ports 80 and 443) with its own app pool and folder (`C:\inetpub\BackAisle`). It does not load ColdAisle files or schema.
 
