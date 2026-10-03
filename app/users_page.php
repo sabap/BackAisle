@@ -66,10 +66,10 @@ function page_users(PDO $db, array $user): void
     }
 
     $roles = $db->query('SELECT * FROM roles ORDER BY name')->fetchAll();
-    $roleOrder = ['Global Admin' => 1, 'Data Center Admin' => 2, 'Department Admin' => 3, 'Viewer' => 4];
+    $roleOrder = ['global' => 1, 'idfm' => 2, 'department' => 3, 'view' => 4];
     usort($roles, static function ($a, $b) use ($roleOrder) {
-        $oa = $roleOrder[$a['name'] ?? ''] ?? 50;
-        $ob = $roleOrder[$b['name'] ?? ''] ?? 50;
+        $oa = $roleOrder[ba_col($a, 'code') ?? ''] ?? 50;
+        $ob = $roleOrder[ba_col($b, 'code') ?? ''] ?? 50;
         if ($oa !== $ob) {
             return $oa <=> $ob;
         }
@@ -249,27 +249,65 @@ function ba_users_notes(): ?string
 function ba_users_save_roles(PDO $db, string $act): void
 {
     $defs = ba_system_roles();
+    $rows = ba_access_exec($db, 'SELECT id, name, code FROM roles', [])->fetchAll();
+    $system = [];
+    foreach ($rows as $row) {
+        $code = (string)ba_col($row, 'code');
+        if (!isset($defs[$code])) {
+            continue;
+        }
+        $system[] = $row;
+    }
+    if ($act === 'reset_roles') {
+        foreach ($system as $row) {
+            $code = (string)ba_col($row, 'code');
+            $def = $defs[$code];
+            $json = $code === 'global' ? '["*"]' : json_encode($def['permissions'], JSON_UNESCAPED_UNICODE);
+            ba_access_exec(
+                $db,
+                'UPDATE roles SET name=?, description=?, permissions=? WHERE id=?',
+                [$def['name'], $def['description'], $json, (int)ba_col($row, 'id')]
+            );
+        }
+        return;
+    }
+    $postedNames = $_POST['role_name'] ?? [];
+    if (!is_array($postedNames)) {
+        $postedNames = [];
+    }
+    $chosen = [];
+    $seen = [];
+    foreach ($system as $row) {
+        $id = (int)ba_col($row, 'id');
+        $name = trim((string)($postedNames[$id] ?? $postedNames[(string)$id] ?? ba_col($row, 'name')));
+        if ($name === '') {
+            throw new RuntimeException('Each role needs a name.');
+        }
+        if (strlen($name) > 64) {
+            throw new RuntimeException('Role names must be 64 characters or less.');
+        }
+        $key = strtolower($name);
+        if (isset($seen[$key])) {
+            throw new RuntimeException('Role names must be different.');
+        }
+        $seen[$key] = $id;
+        $chosen[$id] = $name;
+    }
     $allowed = array_flip(ba_permission_catalog());
     $privileged = array_flip(ba_privileged_permissions());
     $posted = $_POST['perm'] ?? [];
     if (!is_array($posted)) {
         $posted = [];
     }
-    foreach (['Viewer', 'Department Admin', 'Data Center Admin', 'Global Admin'] as $name) {
-        $rid = ba_role_id_by_name($db, $name);
-        if ($rid < 1) {
+    foreach ($system as $row) {
+        $id = (int)ba_col($row, 'id');
+        $code = (string)ba_col($row, 'code');
+        $name = $chosen[$id];
+        if ($code === 'global') {
+            ba_access_exec($db, 'UPDATE roles SET name=?, permissions=? WHERE id=?', [$name, '["*"]', $id]);
             continue;
         }
-        if ($name === 'Global Admin') {
-            ba_access_exec($db, 'UPDATE roles SET permissions=? WHERE id=?', ['["*"]', $rid]);
-            continue;
-        }
-        if ($act === 'reset_roles') {
-            $json = json_encode($defs[$name]['permissions'] ?? [], JSON_UNESCAPED_UNICODE);
-            ba_access_exec($db, 'UPDATE roles SET permissions=? WHERE id=?', [$json, $rid]);
-            continue;
-        }
-        $keys = $posted[$rid] ?? $posted[(string)$rid] ?? [];
+        $keys = $posted[$id] ?? $posted[(string)$id] ?? [];
         if (!is_array($keys)) {
             $keys = [];
         }
@@ -292,8 +330,8 @@ function ba_users_save_roles(PDO $db, string $act): void
         }
         ba_access_exec(
             $db,
-            'UPDATE roles SET permissions=? WHERE id=?',
-            [json_encode(array_keys($clean), JSON_UNESCAPED_UNICODE), $rid]
+            'UPDATE roles SET name=?, permissions=? WHERE id=?',
+            [$name, json_encode(array_keys($clean), JSON_UNESCAPED_UNICODE), $id]
         );
     }
 }
@@ -371,7 +409,7 @@ function ba_users_save_user(PDO $db, array $actor, string $act): void
     $email = trim((string)($_POST['email'] ?? ''));
     $source = (string)($_POST['source'] ?? 'local') === 'ldap' ? 'ldap' : 'local';
     $active = isset($_POST['is_active']) ? 1 : 0;
-    $gate = ba_role_gate($role['name']);
+    $gate = ba_role_gate_for($role);
     if ($act === 'add_user') {
         $username = trim((string)($_POST['username'] ?? ''));
         if ($username === '') {
@@ -388,7 +426,7 @@ function ba_users_save_user(PDO $db, array $actor, string $act): void
         ba_access_exec(
             $db,
             'INSERT INTO users (username, password_hash, role, source, display_name, email, role_id, department_id, is_active) VALUES (?,?,?,?,?,?,?,?,?)',
-            [$username, $hash, ba_role_column($role['name']), $source, $display !== '' ? $display : null, $email !== '' ? $email : null, $roleId, $dept, $active]
+            [$username, $hash, ba_role_column($role['name'], (string)($role['code'] ?? '')), $source, $display !== '' ? $display : null, $email !== '' ? $email : null, $roleId, $dept, $active]
         );
         ba_audit($db, 'create_user', 'user', $username, $role['name']);
         $_SESSION['ba_flash'] = 'User created';
@@ -404,7 +442,7 @@ function ba_users_save_user(PDO $db, array $actor, string $act): void
         throw new RuntimeException('You cannot turn off your own account.');
     }
     $wasGlobal = ba_role_gate((string)ba_col($existing, 'role')) === 'admin'
-        || (int)ba_col($existing, 'role_id') === ba_role_id_by_name($db, 'Global Admin');
+        || (int)ba_col($existing, 'role_id') === ba_role_id_by_code($db, 'global');
     if ($wasGlobal && ($gate !== 'admin' || $active !== 1) && ba_active_global_admins($db, $id) < 1) {
         throw new RuntimeException('Keep at least one active Global Admin.');
     }
@@ -412,7 +450,7 @@ function ba_users_save_user(PDO $db, array $actor, string $act): void
     ba_access_exec(
         $db,
         'UPDATE users SET role=?, source=?, display_name=?, email=?, role_id=?, department_id=?, is_active=? WHERE id=?',
-        [ba_role_column($role['name']), $source, $display !== '' ? $display : null, $email !== '' ? $email : null, $roleId, $dept, $active, $id]
+        [ba_role_column($role['name'], (string)($role['code'] ?? '')), $source, $display !== '' ? $display : null, $email !== '' ? $email : null, $roleId, $dept, $active, $id]
     );
     if ($source === 'local') {
         $plain = ba_users_password(false);
@@ -471,7 +509,7 @@ function ba_users_ldap_card(array $ldap, array $roles): void
     echo '<label><input type="checkbox" name="ldap_use_ssl" ' . ($ldap['use_ssl'] ? 'checked' : '') . '> Use LDAPS (SSL)</label>';
     echo '<label><input type="checkbox" name="ldap_require_group" ' . ($ldap['require_group'] ? 'checked' : '') . '> Require a mapped security group before creating an account</label>';
     echo '<label>Default Role (fallback)</label><select name="ldap_default_role_id">';
-    echo '<option value=""' . ($defaultId === 0 ? ' selected' : '') . '>Viewer</option>';
+    echo '<option value=""' . ($defaultId === 0 ? ' selected' : '') . '>View Only</option>';
     foreach ($roles as $role) {
         $rid = (int)ba_col($role, 'id');
         echo '<option value="' . $rid . '"' . ($defaultId === $rid ? ' selected' : '') . '>' . h((string)ba_col($role, 'name')) . '</option>';
@@ -578,24 +616,25 @@ JS;
 
 function ba_users_roles_card(PDO $db, array $roles): void
 {
-    $order = ['Viewer' => 1, 'Department Admin' => 2, 'Data Center Admin' => 3, 'Global Admin' => 4];
+    $order = ['global' => 1, 'idfm' => 2, 'department' => 3, 'view' => 4];
     $matrix = [];
     foreach ($roles as $r) {
-        if (isset($order[(string)ba_col($r, 'name')])) {
+        if (isset($order[(string)ba_col($r, 'code')])) {
             $matrix[] = $r;
         }
     }
     usort($matrix, static function ($a, $b) use ($order) {
-        return ($order[(string)ba_col($a, 'name')] ?? 50) <=> ($order[(string)ba_col($b, 'name')] ?? 50);
+        return ($order[(string)ba_col($a, 'code')] ?? 50) <=> ($order[(string)ba_col($b, 'code')] ?? 50);
     });
     $privileged = array_flip(ba_privileged_permissions());
     echo '<div class="card" id="roles"><h3>Platform roles</h3>';
-    echo '<p class="muted">Viewer is read-only. Department Admin edits devices in their department. Data Center Admin edits racks, inventory, SNMP, and fleet writes. Global Admin also manages users, LDAPS, backups, and updates. Users and Settings stay with Global Admin.</p>';
+    echo '<p class="muted">Change a name in the box at the top of its column. View Only is read-only. Department Admin edits devices in their department. IDFM Admin edits racks, inventory, SNMP, and fleet writes. Global Admin also manages users, LDAPS, backups, and updates. Users and Settings stay with Global Admin.</p>';
     echo '<form method="post">';
     echo '<input type="hidden" name="act" value="save_roles"><input type="hidden" name="jump" value="roles">';
-    echo '<div class="users-scroll"><table class="role-matrix"><thead><tr><th rowspan="2">Area</th>';
+    echo '<div class="users-scroll"><table class="role-matrix"><thead><tr><th class="role-area" rowspan="2">Area</th>';
     foreach ($matrix as $mr) {
-        echo '<th colspan="2">' . h((string)ba_col($mr, 'name')) . '</th>';
+        $rid = (int)ba_col($mr, 'id');
+        echo '<th class="role-name" colspan="2"><input type="text" name="role_name[' . $rid . ']" value="' . h((string)ba_col($mr, 'name')) . '" maxlength="64" required autocomplete="off" aria-label="Role name"></th>';
     }
     echo '</tr><tr>';
     foreach ($matrix as $mr) {
@@ -607,7 +646,7 @@ function ba_users_roles_card(PDO $db, array $roles): void
         foreach ($matrix as $mr) {
             $rid = (int)ba_col($mr, 'id');
             $plist = ba_perm_list(ba_col($mr, 'permissions'));
-            $star = in_array('*', $plist, true) || (string)ba_col($mr, 'name') === 'Global Admin';
+            $star = in_array('*', $plist, true) || (string)ba_col($mr, 'code') === 'global';
             $viewKey = $mod['view'] ?? null;
             $editKey = $mod['edit'] ?? null;
             $deptKey = $mod['edit_dept'] ?? null;
@@ -636,8 +675,8 @@ function ba_users_roles_card(PDO $db, array $roles): void
         echo '</tr>';
     }
     echo '</tbody></table></div>';
-    echo '<p><button>Save role permissions</button></p></form>';
-    echo '<form method="post" onsubmit="return confirm(\'Restore Viewer, Department Admin, and Data Center Admin to the built-in defaults?\')">';
+    echo '<p><button>Save roles</button></p></form>';
+    echo '<form method="post" onsubmit="return confirm(\'Restore Global Admin, IDFM Admin, Department Admin, and View Only, including their names?\')">';
     echo '<input type="hidden" name="act" value="reset_roles"><input type="hidden" name="jump" value="roles">';
     echo '<button>Restore defaults</button></form></div>';
 }
@@ -802,7 +841,7 @@ function ba_users_people_card(PDO $db, array $users, array $roles, array $depts,
 function ba_users_role_map_card(array $roles, array $maps): void
 {
     echo '<div class="card" id="role-maps"><h3>Security group → role mapping</h3>';
-    echo '<p class="muted">At LDAPS sign-in, group membership (including nested groups) is compared to these rows. The highest role wins: Global Admin, then Data Center Admin, then Department Admin, then Viewer. The role is checked again on every sign-in. Group ID can be the group CN or the full DN. With “require a mapped security group” on, a first-time directory user is created only when one of these maps matches.</p>';
+    echo '<p class="muted">At LDAPS sign-in, group membership (including nested groups) is compared to these rows. The highest role wins: Global Admin, then IDFM Admin, then Department Admin, then View Only. Renaming a role does not change that order. The role is checked again on every sign-in. Group ID can be the group CN or the full DN. With “require a mapped security group” on, a first-time directory user is created only when one of these maps matches.</p>';
     echo '<form method="post" class="filters">';
     echo '<input type="hidden" name="act" value="add_role_map"><input type="hidden" name="jump" value="role-maps">';
     echo '<select name="role_id" required>';
