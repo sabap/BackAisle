@@ -122,6 +122,9 @@ function ba_db(bool $reconnect = false): PDO {
     if (ba_db_driver() === 'sqlsrv') {
         $pdo = ba_connect_sqlserver($db, true);
         ba_ensure_infra_schema($pdo);
+        if (function_exists('ba_ensure_access_schema')) {
+            ba_ensure_access_schema($pdo);
+        }
         return $pdo;
     }
     $path = (string)($db['path'] ?? BA_DB);
@@ -136,6 +139,9 @@ function ba_db(bool $reconnect = false): PDO {
     $pdo->exec('PRAGMA foreign_keys=ON');
     $pdo->exec('PRAGMA busy_timeout=30000');
     ba_ensure_infra_schema($pdo);
+    if (function_exists('ba_ensure_access_schema')) {
+        ba_ensure_access_schema($pdo);
+    }
     return $pdo;
 }
 

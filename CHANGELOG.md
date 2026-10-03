@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.55] - 2026-10-03
+
+- Admin has a Users page for LDAPS sign-in, departments, local users, and platform roles. Active Directory security groups can set a person's role and department at sign-in. Global Admin still has the whole site. Data Center Admin can change racks, inventory, SNMP, and fleet writes. Department Admin can change devices in their own department. Viewer stays read-only.
+
 ## [0.5.54] - 2026-09-24
 
 - UPS polls were calling cards unreachable when PowerPanel still got a reply. The status request waited 1 second and did not retry, and a slow sensor read could cancel a poll that already had battery and output data. Status now waits 3 seconds, retries once, and keeps that card's SNMP session. Temperature is read on the 5-minute pass and cannot by itself raise an unreachable alert. A card that truly does not answer still alerts after three failed polls.

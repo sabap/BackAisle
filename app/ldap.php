@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 
+require_once __DIR__ . '/access.php';
+
 /** LDAPS auth mirrored from ColdAisle: service bind, user search, nested group matching rule, role maps. */
 
 function ba_setting(PDO $db, string $k, string $default = ''): string {
@@ -53,9 +55,29 @@ function ba_ldap_escape(string $s): string {
     return function_exists('ldap_escape') ? ldap_escape($s, '', LDAP_ESCAPE_FILTER) : str_replace(['\\','*','(',')',"\x00"], ['\\5c','\\2a','\\28','\\29','\\00'], $s);
 }
 
+function ba_save_ldap_settings(PDO $db, array $post): void {
+    foreach (['ldap_host', 'ldap_port', 'ldap_base_dn', 'ldap_user_filter', 'ldap_bind_dn'] as $k) {
+        ba_set_setting($db, $k, trim((string)($post[$k] ?? '')));
+    }
+    if (trim((string)($post['ldap_bind_password'] ?? '')) !== '') {
+        ba_set_setting($db, 'ldap_bind_password', (string)$post['ldap_bind_password']);
+    }
+    ba_set_setting($db, 'ldap_enabled', isset($post['ldap_enabled']) ? '1' : '0');
+    ba_set_setting($db, 'ldap_use_ssl', isset($post['ldap_use_ssl']) ? '1' : '0');
+    ba_set_setting($db, 'ldap_tls_insecure', isset($post['ldap_tls_insecure']) ? '1' : '0');
+    ba_set_setting($db, 'ldap_require_group', isset($post['ldap_require_group']) ? '1' : '0');
+}
+
 function ba_ldap_login(PDO $db, string $username, string $password): bool {
     $cfg = ba_ldap_cfg($db);
     if (!$cfg['enabled'] || $cfg['host'] === '' || !function_exists('ldap_connect')) {
+        return false;
+    }
+    if (function_exists('ba_ensure_access_schema')) {
+        ba_ensure_access_schema($db);
+    }
+    $existing = ba_access_exec($db, 'SELECT * FROM users WHERE username=?', [$username])->fetch();
+    if ($existing && (int)ba_col($existing, 'is_active', 1) === 0) {
         return false;
     }
     if ($cfg['tls_insecure']) {
@@ -104,12 +126,13 @@ function ba_ldap_login(PDO $db, string $username, string $password): bool {
             $tokens[] = $m[1];
         }
     }
-    $maps = $db->query('SELECT group_token, role FROM ldap_role_maps')->fetchAll();
     $chain = '1.2.840.113556.1.4.1941';
     $escDn = ba_ldap_escape($userDn);
-    foreach ($maps as $map) {
-        $tok = trim($map['group_token']);
-        if ($tok === '') continue;
+    foreach (ba_access_map_group_tokens($db) as $tok) {
+        $tok = trim($tok);
+        if ($tok === '') {
+            continue;
+        }
         $escMap = ba_ldap_escape($tok);
         if (str_contains($tok, '=')) {
             $gf = '(&(objectClass=group)(distinguishedName=' . $escMap . ')(member:' . $chain . ':=' . $escDn . '))';
@@ -121,7 +144,12 @@ function ba_ldap_login(PDO $db, string $username, string $password): bool {
             $ge = @ldap_get_entries($conn, $gs);
             if (!empty($ge['count'])) {
                 $tokens[] = $tok;
-                if (!empty($ge[0]['cn'][0])) $tokens[] = $ge[0]['cn'][0];
+                if (!empty($ge[0]['cn'][0])) {
+                    $tokens[] = $ge[0]['cn'][0];
+                }
+                if (!empty($ge[0]['dn'])) {
+                    $tokens[] = $ge[0]['dn'];
+                }
             }
         }
     }
@@ -131,33 +159,62 @@ function ba_ldap_login(PDO $db, string $username, string $password): bool {
     }
     @ldap_unbind($conn);
 
-    $role = null;
-    $have = array_map('strtolower', $tokens);
-    foreach ($maps as $map) {
-        if (in_array(strtolower($map['group_token']), $have, true)) {
-            $role = $map['role'];
-            if ($role === 'admin') break;
-        }
-    }
-    if ($role === null) {
+    $resolved = ba_access_pick_role(
+        ba_access_role_from_groups($db, $tokens),
+        ba_access_role_from_legacy($db, $tokens)
+    );
+    if ($resolved === null) {
         if ($cfg['require_group']) {
             return false;
         }
-        $role = 'viewer';
+        $fallback = ba_role_by_id($db, ba_role_id_by_name($db, 'Viewer'));
+        if (!$fallback) {
+            return false;
+        }
+        $resolved = [
+            'id' => $fallback['id'],
+            'name' => $fallback['name'],
+            'gate' => 'viewer',
+            'permissions' => $fallback['permissions'],
+        ];
     }
     $display = $entry['displayname'][0] ?? ($entry['cn'][0] ?? $username);
-    $st = $db->prepare('SELECT * FROM users WHERE username=?');
-    $st->execute([$username]);
-    $row = $st->fetch();
+    $mail = trim((string)($entry['mail'][0] ?? ''));
+    $deptId = ba_access_department_from_groups($db, $tokens);
+    $row = $existing ?: null;
     if ($row) {
-        $db->prepare('UPDATE users SET role=?, display_name=?, source=? WHERE id=?')->execute([$role, $display, 'ldap', $row['id']]);
-        $id = (int)$row['id'];
+        if ($deptId === null) {
+            $keep = ba_col($row, 'department_id');
+            $deptId = ($keep === null || $keep === '') ? null : (int)$keep;
+        }
+        $email = $mail !== '' ? $mail : (ba_col($row, 'email') !== null ? (string)ba_col($row, 'email') : null);
+        if ($email === '') {
+            $email = null;
+        }
+        ba_access_exec(
+            $db,
+            'UPDATE users SET role=?, display_name=?, source=?, role_id=?, department_id=?, email=? WHERE id=?',
+            [ba_role_column($resolved['name']), $display, 'ldap', $resolved['id'], $deptId, $email, (int)ba_col($row, 'id')]
+        );
+        $id = (int)ba_col($row, 'id');
     } else {
-        $db->prepare('INSERT INTO users (username, password_hash, role, source, display_name) VALUES (?, ?, ?, ?, ?)')
-            ->execute([$username, 'ldap', $role, 'ldap', $display]);
+        ba_access_exec(
+            $db,
+            'INSERT INTO users (username, password_hash, role, source, display_name, email, role_id, department_id, is_active) VALUES (?,?,?,?,?,?,?,?,1)',
+            [$username, 'ldap', ba_role_column($resolved['name']), 'ldap', $display, $mail !== '' ? $mail : null, $resolved['id'], $deptId]
+        );
         $id = ba_last_id($db);
     }
-    $_SESSION['user'] = ['id' => $id, 'username' => $username, 'role' => $role];
-    ba_audit($db, 'login_ldap', 'user', (string)$id);
+    $fresh = ba_access_exec($db, 'SELECT * FROM users WHERE id=?', [$id])->fetch();
+    $_SESSION['user'] = $fresh ? ba_session_user($db, $fresh) : [
+        'id' => $id,
+        'username' => $username,
+        'role' => $resolved['gate'],
+        'role_id' => $resolved['id'],
+        'role_name' => $resolved['name'],
+        'department_id' => $deptId,
+        'permissions' => $resolved['permissions'],
+    ];
+    ba_audit($db, 'login_ldap', 'user', (string)$id, $resolved['name']);
     return true;
 }

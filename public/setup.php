@@ -17,6 +17,7 @@ require __DIR__ . '/../app/helpers.php';
 require __DIR__ . '/../app/ldap.php';
 require __DIR__ . '/../app/backup.php';
 require __DIR__ . '/../app/import_pp.php';
+require __DIR__ . '/../app/access.php';
 
 if (ba_is_installed() && !isset($_GET['force'])) {
     header('Location: /login.php');

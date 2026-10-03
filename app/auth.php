@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 
+require_once __DIR__ . '/access.php';
+
 function ba_verify_password(string $hash, string $password): bool {
     if (str_starts_with($hash, 'sha256:')) {
         return hash_equals($hash, 'sha256:' . hash('sha256', $password));
@@ -18,17 +20,29 @@ function ba_require_login(): array {
         header('Location: /login.php');
         exit;
     }
+    if (function_exists('ba_refresh_session')) {
+        try {
+            $u = ba_refresh_session(ba_db());
+        } catch (Throwable $e) {
+            $u = ba_user();
+        }
+    }
+    if (!$u) {
+        $_SESSION = [];
+        header('Location: /login.php');
+        exit;
+    }
     return $u;
 }
 
 function ba_require_admin(): array {
     $u = ba_require_login();
-    if (($u['role'] ?? '') !== 'admin') {
-        http_response_code(403);
-        echo 'Admin only';
-        exit;
+    if (($u['role'] ?? '') === 'admin' || ba_can($u, 'manage_settings')) {
+        return $u;
     }
-    return $u;
+    http_response_code(403);
+    echo 'Admin only';
+    exit;
 }
 
 function ba_login(PDO $db, string $username, string $password): bool {
@@ -41,6 +55,9 @@ function ba_login(PDO $db, string $username, string $password): bool {
     if (!$row) {
         return ba_ldap_login($db, $username, $password);
     }
+    if (function_exists('ba_col') && (int)ba_col($row, 'is_active', 1) === 0) {
+        return false;
+    }
     if (!ba_verify_password($row['password_hash'], $password)) {
         return false;
     }
@@ -49,7 +66,9 @@ function ba_login(PDO $db, string $username, string $password): bool {
         $db->prepare('UPDATE users SET password_hash=? WHERE id=?')->execute([$new, $row['id']]);
         $row['password_hash'] = $new;
     }
-    $_SESSION['user'] = ['id' => (int)$row['id'], 'username' => $row['username'], 'role' => $row['role']];
+    $_SESSION['user'] = function_exists('ba_session_user')
+        ? ba_session_user($db, $row)
+        : ['id' => (int)$row['id'], 'username' => $row['username'], 'role' => $row['role']];
     ba_audit($db, 'login', 'user', (string)$row['id']);
     return true;
 }

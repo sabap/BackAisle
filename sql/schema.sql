@@ -324,3 +324,54 @@ IF NOT EXISTS (SELECT 1 FROM thresholds WHERE scope = 'global')
 INSERT INTO thresholds (scope, on_battery_minutes, capacity_low, runtime_low_min, temp_high_f, temp_low_f, humidity_high, humidity_low, poll_fail_count)
 VALUES ('global', 5, 30, 15, 85, 50, 70, 20, 3);
 GO
+IF COL_LENGTH('users', 'email') IS NULL ALTER TABLE users ADD email NVARCHAR(255) NULL;
+IF COL_LENGTH('users', 'department_id') IS NULL ALTER TABLE users ADD department_id INT NULL;
+IF COL_LENGTH('users', 'role_id') IS NULL ALTER TABLE users ADD role_id INT NULL;
+IF COL_LENGTH('users', 'is_active') IS NULL ALTER TABLE users ADD is_active INT NOT NULL CONSTRAINT DF_ba_users_active DEFAULT 1;
+IF COL_LENGTH('devices', 'department_id') IS NULL ALTER TABLE devices ADD department_id INT NULL;
+GO
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'departments')
+CREATE TABLE departments (
+  id INT IDENTITY(1,1) PRIMARY KEY,
+  name NVARCHAR(150) NOT NULL,
+  code NVARCHAR(32) NULL,
+  manager_name NVARCHAR(150) NULL,
+  contact_email NVARCHAR(255) NULL,
+  contact_phone NVARCHAR(64) NULL,
+  color_hex NVARCHAR(7) NOT NULL CONSTRAINT DF_ba_dept_color DEFAULT '#3b82f6',
+  notes NVARCHAR(MAX) NULL,
+  is_active INT NOT NULL CONSTRAINT DF_ba_dept_active DEFAULT 1,
+  created_at DATETIME2 NOT NULL CONSTRAINT DF_ba_dept_created DEFAULT SYSUTCDATETIME()
+);
+GO
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'roles')
+CREATE TABLE roles (
+  id INT IDENTITY(1,1) PRIMARY KEY,
+  name NVARCHAR(64) NOT NULL UNIQUE,
+  description NVARCHAR(500) NULL,
+  permissions NVARCHAR(MAX) NOT NULL,
+  is_system INT NOT NULL CONSTRAINT DF_ba_roles_system DEFAULT 1
+);
+GO
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'role_group_maps')
+CREATE TABLE role_group_maps (
+  id INT IDENTITY(1,1) PRIMARY KEY,
+  role_id INT NOT NULL,
+  auth_source NVARCHAR(20) NOT NULL,
+  group_id NVARCHAR(512) NOT NULL,
+  group_name NVARCHAR(255) NULL,
+  notes NVARCHAR(255) NULL,
+  is_active INT NOT NULL CONSTRAINT DF_ba_rgm_active DEFAULT 1
+);
+GO
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'department_group_maps')
+CREATE TABLE department_group_maps (
+  id INT IDENTITY(1,1) PRIMARY KEY,
+  department_id INT NOT NULL,
+  auth_source NVARCHAR(20) NOT NULL,
+  group_id NVARCHAR(512) NOT NULL,
+  group_name NVARCHAR(255) NULL,
+  notes NVARCHAR(255) NULL,
+  is_active INT NOT NULL CONSTRAINT DF_ba_dgm_active DEFAULT 1
+);
+GO

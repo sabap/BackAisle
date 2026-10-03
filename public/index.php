@@ -4,6 +4,7 @@ declare(strict_types=1);
 require __DIR__ . '/../app/bootstrap.php';
 require __DIR__ . '/../app/helpers.php';
 require __DIR__ . '/../app/db.php';
+require __DIR__ . '/../app/access.php';
 require __DIR__ . '/../app/auth.php';
 require __DIR__ . '/../app/layout.php';
 require __DIR__ . '/../app/pages.php';
@@ -16,6 +17,7 @@ require __DIR__ . '/../app/templates.php';
 require __DIR__ . '/../app/snmp_page.php';
 require __DIR__ . '/../app/backup.php';
 require __DIR__ . '/../app/update.php';
+require __DIR__ . '/../app/users_page.php';
 
 try {
 $path = function_exists('ba_request_path') ? ba_request_path() : (rtrim((string)parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH), '/') ?: '/');
@@ -94,6 +96,9 @@ switch ($path) {
         break;
     case '/admin':
         page_admin($db, $user);
+        break;
+    case '/users':
+        page_users($db, $user);
         break;
     case '/admin/backup-download':
         ba_require_admin();
