@@ -321,42 +321,120 @@ PY);
         $groupActions .= '<button type="button" class="btn" data-open-modal="modal-move-unit">Move a unit</button>';
         $groupActions .= '<button type="button" class="btn" data-open-modal="modal-alert-hold">Alert hold</button>';
         ba_card_open('IDF tree', $groupActions, 'groups');
-        echo '<p class="muted">Campuses and buildings are the top of the tree. IDFs sit under them. Rename, move, or remove a location here. The IDFs page only shows this tree.</p>';
+        echo '<p class="muted">Campuses and buildings are the top of the tree. IDFs sit under them. The IDFs page only shows this tree. Edit a location to rename it, move it, or change how long a repeated problem waits before it alerts.</p>';
         echo '<div class="org-tree">';
-        $walk = function ($parent) use (&$walk, $groups, $db) {
+        $editId = (str_starts_with($msg, 'Error') && ($_POST['act'] ?? '') === 'save_group') ? (int)($_POST['id'] ?? 0) : 0;
+        $walk = function ($parent) use (&$walk, $groups, $db, $editId) {
             foreach (ba_group_children($groups, $parent) as $g) {
                 $id = (int)$g['id'];
                 $n = $db->prepare('SELECT COUNT(*) FROM devices WHERE group_id=?');
                 $n->execute([$id]);
                 $units = (int)$n->fetchColumn();
                 $kids = ba_group_children($groups, $id);
-                echo '<details class="loc-branch"'.($parent === null ? ' open' : '').'>';
-                echo '<summary class="loc-sum"><span class="loc-chev" aria-hidden="true"></span>';
-                echo '<span class="loc-title">'.h($g['name']).'</span>';
-                echo '<span class="loc-meta">'.$units.' units'.($kids ? ' · '.count($kids).' below' : '').'</span></summary>';
-                echo '<div class="loc-kids">';
-                echo '<form method="post" class="filters">';
+                $childCount = count($kids);
+                $meta = $units.' unit'.($units === 1 ? '' : 's');
+                if ($childCount) {
+                    $meta .= ' · '.$childCount.' below';
+                }
+                $editOpen = $editId === $id;
+                $name = (string)$g['name'];
+                echo '<div class="org-node">';
+                echo '<div class="org-node-row">';
+                if ($childCount) {
+                    echo '<button type="button" class="org-twist" data-org-toggle aria-expanded="true" aria-label="Collapse '.h($name).'"><span class="loc-chev" aria-hidden="true"></span></button>';
+                } else {
+                    echo '<span class="org-twist-spacer" aria-hidden="true"></span>';
+                }
+                echo '<span class="org-node-name">'.h($name).'</span>';
+                echo '<span class="org-node-meta">'.h($meta).'</span>';
+                echo '<a class="org-view" href="'.h(ba_href('/idfs?group='.$id)).'">View</a>';
+                echo '<button type="button" class="org-edit" data-org-edit aria-expanded="'.($editOpen ? 'true' : 'false').'">'.($editOpen ? 'Close' : 'Edit').'</button>';
+                echo '</div>';
+                echo '<div class="org-node-edit"'.($editOpen ? '' : ' hidden').'>';
+                echo '<form id="org-save-'.$id.'" method="post">';
                 echo '<input type="hidden" name="act" value="save_group"><input type="hidden" name="id" value="'.$id.'">';
-                echo '<input name="name" value="'.h($g['name']).'" required>';
+                echo '<div class="org-fields">';
+                echo '<label for="org-name-'.$id.'">Name</label>';
+                echo '<input id="org-name-'.$id.'" name="name" value="'.h($name).'" required>';
                 $topSel = empty($g['parent_id']) ? ' selected' : '';
-                echo '<select name="parent_id"><option value=""'.$topSel.'>(top level)</option>'.ba_group_options($groups, null, '', $id, $g['parent_id'] ?? null).'</select>';
-                echo '<input type="number" name="alert_hold_sec" value="'.(int)($g['alert_hold_sec'] ?? 180).'" title="Alert hold seconds">';
-                echo '<button>Save</button>';
-                echo '<a href="'.h(ba_href('/idfs?group='.$id)).'">view</a>';
+                echo '<label for="org-parent-'.$id.'">Parent</label><div>';
+                echo '<select id="org-parent-'.$id.'" name="parent_id"><option value=""'.$topSel.'>(top level)</option>'.ba_group_options($groups, null, '', $id, $g['parent_id'] ?? null).'</select>';
+                echo '<p class="hint">The location above this one. Top level is a campus or site that does not sit inside anything else. A location cannot be moved under itself.</p></div>';
+                echo '<label for="org-hold-'.$id.'">Alert hold</label><div>';
+                echo '<span class="org-hold"><input id="org-hold-'.$id.'" type="number" min="0" name="alert_hold_sec" value="'.(int)($g['alert_hold_sec'] ?? 180).'"><span class="muted">seconds</span></span>';
+                echo '<p class="hint">How long a repeated problem waits before devices in this location open an alert. This replaces the site default from the Alert hold button.</p></div>';
+                echo '</div></form>';
+                $confirm = json_encode('Remove '.$name.'? Locations under it, and racks in it, have to be removed first. Devices stay in inventory.', JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG);
+                echo '<form id="org-del-'.$id.'" method="post" onsubmit="return confirm('.h($confirm).')">';
+                echo '<input type="hidden" name="act" value="del_group"><input type="hidden" name="id" value="'.$id.'">';
                 echo '</form>';
-                echo '<form method="post" style="display:inline"><input type="hidden" name="act" value="del_group"><input type="hidden" name="id" value="'.$id.'"><button>Remove</button></form>';
-                $walk($id);
-                echo '</div></details>';
+                echo '<div class="org-node-actions">';
+                echo '<button type="submit" form="org-save-'.$id.'">Save</button>';
+                echo '<button type="submit" class="btn-quiet" form="org-del-'.$id.'">Remove</button>';
+                echo '</div></div>';
+                if ($childCount) {
+                    echo '<div class="org-node-kids">';
+                    $walk($id);
+                    echo '</div>';
+                }
+                echo '</div>';
             }
         };
+        if (!$groups) {
+            echo '<p class="empty">No locations yet. Use New group to add a campus or site.</p>';
+        }
         $walk(null);
         echo '</div>';
+        echo <<<'JS'
+<script>
+(function () {
+  function child(node, className) {
+    var list = node.children;
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].classList.contains(className)) return list[i];
+    }
+    return null;
+  }
+  document.querySelectorAll('[data-org-toggle]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var node = btn.closest('.org-node');
+      var kids = node ? child(node, 'org-node-kids') : null;
+      if (!kids) return;
+      var open = kids.hasAttribute('hidden');
+      if (open) kids.removeAttribute('hidden');
+      else kids.setAttribute('hidden', '');
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      var name = node.querySelector('.org-node-name');
+      btn.setAttribute('aria-label', (open ? 'Collapse ' : 'Expand ') + (name ? name.textContent : 'location'));
+    });
+  });
+  document.querySelectorAll('[data-org-edit]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var node = btn.closest('.org-node');
+      var panel = node ? child(node, 'org-node-edit') : null;
+      if (!panel) return;
+      var open = panel.hasAttribute('hidden');
+      if (open) panel.removeAttribute('hidden');
+      else panel.setAttribute('hidden', '');
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      btn.textContent = open ? 'Close' : 'Edit';
+      if (open) {
+        var field = panel.querySelector('input[name="name"]');
+        if (field) field.focus();
+      }
+    });
+  });
+})();
+</script>
+JS;
         ba_card_close();
         ba_users_modal_open('modal-add-group', 'New group / subgroup', false);
         echo '<form method="post" class="stack">';
         echo '<label>Name</label><input name="name" required>';
         echo '<label>Parent</label><select name="parent_id"><option value="">(top level)</option>'.ba_group_options($groups).'</select>';
-        echo '<label>Alert hold (seconds)</label><input type="number" name="alert_hold_sec" value="180">';
+        echo '<p class="muted">The location this one sits under. Top level starts a campus or site.</p>';
+        echo '<label>Alert hold (seconds)</label><input type="number" min="0" name="alert_hold_sec" value="180">';
+        echo '<p class="muted">How long a repeated problem waits before devices here open an alert.</p>';
         echo '<input type="hidden" name="act" value="add_group"><button>Create</button></form>';
         ba_users_modal_close();
         ba_users_modal_open('modal-move-unit', 'Move a unit', false, '', true);
