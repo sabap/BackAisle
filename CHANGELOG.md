@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.64] - 2026-10-03
+
+- Battery last-replaced and replace-by come from the CyberPower card. Last replaced is the battery replacement date set in the RMCARD web interface. Replace-by is that date plus the card's recommended battery life. A blank reply does not clear a date already saved. Install stays as you typed it. Restart the collector so the next climate poll fills these in.
+
 ## [0.5.63] - 2026-10-03
 
 - BackAisle is branded as IDF Management (IDFM). The header, sign-in page, and setup wizard show a rack mark with a bronze backslash, the aisle behind the equipment. The browser tab uses the same mark.
