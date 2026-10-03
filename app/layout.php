@@ -22,7 +22,7 @@ function ba_layout_start(string $title, string $nav = 'fleet'): void {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title><?= h($title) ?> · BackAisle</title>
-  <link rel="stylesheet" href="/assets/app.css?v=users4">
+  <link rel="stylesheet" href="/assets/app.css?v=users6">
 </head>
 <body<?= ba_tech_mode() ? ' class="tech"' : '' ?>>
 <header class="top">

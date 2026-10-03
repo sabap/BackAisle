@@ -633,7 +633,7 @@ function ba_users_roles_card(PDO $db, array $roles): void
     });
     $privileged = array_flip(ba_privileged_permissions());
     echo '<div class="ucard" id="roles"><div class="ucard-head"><h3>Platform roles</h3></div><div class="ucard-body">';
-    echo '<p class="muted">Change a name in the box at the top of its column. View Only is read-only. Department Admin edits devices in their department. IDFM Admin edits racks, inventory, SNMP, and fleet writes. Global Admin also manages users, LDAPS, backups, and updates. Users and Settings stay with Global Admin.</p>';
+    echo '<p class="muted">Change a name in the box at the top of its column. View Only is read-only. Department Admin adds, edits, and decommissions devices their department owns, and handles alerts for those devices. IDFM Admin assigns the owning department and edits every device, plus racks, inventory, SNMP, and fleet writes. Global Admin also manages users, LDAPS, backups, and updates. Users and Settings stay with Global Admin.</p>';
     echo '<form method="post">';
     echo '<input type="hidden" name="act" value="save_roles"><input type="hidden" name="jump" value="roles">';
     echo '<div class="users-scroll"><table class="role-matrix"><thead><tr><th class="role-area" rowspan="2">Area</th>';

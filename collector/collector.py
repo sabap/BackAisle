@@ -206,15 +206,110 @@ def clear_alert(con, device_id, code):
     emit_event(con, device_id, "info", code + ".cleared", f"{code} cleared")
 
 
-def maybe_mail(secrets: dict, subject: str, body: str) -> None:
-    host = secrets.get("SMTP_HOST") or ""
-    to = secrets.get("SMTP_TO") or ""
-    if not host or not to:
+def _row_get(row, name, default=None):
+    if row is None:
+        return default
+    if name in row:
+        return row[name]
+    want = name.lower()
+    for key in row.keys():
+        if str(key).lower() == want:
+            return row[key]
+    return default
+
+
+def _mail_addr(value) -> str:
+    addr = str(value or "").strip()
+    if not addr or "@" not in addr or any(ch.isspace() for ch in addr) or len(addr) > 254:
+        return ""
+    return addr
+
+
+def department_recipients(con, device_ids: list[int]) -> list[str]:
+    """Contact address and active user emails for the departments that own these devices."""
+    ids = []
+    for raw in device_ids:
+        try:
+            did = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if did > 0:
+            ids.append(did)
+    if not ids:
+        return []
+    q = ",".join("?" * len(ids))
+    dept_ids = []
+    for row in con.execute(
+        f"SELECT DISTINCT department_id FROM devices WHERE id IN ({q}) AND department_id IS NOT NULL",
+        ids,
+    ):
+        raw = _row_get(row, "department_id")
+        if raw is None or str(raw).strip() == "":
+            continue
+        try:
+            dept_ids.append(int(raw))
+        except (TypeError, ValueError):
+            continue
+    found = []
+    for dept_id in dept_ids:
+        dept = con.execute(
+            "SELECT contact_email, is_active FROM departments WHERE id=?",
+            (dept_id,),
+        ).fetchone()
+        if dept is None:
+            continue
+        active = _row_get(dept, "is_active")
+        try:
+            active_ok = int(active) == 1
+        except (TypeError, ValueError):
+            active_ok = bool(active)
+        if not active_ok:
+            continue
+        addr = _mail_addr(_row_get(dept, "contact_email"))
+        if addr:
+            found.append(addr)
+        for person in con.execute(
+            "SELECT email FROM users WHERE department_id=? AND is_active=1",
+            (dept_id,),
+        ):
+            addr = _mail_addr(_row_get(person, "email"))
+            if addr:
+                found.append(addr)
+    out = []
+    seen = set()
+    for addr in found:
+        key = addr.lower()
+        if key not in seen:
+            seen.add(key)
+            out.append(addr)
+    return out
+
+
+def maybe_mail(secrets: dict, subject: str, body: str, extra: list[str] | None = None) -> None:
+    host = (secrets.get("SMTP_HOST") or "").strip()
+    recipients = []
+    seen = set()
+
+    def add(raw: str) -> None:
+        for part in str(raw or "").split(","):
+            addr = _mail_addr(part)
+            if not addr:
+                continue
+            key = addr.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            recipients.append(addr)
+
+    add(secrets.get("SMTP_TO") or "")
+    for addr in extra or []:
+        add(addr)
+    if not host or not recipients:
         return
     try:
         msg = EmailMessage()
         msg["From"] = secrets.get("SMTP_FROM") or "backaisle@localhost"
-        msg["To"] = to
+        msg["To"] = ", ".join(recipients)
         msg["Subject"] = subject
         msg.set_content(body)
         with smtplib.SMTP(host, int(secrets.get("SMTP_PORT") or 25), timeout=10) as s:
@@ -837,7 +932,7 @@ def process_group_alerts(con, secrets) -> None:
                             "INSERT INTO group_alerts (group_id, code, status, message, opened_at) VALUES (?,?, 'open', ?, ?)",
                             (gid, pa["code"], msg, now()),
                         )
-                        maybe_mail(secrets, f"BackAisle group {gname}: {pa['code']}", msg)
+                        maybe_mail(secrets, f"BackAisle group {gname}: {pa['code']}", msg, department_recipients(con, members))
                     for mid in members:
                         con.execute("UPDATE pending_alerts SET mailed_at=? WHERE device_id=? AND code=?", (now(), mid, pa["code"]))
                     mailed_group = True
@@ -846,6 +941,7 @@ def process_group_alerts(con, secrets) -> None:
                 secrets,
                 f"BackAisle {pa['code']}: {pa['hostname'] or pa['ip']}",
                 pa["code"],
+                department_recipients(con, [pa["device_id"]]),
             )
             con.execute("UPDATE pending_alerts SET mailed_at=? WHERE device_id=? AND code=?", (now(), pa["device_id"], pa["code"]))
 

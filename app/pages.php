@@ -588,49 +588,80 @@ function page_batteries(PDO $db): void {
     ba_layout_end();
 }
 
+function ba_alert_scope_sql(array $user): array
+{
+    $scope = ba_alert_scope_id($user);
+    if ($scope === null) {
+        return ['', []];
+    }
+    if ($scope < 1) {
+        return [' AND 1=0', []];
+    }
+    return [' AND d.department_id=?', [$scope]];
+}
+
 function page_alerts(PDO $db, array $user): void {
+    [$scopeSql, $scopeParams] = ba_alert_scope_sql($user);
+    $owns = "device_id IN (SELECT id FROM devices d WHERE 1=1$scopeSql)";
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && ba_editor($user, 'edit_alerts')) {
         $id = (int)($_POST['id'] ?? 0);
         $act = $_POST['act'] ?? '';
         if ($act === 'ack') {
-            $db->prepare("UPDATE alerts SET status='acked', acked_at=datetime('now') WHERE id=? AND status='open'")->execute([$id]);
+            ba_pp_exec($db, "UPDATE alerts SET status='acked', acked_at=datetime('now') WHERE id=? AND status='open' AND $owns", array_merge([$id], $scopeParams));
             ba_audit($db, 'ack_alert', 'alert', (string)$id);
         }
         if ($act === 'ack_all') {
-            $n = (int)$db->query("SELECT COUNT(*) FROM alerts WHERE status='open'")->fetchColumn();
-            $db->exec("UPDATE alerts SET status='acked', acked_at=datetime('now') WHERE status='open'");
+            $n = (int)ba_pp_exec($db, "SELECT COUNT(*) FROM alerts WHERE status='open' AND $owns", $scopeParams)->fetchColumn();
+            ba_pp_exec($db, "UPDATE alerts SET status='acked', acked_at=datetime('now') WHERE status='open' AND $owns", $scopeParams);
             ba_audit($db, 'ack_all_alerts', 'alert', null, (string)$n);
         }
         if ($act === 'clear') {
-            $db->prepare("UPDATE alerts SET status='cleared', cleared_at=datetime('now') WHERE id=?")->execute([$id]);
+            ba_pp_exec($db, "UPDATE alerts SET status='cleared', cleared_at=datetime('now') WHERE id=? AND $owns", array_merge([$id], $scopeParams));
             ba_audit($db, 'clear_alert', 'alert', (string)$id);
         }
         if ($act === 'clear_all') {
-            $n = (int)$db->query("SELECT COUNT(*) FROM alerts WHERE status IN ('open','acked')")->fetchColumn();
-            $db->exec("UPDATE alerts SET status='cleared', cleared_at=datetime('now') WHERE status IN ('open','acked')");
+            $n = (int)ba_pp_exec($db, "SELECT COUNT(*) FROM alerts WHERE status IN ('open','acked') AND $owns", $scopeParams)->fetchColumn();
+            ba_pp_exec($db, "UPDATE alerts SET status='cleared', cleared_at=datetime('now') WHERE status IN ('open','acked') AND $owns", $scopeParams);
             ba_audit($db, 'clear_all_alerts', 'alert', null, (string)$n);
         }
         header('Location: ' . ba_href('/alerts'));
         exit;
     }
-    $rows = $db->query("SELECT a.*, d.hostname, d.ip, d.idf_closet FROM alerts a JOIN devices d ON d.id=a.device_id WHERE a.status IN ('open','acked') ORDER BY a.opened_at DESC")->fetchAll();
+    $rows = ba_pp_exec(
+        $db,
+        "SELECT a.*, d.hostname, d.ip, d.idf_closet, dep.name AS department_name
+         FROM alerts a
+         JOIN devices d ON d.id=a.device_id
+         LEFT JOIN departments dep ON dep.id=d.department_id
+         WHERE a.status IN ('open','acked')$scopeSql
+         ORDER BY a.opened_at DESC",
+        $scopeParams
+    )->fetchAll();
     ba_layout_start('Alerts', 'alerts');
     echo '<div class="dash-hero"><div><h1>Alerts</h1>';
-    echo '<p class="muted">Ack keeps an alert on this list. Clear takes it off.</p></div>';
+    echo '<p class="muted">Ack keeps an alert on this list. Clear takes it off.';
+    if (ba_alert_scope_id($user) !== null) {
+        echo ' This list is the devices your department owns.';
+    }
+    echo '</p></div>';
     if (ba_editor($user, 'edit_alerts') && $rows) {
         echo '<form method="post" class="filters">';
         echo '<button name="act" value="ack_all">Ack all</button>';
-        echo '<button name="act" value="clear_all" onclick="return confirm(\'Clear every alert on this page?\')">Clear all</button>';
+        $clearConfirm = ba_alert_scope_id($user) !== null
+            ? 'Clear every alert for devices your department owns?'
+            : 'Clear every alert on this page?';
+        echo '<button name="act" value="clear_all" onclick="return confirm(\'' . $clearConfirm . '\')">Clear all</button>';
         echo '</form></div>';
     } else {
         echo '</div>';
     }
     if (!$rows) echo '<div class="empty">No open alerts.</div>';
     else {
-        echo '<table><thead><tr><th>Opened</th><th>Sev</th><th>Closet</th><th>Code</th><th>Message</th><th></th></tr></thead><tbody>';
+        echo '<table><thead><tr><th>Opened</th><th>Sev</th><th>Closet</th><th>Department</th><th>Code</th><th>Message</th><th></th></tr></thead><tbody>';
         foreach ($rows as $r) {
             echo '<tr><td>'.h($r['opened_at']).'</td><td class="pill '.($r['severity']==='crit'?'batt':'warn').'">'.h($r['severity']).'</td>';
             echo '<td><a href="/device.php?id='.(int)$r['device_id'].'">'.h($r['idf_closet']).'</a></td>';
+            echo '<td>'.h((string)ba_col($r, 'department_name', '') ?: '—').'</td>';
             echo '<td>'.h($r['code']).'</td><td>'.h($r['message']).'</td><td>';
             if (ba_editor($user, 'edit_alerts')) {
                 echo '<form method="post" style="display:inline">';
@@ -658,33 +689,84 @@ function page_events(PDO $db): void {
 
 function page_devices(PDO $db, array $user): void {
     $canEditDevices = ba_can_edit_device($user, null);
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && $canEditDevices) {
-        $ip = trim($_POST['ip'] ?? '');
-        if (filter_var($ip, FILTER_VALIDATE_IP)) {
-            $kind = $_POST['kind'] ?? 'ups';
-            if (!in_array($kind, ['ups', 'switch', 'patch_panel', 'other'], true)) $kind = 'ups';
-            $db->prepare("INSERT INTO devices (ip, hostname, site, building, idf_closet, rack, circuit, load_notes, sensor_expected, is_simulated, enabled, kind) VALUES (?,?,?,?,?,?,?,?,?,0,1,?)")
-                ->execute([
-                    $ip, trim($_POST['hostname'] ?? ''), trim($_POST['site'] ?? 'Hospital'),
-                    trim($_POST['building'] ?? ''), trim($_POST['idf_closet'] ?? ''),
-                    trim($_POST['rack'] ?? ''), trim($_POST['circuit'] ?? ''),
-                    trim($_POST['load_notes'] ?? ''), isset($_POST['sensor_expected']) ? 1 : 0,
-                    $kind,
-                ]);
-            $newId = ba_last_id($db);
-            if ($newId > 0) {
-                ba_pp_exec($db, 'UPDATE devices SET department_id=? WHERE id=?', [ba_device_department_choice($user), $newId]);
+    $canAssign = ba_can($user, 'edit_devices_all');
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        $act = (string)($_POST['act'] ?? 'add');
+        if ($act === 'assign_department') {
+            if (!$canAssign) {
+                http_response_code(403);
+                echo 'Not allowed';
+                return;
             }
-            ba_audit($db, 'add_device', 'device', $ip);
+            $choice = ba_device_department_choice($user);
+            if ($choice !== null) {
+                $exists = ba_access_exec($db, 'SELECT id FROM departments WHERE id=? AND is_active=1', [$choice])->fetch();
+                if (!$exists) {
+                    $choice = null;
+                }
+            }
+            $ids = $_POST['device_ids'] ?? [];
+            if (!is_array($ids)) {
+                $ids = [];
+            }
+            $n = 0;
+            foreach ($ids as $rawId) {
+                $did = (int)$rawId;
+                if ($did < 1) {
+                    continue;
+                }
+                ba_pp_exec($db, 'UPDATE devices SET department_id=? WHERE id=?', [$choice, $did]);
+                $n++;
+            }
+            ba_audit($db, 'assign_department', 'device', null, 'n='.$n);
+            header('Location: ' . ba_href('/devices?msg=' . rawurlencode($n > 0 ? 'Assigned '.$n.' devices' : 'Select at least one device')));
+            exit;
         }
-        header('Location: ' . ba_href('/devices'));
-        exit;
+        if ($canEditDevices && $act === 'add') {
+            $ip = trim($_POST['ip'] ?? '');
+            if (filter_var($ip, FILTER_VALIDATE_IP)) {
+                $kind = $_POST['kind'] ?? 'ups';
+                if (!in_array($kind, ['ups', 'switch', 'patch_panel', 'other'], true)) $kind = 'ups';
+                $db->prepare("INSERT INTO devices (ip, hostname, site, building, idf_closet, rack, circuit, load_notes, sensor_expected, is_simulated, enabled, kind) VALUES (?,?,?,?,?,?,?,?,?,0,1,?)")
+                    ->execute([
+                        $ip, trim($_POST['hostname'] ?? ''), trim($_POST['site'] ?? 'Hospital'),
+                        trim($_POST['building'] ?? ''), trim($_POST['idf_closet'] ?? ''),
+                        trim($_POST['rack'] ?? ''), trim($_POST['circuit'] ?? ''),
+                        trim($_POST['load_notes'] ?? ''), isset($_POST['sensor_expected']) ? 1 : 0,
+                        $kind,
+                    ]);
+                $newId = ba_last_id($db);
+                if ($newId > 0) {
+                    ba_pp_exec($db, 'UPDATE devices SET department_id=? WHERE id=?', [ba_device_department_choice($user), $newId]);
+                }
+                ba_audit($db, 'add_device', 'device', $ip);
+            }
+            header('Location: ' . ba_href('/devices'));
+            exit;
+        }
     }
-    $rows = $db->query("SELECT * FROM devices ORDER BY is_simulated, building, idf_closet")->fetchAll();
+    $showRetired = isset($_GET['retired']);
+    $filterDept = (int)($_GET['dept'] ?? 0);
+    $listSql = 'SELECT * FROM devices WHERE 1=1';
+    $listParams = [];
+    if (!$showRetired) {
+        $listSql .= ' AND decommissioned_at IS NULL';
+    }
+    if ($filterDept > 0) {
+        $listSql .= ' AND department_id=?';
+        $listParams[] = $filterDept;
+    }
+    $listSql .= ' ORDER BY is_simulated, building, idf_closet';
+    $rows = ba_pp_exec($db, $listSql, $listParams)->fetchAll();
     ba_layout_start('Inventory', 'devices');
     echo '<h1>Inventory</h1>';
+    if (!empty($_GET['msg'])) {
+        echo '<div class="flash ok">'.h((string)$_GET['msg']).'</div>';
+    }
+    echo '<p class="muted">The owning department is responsible for a device. Department Admins in that department can edit it, add devices for it, and decommission it. Alerts for it go to that department.</p>';
     if ($canEditDevices) {
         echo '<div class="card"><form method="post" class="filters">';
+        echo '<input type="hidden" name="act" value="add">';
         echo '<input name="ip" placeholder="IP" required>';
         echo '<input name="hostname" placeholder="hostname">';
         echo '<input name="site" value="Hospital" placeholder="site">';
@@ -698,17 +780,47 @@ function page_devices(PDO $db, array $user): void {
         echo '<button>Add device</button></form><p class="muted">SNMPv3 profile comes from secrets.env. Model/serial/firmware auto-fill on next poll.</p></div>';
     }
     $deptNames = [];
-    foreach ($db->query('SELECT id, name FROM departments') as $dep) {
+    foreach ($db->query('SELECT id, name, is_active FROM departments ORDER BY name') as $dep) {
         $deptNames[(int)ba_col($dep, 'id')] = (string)ba_col($dep, 'name');
     }
-    echo '<table><thead><tr><th>Kind</th><th>IP</th><th>Host</th><th>Model</th><th>Template</th><th>Serial</th><th>Department</th><th>Closet</th><th>Rack / U</th></tr></thead><tbody>';
+    echo '<form method="get" action="'.h(ba_href('/devices')).'" class="filters">';
+    echo '<select name="dept"><option value="">All departments</option>';
+    foreach ($deptNames as $id => $name) {
+        echo '<option value="'.$id.'"'.($filterDept === $id ? ' selected' : '').'>'.h($name).'</option>';
+    }
+    echo '</select><button>Filter</button>';
+    if ($showRetired) {
+        echo '<a href="'.h(ba_href('/devices'.($filterDept > 0 ? '?dept='.$filterDept : ''))).'">Hide decommissioned</a>';
+    } else {
+        echo '<a href="'.h(ba_href('/devices?retired=1'.($filterDept > 0 ? '&dept='.$filterDept : ''))).'">Show decommissioned</a>';
+    }
+    echo '</form>';
+    if ($canAssign) {
+        echo '<form method="post">';
+        echo '<input type="hidden" name="act" value="assign_department">';
+        echo '<div class="filters"><select name="department_id"><option value="">(no department)</option>';
+        foreach ($db->query('SELECT id, name FROM departments WHERE is_active=1 ORDER BY name') as $dep) {
+            echo '<option value="'.(int)ba_col($dep, 'id').'">'.h((string)ba_col($dep, 'name')).'</option>';
+        }
+        echo '</select><button>Assign department</button></div>';
+    }
+    echo '<table><thead><tr>';
+    if ($canAssign) {
+        echo '<th></th>';
+    }
+    echo '<th>Kind</th><th>IP</th><th>Host</th><th>Model</th><th>Template</th><th>Serial</th><th>Department</th><th>Closet</th><th>Rack / U</th></tr></thead><tbody>';
     $tplNames = [];
     foreach ($db->query('SELECT id, manufacturer, model FROM device_templates') as $t) {
         $tplNames[(int)$t['id']] = trim(($t['manufacturer'] ? $t['manufacturer'].' ' : '').$t['model']);
     }
     foreach ($rows as $r) {
         $u = $r['position_u'] ? ('U'.(int)$r['position_u']) : '';
-        echo '<tr><td>'.h(ba_kind_label($r['kind'] ?? 'ups')).'</td>';
+        $retired = trim((string)ba_col($r, 'decommissioned_at', '')) !== '';
+        echo '<tr>';
+        if ($canAssign) {
+            echo '<td><input type="checkbox" name="device_ids[]" value="'.(int)$r['id'].'"></td>';
+        }
+        echo '<td>'.h(ba_kind_label($r['kind'] ?? 'ups')).($retired ? ' <span class="muted">decommissioned</span>' : '').'</td>';
         echo '<td><a href="/device.php?id='.(int)$r['id'].'">'.h($r['ip'] ?: '—').'</a></td><td>'.h($r['hostname']).'</td><td>'.h($r['model']).'</td>';
         echo '<td>';
         if (!empty($r['template_id']) && isset($tplNames[(int)$r['template_id']])) {
@@ -720,7 +832,13 @@ function page_devices(PDO $db, array $user): void {
         else echo h($r['rack'] ?: '—');
         echo '</td></tr>';
     }
+    if (!$rows) {
+        echo '<tr><td colspan="'.($canAssign ? 10 : 9).'" class="muted">No devices in this list.</td></tr>';
+    }
     echo '</tbody></table>';
+    if ($canAssign) {
+        echo '</form>';
+    }
     ba_layout_end();
 }
 
@@ -731,7 +849,25 @@ function page_device(PDO $db, array $user): void {
     $r = $st->fetch();
     if (!$r) { http_response_code(404); echo 'not found'; return; }
     $canEditThis = ba_can_edit_device($user, $r);
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && $canEditThis) {
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($canEditThis || (isset($_POST['save_owner']) && ba_can($user, 'edit_devices_all')))) {
+        if (isset($_POST['decommission']) && $canEditThis) {
+            ba_pp_exec($db, 'UPDATE devices SET enabled=0, decommissioned_at=? WHERE id=?', [gmdate('Y-m-d H:i:s'), $id]);
+            ba_audit($db, 'decommission_device', 'device', (string)$id);
+            header('Location: ' . ba_href('/device?id='.$id));
+            exit;
+        }
+        if (isset($_POST['recommission']) && $canEditThis) {
+            ba_pp_exec($db, 'UPDATE devices SET enabled=1, decommissioned_at=NULL WHERE id=?', [$id]);
+            ba_audit($db, 'recommission_device', 'device', (string)$id);
+            header('Location: ' . ba_href('/device?id='.$id));
+            exit;
+        }
+        if (isset($_POST['save_owner']) && ba_can($user, 'edit_devices_all')) {
+            ba_pp_exec($db, 'UPDATE devices SET department_id=? WHERE id=?', [ba_device_department_choice($user), $id]);
+            ba_audit($db, 'assign_department', 'device', (string)$id);
+            header('Location: ' . ba_href('/device?id='.$id));
+            exit;
+        }
         if (isset($_POST['save'])) {
             $newIp = trim($_POST['ip'] ?? $r['ip']);
             if (!filter_var($newIp, FILTER_VALIDATE_IP)) {
@@ -761,6 +897,13 @@ function page_device(PDO $db, array $user): void {
                     $gid, $sid, $kind, $rid, $pos, $uh, $face, $tid, $id,
                 ]);
             ba_pp_exec($db, 'UPDATE devices SET department_id=? WHERE id=?', [ba_device_department_choice($user), $id]);
+            $enabledNow = isset($_POST['enabled']) ? 1 : 0;
+            $decom = null;
+            if (!$enabledNow) {
+                $existing = trim((string)ba_col($r, 'decommissioned_at', ''));
+                $decom = $existing !== '' ? $existing : null;
+            }
+            ba_pp_exec($db, 'UPDATE devices SET decommissioned_at=? WHERE id=?', [$decom, $id]);
             ba_audit($db, 'update_device', 'device', (string)$id, $newIp !== $r['ip'] ? 'ip '.$r['ip'].' -> '.$newIp : null);
         }
         if (isset($_POST['apply_template'])) {
@@ -815,6 +958,10 @@ function page_device(PDO $db, array $user): void {
       <?php endif; ?>
       · <?= h(ba_kind_label($r['kind'] ?? 'ups')) ?>
       · comm <?= h($r['comm_state'] ?: 'unknown') ?> · last ok <?= h($r['last_success'] ?: 'never') ?> · SNMP name <?= h($r['snmp_name']) ?> · fw <?= h($r['firmware']) ?></p>
+    <?php if (trim((string)ba_col($r, 'decommissioned_at', '')) !== ''): ?>
+      <div class="flash">Decommissioned <?= h((string)ba_col($r, 'decommissioned_at')) ?>. Polling is off. The record is kept.</div>
+    <?php endif; ?>
+    <?php ba_device_owner_card($db, $user, $r); ?>
     <div id="device-charts" data-id="<?= $id ?>" class="charts">
       <div><div class="legend">Capacity %</div><canvas data-series="capacity" data-color="#3ddc97"></canvas></div>
       <div><div class="legend">Runtime min</div><canvas data-series="runtime" data-color="#5b9fd4"></canvas></div>
