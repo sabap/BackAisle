@@ -88,7 +88,8 @@ tr:hover td { background:var(--panel2); }
 .st-down { background:rgba(107,119,133,.12); }
 .st-down td:first-child, .pill.down { color:var(--down); }
 .pill { font-size:.75rem; font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
-.filters { display:flex; gap:.5rem; flex-wrap:wrap; margin-bottom:.8rem; }
+.filters { display:flex; gap:.5rem; flex-wrap:wrap; margin-bottom:.8rem; align-items:center; }
+.filters > p.owner-hint { flex: 1 0 100%; margin: .15rem 0 .35rem; }
 .filters input, .filters select, form input, form select, form textarea, form button {
   background:var(--panel2); color:var(--ink); border:1px solid var(--line); border-radius:6px; padding:.4rem .55rem;
 }
@@ -468,6 +469,7 @@ body.tech .idf-elev:not(.idf-elev-row) a.idf-empty {
 }
 body.tech a.idf-empty.is-focus { background: rgba(91,159,212,.38); outline: 2px solid var(--acc); outline-offset: -2px; }
 .dept-swatch { display:inline-block; width:.85rem; height:.85rem; border-radius:3px; vertical-align:middle; border:1px solid rgba(255,255,255,.28); }
+.owner-people { display:flex; flex-wrap:wrap; gap:.35rem .9rem; margin:.15rem 0 .5rem; }
 .users-scroll { overflow:auto; }
 table.role-matrix { width:100%; border-collapse:separate; border-spacing:0; font-size:.85rem; }
 table.role-matrix th, table.role-matrix td {

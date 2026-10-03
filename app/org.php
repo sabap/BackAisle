@@ -207,6 +207,9 @@ function page_org(PDO $db, array $user): void {
                 $db->prepare('INSERT INTO devices (ip, hostname, site, group_id, snmp_profile_id, sensor_expected, is_simulated, enabled, va_rating) VALUES (?,?,?,?,?,1,0,1,2000)')
                     ->execute([$ip, trim($_POST['hostname'] ?? $ip), 'Hospital', $gid, $sid]);
                 $did = ba_last_id($db);
+                if ($did > 0) {
+                    ba_pp_exec($db, 'UPDATE devices SET department_id=? WHERE id=?', [ba_device_department_choice($user), $did]);
+                }
                 $db->prepare("INSERT INTO write_jobs (kind,status,simulate,stop_on_error,created_by,payload_json) VALUES ('provision','queued',0,1,?,?)")
                     ->execute([$user['username'], json_encode(['device_id'=>$did,'config_id'=>$cfgId,'web_user'=>'cyber','web_pass'=>'cyber'])]);
                 $jid = ba_last_id($db);
@@ -420,7 +423,9 @@ PY);
         foreach ($db->query('SELECT id,name FROM snmp_profiles') as $p) {
             echo '<option value="'.(int)$p['id'].'">'.h($p['name']).'</option>';
         }
-        echo '</select><input type="hidden" name="act" value="add_default"><button>Add default UPS</button></form></div>';
+        echo '</select>';
+        ba_department_field($db, $user, null);
+        echo '<input type="hidden" name="act" value="add_default"><button>Add default UPS</button></form></div>';
     }
 
     if ($tab === 'import') {

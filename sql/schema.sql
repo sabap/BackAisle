@@ -329,6 +329,7 @@ IF COL_LENGTH('users', 'department_id') IS NULL ALTER TABLE users ADD department
 IF COL_LENGTH('users', 'role_id') IS NULL ALTER TABLE users ADD role_id INT NULL;
 IF COL_LENGTH('users', 'is_active') IS NULL ALTER TABLE users ADD is_active INT NOT NULL CONSTRAINT DF_ba_users_active DEFAULT 1;
 IF COL_LENGTH('devices', 'department_id') IS NULL ALTER TABLE devices ADD department_id INT NULL;
+IF COL_LENGTH('devices', 'decommissioned_at') IS NULL ALTER TABLE devices ADD decommissioned_at NVARCHAR(32) NULL;
 GO
 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'departments')
 CREATE TABLE departments (
