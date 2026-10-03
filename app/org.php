@@ -303,23 +303,26 @@ PY);
         $groups = ba_groups($db);
     }
 
+    if ($tab === 'ldap') {
+        $tab = 'groups';
+    }
     ba_layout_start('Organization', 'org');
     if ($msg) echo '<div class="flash">'.h($msg).'</div>';
-    $tabs = ['groups'=>'Groups','snmp'=>'SNMPv3 profiles','configs'=>'Config profiles','import'=>'PowerPanel import','ldap'=>'LDAPS','certs'=>'SSL/TLS certs'];
-    echo '<nav class="filters">';
+    echo '<h1>Organization</h1>';
+    $tabs = ['groups'=>'Groups','snmp'=>'SNMPv3 profiles','configs'=>'Config profiles','import'=>'PowerPanel import','certs'=>'SSL/TLS certs'];
+    echo '<nav class="page-tabs">';
     foreach ($tabs as $k=>$lab) {
-        echo '<a class="btn '.($tab===$k?'on':'').'" href="'.h(ba_href('/org?tab='.$k)).'">'.h($lab).'</a> ';
+        echo '<a class="'.($tab===$k?'on':'').'" href="'.h(ba_href('/org?tab='.$k)).'">'.h($lab).'</a>';
     }
     echo '</nav>';
 
     if ($tab === 'groups') {
-        echo '<div class="grid2"><form method="post" class="card stack"><h3>New group / subgroup</h3>';
-        echo '<label>Name</label><input name="name" required>';
-        echo '<label>Parent</label><select name="parent_id"><option value="">(top level)</option>'.ba_group_options($groups).'</select>';
-        echo '<label>Alert hold (seconds)</label><input type="number" name="alert_hold_sec" value="180">';
-        echo '<input type="hidden" name="act" value="add_group"><button>Create</button></form>';
-        echo '<div class="card"><h3>IDF tree</h3>';
+        $groupActions = '<button type="button" class="btn" data-open-modal="modal-add-group">New group</button>';
+        $groupActions .= '<button type="button" class="btn" data-open-modal="modal-move-unit">Move a unit</button>';
+        $groupActions .= '<button type="button" class="btn" data-open-modal="modal-alert-hold">Alert hold</button>';
+        ba_card_open('IDF tree', $groupActions, 'groups');
         echo '<p class="muted">Campuses and buildings are the top of the tree. IDFs sit under them. Rename, move, or remove a location here. The IDFs page only shows this tree.</p>';
+        echo '<div class="org-tree">';
         $walk = function ($parent) use (&$walk, $groups, $db) {
             foreach (ba_group_children($groups, $parent) as $g) {
                 $id = (int)$g['id'];
@@ -328,7 +331,8 @@ PY);
                 $units = (int)$n->fetchColumn();
                 $kids = ba_group_children($groups, $id);
                 echo '<details class="loc-branch"'.($parent === null ? ' open' : '').'>';
-                echo '<summary class="loc-sum"><span class="loc-title">'.h($g['name']).'</span>';
+                echo '<summary class="loc-sum"><span class="loc-chev" aria-hidden="true"></span>';
+                echo '<span class="loc-title">'.h($g['name']).'</span>';
                 echo '<span class="loc-meta">'.$units.' units'.($kids ? ' · '.count($kids).' below' : '').'</span></summary>';
                 echo '<div class="loc-kids">';
                 echo '<form method="post" class="filters">';
@@ -346,14 +350,30 @@ PY);
             }
         };
         $walk(null);
-        echo '</div></div>';
-        echo '<div class="card"><h3>Move a unit</h3><form method="post" class="filters">';
-        echo '<select name="device_id">';
+        echo '</div>';
+        ba_card_close();
+        ba_users_modal_open('modal-add-group', 'New group / subgroup', false);
+        echo '<form method="post" class="stack">';
+        echo '<label>Name</label><input name="name" required>';
+        echo '<label>Parent</label><select name="parent_id"><option value="">(top level)</option>'.ba_group_options($groups).'</select>';
+        echo '<label>Alert hold (seconds)</label><input type="number" name="alert_hold_sec" value="180">';
+        echo '<input type="hidden" name="act" value="add_group"><button>Create</button></form>';
+        ba_users_modal_close();
+        ba_users_modal_open('modal-move-unit', 'Move a unit', false, '', true);
+        echo '<form method="post" class="stack">';
+        echo '<label>Device</label><select name="device_id">';
         foreach ($db->query('SELECT id, hostname, ip, group_id FROM devices ORDER BY hostname') as $d) {
             echo '<option value="'.(int)$d['id'].'">'.h(($d['hostname']?:$d['ip']).' — '.ba_group_path($db, $d['group_id']? (int)$d['group_id']:null)).'</option>';
         }
-        echo '</select><select name="group_id"><option value="">(none)</option>'.ba_group_options($groups).'</select>';
-        echo '<input type="hidden" name="act" value="move_device"><button>Move</button></form></div>';
+        echo '</select><label>Group</label><select name="group_id"><option value="">(none)</option>'.ba_group_options($groups).'</select>';
+        echo '<input type="hidden" name="act" value="move_device"><button>Move</button></form>';
+        ba_users_modal_close();
+        ba_users_modal_open('modal-alert-hold', 'Alert hold', false);
+        echo '<form method="post" class="stack">';
+        echo '<p class="muted">How long a repeated reading waits before it becomes its own alert.</p>';
+        echo '<label>Seconds</label><input type="number" name="alert_hold_sec" value="'.h(ba_setting($db,'alert_hold_sec','180')).'">';
+        echo '<input type="hidden" name="act" value="ldap_hold"><button>Save alert hold</button></form>';
+        ba_users_modal_close();
     }
 
     if ($tab === 'snmp') {
@@ -364,11 +384,20 @@ PY);
             $st->execute([$editId]);
             $edit = $st->fetch() ?: null;
         }
-        echo '<div class="grid2"><form method="post" action="/org.php?tab=snmp" class="card stack">';
-        echo '<h3>'.($edit ? 'Edit SNMPv3 profile' : 'New SNMPv3 profile').'</h3>';
+        $snmpActions = '<button type="button" class="btn" data-open-modal="modal-snmp-profile">' . ($edit ? 'Edit profile' : 'New profile') . '</button>';
+        $snmpActions .= '<button type="button" class="btn" data-open-modal="modal-snmp-bulk">Bulk assign</button>';
+        ba_card_open('Profiles', $snmpActions);
+        echo '<table><thead><tr><th>Name</th><th>User</th><th>Auth</th><th>Priv</th><th>Web</th><th></th></tr></thead><tbody>';
+        foreach ($db->query('SELECT * FROM snmp_profiles ORDER BY name') as $p) {
+            echo '<tr><td>'.h($p['name']).($p['is_default']?' <span class="muted">default</span>':'').'</td><td>'.h($p['username']).'</td><td>'.h($p['auth_proto']).'</td><td>'.h($p['priv_proto']).'</td><td>'.h($p['web_user']).'</td>';
+            echo '<td><a href="/org.php?tab=snmp&edit='.(int)$p['id'].'">edit</a></td></tr>';
+        }
+        echo '</tbody></table>';
+        ba_card_close();
+        ba_users_modal_open('modal-snmp-profile', $edit ? 'Edit SNMPv3 profile' : 'New SNMPv3 profile', (bool)$edit, $edit ? ba_href('/org?tab=snmp') : '');
+        echo '<form method="post" action="/org.php?tab=snmp" class="stack">';
         if ($edit) {
             echo '<input type="hidden" name="act" value="save_snmp"><input type="hidden" name="id" value="'.(int)$edit['id'].'">';
-            echo '<p class="muted"><a href="/org.php?tab=snmp">New profile</a></p>';
         } else {
             echo '<input type="hidden" name="act" value="add_snmp">';
         }
@@ -385,13 +414,9 @@ PY);
         echo '<label>Web password'.($edit?' (blank = keep)':'').'</label><input type="password" name="web_pass" autocomplete="new-password">';
         echo '<button>'.($edit ? 'Save changes' : 'Save profile').'</button>';
         echo '<p class="muted">Secrets go to C:\\ProgramData\\BackAisle\\snmp_profiles.json and are never shown again.</p></form>';
-        echo '<div class="card"><h3>Profiles</h3><table><thead><tr><th>Name</th><th>User</th><th>Auth</th><th>Priv</th><th>Web</th><th></th></tr></thead><tbody>';
-        foreach ($db->query('SELECT * FROM snmp_profiles ORDER BY name') as $p) {
-            echo '<tr><td>'.h($p['name']).($p['is_default']?' <span class="muted">default</span>':'').'</td><td>'.h($p['username']).'</td><td>'.h($p['auth_proto']).'</td><td>'.h($p['priv_proto']).'</td><td>'.h($p['web_user']).'</td>';
-            echo '<td><a href="/org.php?tab=snmp&edit='.(int)$p['id'].'">edit</a></td></tr>';
-        }
-        echo '</tbody></table></div></div>';
-        echo '<form method="post" action="/org.php?tab=snmp" class="card stack"><h3>Bulk assign SNMPv3 profile</h3>';
+        ba_users_modal_close();
+        ba_users_modal_open('modal-snmp-bulk', 'Bulk assign SNMPv3 profile', false);
+        echo '<form method="post" action="/org.php?tab=snmp" class="stack">';
         echo '<input type="hidden" name="act" value="bulk_snmp"><input type="hidden" name="tab" value="snmp">';
         echo '<p class="muted">Sets snmp_profile_id on devices. Use a device template to assign the same profile whenever that template is applied.</p>';
         echo '<label>Profile</label><select name="snmp_profile_id" required><option value="">choose</option>';
@@ -400,18 +425,22 @@ PY);
         }
         echo '</select><label>Location</label><select name="group_id"><option value="">All UPS</option>'.ba_group_options($groups).'</select>';
         echo '<button>Assign</button></form>';
+        ba_users_modal_close();
     }
 
     if ($tab === 'configs') {
-        echo '<div class="card"><h3>Config profiles</h3><p class="muted">Pulled RMCARD YYYY_MM_DD_HHMM.txt files. Clone more from Fleet writes.</p><table><thead><tr><th>Name</th><th>Source</th><th>When</th><th></th></tr></thead><tbody>';
+        ba_card_open('Config profiles', '<button type="button" class="btn" data-open-modal="modal-add-default">Add default UPS</button>');
+        echo '<p class="muted">Pulled RMCARD YYYY_MM_DD_HHMM.txt files. Clone more from Fleet writes.</p><table><thead><tr><th>Name</th><th>Source</th><th>When</th><th></th></tr></thead><tbody>';
         foreach ($db->query('SELECT * FROM config_templates ORDER BY id DESC') as $t) {
             echo '<tr><td>'.h($t['name']).($t['is_default']?' <span class="muted">default</span>':'').'</td><td>'.h($t['source_ip']).'</td><td>'.h($t['pulled_at']).'</td><td>';
             echo '<a href="'.h(ba_href('/writes/template?id='.(int)$t['id'])).'">preview</a> ';
             echo '<form method="post" style="display:inline"><input type="hidden" name="act" value="mark_default_cfg"><input type="hidden" name="id" value="'.(int)$t['id'].'"><button>set default</button></form></td></tr>';
         }
-        echo '</tbody></table></div>';
-        echo '<div class="card"><h3>Add default UPS</h3><p class="muted">Connects with factory <code>cyber</code>/<code>cyber</code>, applies a config profile, then polls with the selected SNMPv3 profile.</p>';
-        echo '<form method="post" class="filters">';
+        echo '</tbody></table>';
+        ba_card_close();
+        ba_users_modal_open('modal-add-default', 'Add default UPS', false, '', true);
+        echo '<p class="muted">Connects with factory <code>cyber</code>/<code>cyber</code>, applies a config profile, then polls with the selected SNMPv3 profile.</p>';
+        echo '<form method="post" class="stack">';
         echo '<input name="ip" placeholder="IP" required>';
         echo '<input name="hostname" placeholder="hostname">';
         echo '<select name="group_id"><option value="">group</option>'.ba_group_options($groups).'</select>';
@@ -425,33 +454,23 @@ PY);
         }
         echo '</select>';
         ba_department_field($db, $user, null);
-        echo '<input type="hidden" name="act" value="add_default"><button>Add default UPS</button></form></div>';
+        echo '<input type="hidden" name="act" value="add_default"><button>Add default UPS</button></form>';
+        ba_users_modal_close();
     }
 
     if ($tab === 'import') {
-        echo '<form method="post" action="/org.php?tab=import" enctype="multipart/form-data" class="card stack"><h3>Import PowerPanel site</h3>';
+        ba_card_open('Import PowerPanel site');
+        echo '<form method="post" action="/org.php?tab=import" enctype="multipart/form-data" class="stack">';
         echo '<p class="muted">Upload the same PowerPanel <code>profile.zip</code> again to rebuild the tree. Campuses stay at the top. Each IDF is moved back under its campus, and each UPS is pointed at that IDF. Existing IPs are not duplicated.</p>';
         echo '<input type="file" name="zip" accept=".zip" required>';
         echo '<input type="hidden" name="tab" value="import">';
         echo '<input type="hidden" name="act" value="import_pp"><button>Import</button></form>';
-    }
-
-    if ($tab === 'ldap') {
-        echo '<div class="card stack"><h3>LDAPS</h3>';
-        echo '<p class="muted">Directory sign-in, departments, users, platform roles, and security-group maps are on Users.</p>';
-        echo '<p><a class="btn" href="'.h(ba_href('/users')).'#ldaps">Open Users &amp; departments</a></p></div>';
-        echo '<form method="post" class="card stack"><h3>Alert hold</h3>';
-        echo '<p class="muted">How long a repeated reading waits before it becomes its own alert.</p>';
-        echo '<label>Seconds</label><input type="number" name="alert_hold_sec" value="'.h(ba_setting($db,'alert_hold_sec','180')).'">';
-        echo '<input type="hidden" name="act" value="ldap_hold"><button>Save alert hold</button></form>';
+        ba_card_close();
     }
 
     if ($tab === 'certs') {
-        echo '<div class="grid2"><form method="post" class="card stack"><h3>Generate key + CSR</h3>';
-        echo '<p class="muted">For your internal AD PKI. Key stays in ProgramData; download CSR and sign it, then upload the .crt/.pem/.p12.</p>';
-        echo '<label>CN (hostname or IP)</label><input name="cn" placeholder="rmcard.example.org" required>';
-        echo '<input type="hidden" name="act" value="csr"><button>Generate</button></form>';
-        echo '<div class="card"><h3>Stored material</h3><table><thead><tr><th>Name</th><th>CSR</th><th>Cert</th></tr></thead><tbody>';
+        ba_card_open('Stored material', '<button type="button" class="btn" data-open-modal="modal-csr">Generate CSR</button><button type="button" class="btn" data-open-modal="modal-push-cert">Mass push cert</button>');
+        echo '<table><thead><tr><th>Name</th><th>CSR</th><th>Cert</th></tr></thead><tbody>';
         foreach ($db->query('SELECT * FROM certs ORDER BY id DESC') as $c) {
             echo '<tr><td>'.h($c['name']).'</td><td>'.($c['csr_path']?'yes':'—').'</td><td>'.($c['cert_path']?'yes':'—').'</td></tr>';
         }
@@ -459,8 +478,16 @@ PY);
         echo '<form method="post" enctype="multipart/form-data" class="stack"><label>Attach signed cert to</label><select name="cert_id">';
         foreach ($db->query('SELECT id,name FROM certs') as $c) echo '<option value="'.(int)$c['id'].'">'.h($c['name']).'</option>';
         echo '</select><input type="file" name="cert" accept=".crt,.pem,.cer,.p12,.pfx,.pkcs12,.pksc12">';
-        echo '<input type="hidden" name="act" value="cert_upload"><button>Store cert</button></form></div></div>';
-        echo '<form method="post" class="card stack"><h3>Mass push to RMCARD web SSL</h3>';
+        echo '<input type="hidden" name="act" value="cert_upload"><button>Store cert</button></form>';
+        ba_card_close();
+        ba_users_modal_open('modal-csr', 'Generate key + CSR', false);
+        echo '<form method="post" class="stack">';
+        echo '<p class="muted">For your internal AD PKI. Key stays in ProgramData; download CSR and sign it, then upload the .crt/.pem/.p12.</p>';
+        echo '<label>CN (hostname or IP)</label><input name="cn" placeholder="rmcard.example.org" required>';
+        echo '<input type="hidden" name="act" value="csr"><button>Generate</button></form>';
+        ba_users_modal_close();
+        ba_users_modal_open('modal-push-cert', 'Mass push to RMCARD web SSL', false, '', true);
+        echo '<form method="post" class="stack">';
         echo '<p class="muted">Default is simulate. Live push attempts the card HTTPS certificate upload; one card at a time. Confirm on the job log.</p>';
         echo '<select name="cert_id">';
         foreach ($db->query('SELECT id,name FROM certs') as $c) echo '<option value="'.(int)$c['id'].'">'.h($c['name']).'</option>';
@@ -470,6 +497,7 @@ PY);
         }
         echo '<label><input type="checkbox" name="simulate" checked> simulate</label>';
         echo '<input type="hidden" name="act" value="push_cert"><button>Queue cert job</button></form>';
+        ba_users_modal_close();
     }
 
     ba_layout_end();
@@ -480,6 +508,7 @@ function page_battery_report(PDO $db): void {
     ba_layout_start('Battery replacement', 'battery');
     echo '<h1>Battery replacement report</h1>';
     echo '<p class="muted">Uses last replacement date and warranty/replace-by. If replace-by is empty, due is last replacement + 4 years (typical VRLA).</p>';
+    ba_card_open('Due batteries');
     echo '<table><thead><tr><th>Due</th><th>Host</th><th>IP</th><th>Group</th><th>Last replaced</th><th>Replace-by</th><th>Age (days)</th></tr></thead><tbody>';
     $today = new DateTime('today');
     foreach ($rows as $r) {
@@ -503,5 +532,6 @@ function page_battery_report(PDO $db): void {
         echo '<tr class="'.$cls.'"><td>'.h($due ?: '—').'</td><td><a href="'.h(ba_href('/device?id='.(int)$r['id'])).'">'.h($r['hostname']).'</a></td><td>'.h($r['ip']).'</td><td>'.h($r['group_name'] ?: '—').'</td><td>'.h($last ?: '—').'</td><td>'.h($r['warranty_replace_by'] ?: '—').'</td><td>'.h($age).'</td></tr>';
     }
     echo '</tbody></table>';
+    ba_card_close();
     ba_layout_end();
 }

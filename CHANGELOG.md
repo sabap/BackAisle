@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.5.61] - 2026-10-03
+
+- Pages use the same cards as Users. Each section has a bronze header. Short actions, such as Add device, New group, and Place existing UPS, are buttons on that header and open a dialog. Wider editors stay in the card.
+- Organization no longer has an LDAPS tab. LDAPS stays under Admin → Users. Alert hold is a button on the Groups card. The IDF tree shows each location name on one line.
+
 ## [0.5.60] - 2026-10-03
 
 - Inventory has a Select all checkbox beside Assign department, and the same checkbox in the table header. It selects every device in the current list. A department filter or Show decommissioned changes that list, and Select all follows it.

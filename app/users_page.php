@@ -153,7 +153,6 @@ function page_users(PDO $db, array $user): void
     ba_users_role_map_card($roles, $roleMaps, $openModal);
     ba_users_dept_map_card($depts, $deptMaps, $openModal);
     echo '</div>';
-    ba_users_modal_script();
     ba_layout_end();
 }
 
@@ -704,25 +703,6 @@ function ba_users_dept_fields(?array $edit): void
     echo '<label>Notes</label><input name="notes" value="' . h($notes) . '">';
 }
 
-function ba_users_modal_open(string $id, string $title, bool $open, string $closeHref = ''): void
-{
-    $titleId = $id . '-title';
-    echo '<div id="' . h($id) . '" class="ldaps-modal"' . ($open ? '' : ' hidden') . ' aria-hidden="' . ($open ? 'false' : 'true') . '"';
-    if ($closeHref !== '') {
-        echo ' data-close-href="' . h($closeHref) . '"';
-    }
-    echo '>';
-    echo '<div class="ldaps-modal-backdrop" data-close-modal></div>';
-    echo '<div class="ldaps-modal-panel" role="dialog" aria-modal="true" aria-labelledby="' . h($titleId) . '">';
-    echo '<div class="ldaps-modal-head"><h3 id="' . h($titleId) . '">' . h($title) . '</h3>';
-    echo '<button type="button" class="btn" data-close-modal>Close</button></div>';
-}
-
-function ba_users_modal_close(): void
-{
-    echo '</div></div>';
-}
-
 function ba_users_dept_card(array $depts, ?array $edit, string $openModal): void
 {
     echo '<div class="ucard" id="departments">';
@@ -959,44 +939,4 @@ function ba_users_dept_map_card(array $depts, array $maps, string $openModal): v
     echo '<label>Group ID</label><input name="group_id" placeholder="CN or full DN" required>';
     echo '<button>Add department mapping</button></form>';
     ba_users_modal_close();
-}
-
-function ba_users_modal_script(): void
-{
-    echo <<<'JS'
-<script>
-(function () {
-  function hide(m) {
-    var href = m.getAttribute('data-close-href') || '';
-    if (href) {
-      window.location.href = href;
-      return;
-    }
-    m.hidden = true;
-    m.setAttribute('aria-hidden', 'true');
-  }
-  document.addEventListener('click', function (e) {
-    var opener = e.target.closest('[data-open-modal]');
-    if (opener) {
-      var id = opener.getAttribute('data-open-modal');
-      var modal = id ? document.getElementById(id) : null;
-      if (!modal) return;
-      modal.hidden = false;
-      modal.setAttribute('aria-hidden', 'false');
-      var field = modal.querySelector('input:not([type=hidden]), select, textarea');
-      if (field) field.focus();
-      return;
-    }
-    if (e.target.closest('[data-close-modal]')) {
-      var modal = e.target.closest('.ldaps-modal');
-      if (modal) hide(modal);
-    }
-  });
-  document.addEventListener('keydown', function (e) {
-    if (e.key !== 'Escape') return;
-    document.querySelectorAll('.ldaps-modal:not([hidden])').forEach(hide);
-  });
-})();
-</script>
-JS;
 }

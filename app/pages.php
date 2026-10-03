@@ -34,9 +34,11 @@ function page_login(PDO $db): void {
     ?>
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Sign in · BackAisle</title><link rel="stylesheet" href="/assets/app.css"></head>
+<title>Sign in · BackAisle</title><link rel="stylesheet" href="/assets/app.css?v=layout2"></head>
 <body>
-<div class="card login">
+<div class="login ucard">
+  <div class="ucard-head"><h3>Sign in</h3></div>
+  <div class="ucard-body">
   <div class="brand"><span class="mark">BA</span> BackAisle</div>
   <p class="muted">IDF infrastructure — racks, UPS, climate. Not ColdAisle, not PowerPanel. Local or AD (LDAPS) accounts.</p>
   <?php if ($err): ?><div class="flash"><?= h($err) ?></div><?php endif; ?>
@@ -45,6 +47,7 @@ function page_login(PDO $db): void {
     <label>Password</label><input type="password" name="password">
     <p><button type="submit">Sign in</button></p>
   </form>
+  </div>
 </div>
 </body></html>
     <?php
@@ -175,39 +178,38 @@ function page_dashboard(PDO $db): void {
       <div class="kpi warn"><span>Open alerts</span><b><?= $open ?></b></div>
     </div>
     <div class="dash-charts dash-charts-3">
-      <div class="card dash-chart-card">
-        <div class="dash-chart-head">
-          <div class="legend">Average power</div>
-          <span class="muted">Watts · last days</span>
-        </div>
-        <canvas id="dash-power" height="220"></canvas>
-      </div>
-      <div class="card dash-chart-card">
-        <div class="dash-chart-head">
-          <div class="legend">Average temperature</div>
-          <span class="muted">°F · closet sensors</span>
-        </div>
-        <canvas id="dash-temp" height="220"></canvas>
-      </div>
-      <div class="card dash-chart-card">
-        <div class="dash-chart-head">
-          <div class="legend">Average humidity</div>
-          <span class="muted">% RH</span>
-        </div>
-        <canvas id="dash-rh" height="220"></canvas>
-      </div>
+      <section class="ucard dash-chart-card">
+        <div class="ucard-head"><h3>Average power</h3><span class="muted">Watts · last days</span></div>
+        <div class="ucard-body"><canvas id="dash-power" height="220"></canvas></div>
+      </section>
+      <section class="ucard dash-chart-card">
+        <div class="ucard-head"><h3>Average temperature</h3><span class="muted">°F · closet sensors</span></div>
+        <div class="ucard-body"><canvas id="dash-temp" height="220"></canvas></div>
+      </section>
+      <section class="ucard dash-chart-card">
+        <div class="ucard-head"><h3>Average humidity</h3><span class="muted">% RH</span></div>
+        <div class="ucard-body"><canvas id="dash-rh" height="220"></canvas></div>
+      </section>
     </div>
     <div class="dash-charts">
-      <div class="card dash-rank-card" id="dash-hot"></div>
-      <div class="card dash-rank-card" id="dash-pwr"></div>
+      <section class="ucard">
+        <div class="ucard-head"><h3>Hottest IDFs</h3></div>
+        <div class="ucard-body" id="dash-hot"></div>
+      </section>
+      <section class="ucard">
+        <div class="ucard-head"><h3>Highest power IDFs</h3></div>
+        <div class="ucard-body" id="dash-pwr"></div>
+      </section>
     </div>
-    <div class="dash-list-head">
-      <h2>IDFs</h2>
-      <form class="filters" method="get">
-        <input name="q" value="<?= h($q) ?>" placeholder="search closet or building">
-        <button>Filter</button>
-      </form>
-    </div>
+    <section class="ucard">
+      <div class="ucard-head">
+        <h3>IDFs</h3>
+        <form class="filters" method="get">
+          <input name="q" value="<?= h($q) ?>" placeholder="search closet or building">
+          <button class="btn">Filter</button>
+        </form>
+      </div>
+      <div class="ucard-body">
     <table class="dash-idf-table">
       <thead>
         <tr>
@@ -244,6 +246,8 @@ function page_dashboard(PDO $db): void {
       <?php endforeach; ?>
       </tbody>
     </table>
+      </div>
+    </section>
     <?php
     ba_layout_end();
 }
@@ -289,6 +293,7 @@ function page_fleet(PDO $db): void {
       <div class="kpi crit"><span>Unreachable</span><b><?= $down ?></b></div>
       <div class="kpi warn"><span>Open alerts</span><b><?= $open ?></b></div>
     </div>
+    <?php ba_card_open('UPS units'); ?>
     <form class="filters" method="get">
       <input name="q" value="<?= h($q) ?>" placeholder="search closet, IP, serial">
       <select name="f" onchange="this.form.submit()">
@@ -298,7 +303,7 @@ function page_fleet(PDO $db): void {
         <option value="down" <?= $filter==='down'?'selected':'' ?>>not polled / down</option>
         <option value="sensor" <?= $filter==='sensor'?'selected':'' ?>>sensor missing</option>
       </select>
-      <button>Filter</button>
+      <button class="btn">Filter</button>
     </form>
     <table>
       <thead><tr><th>State</th><th>Group</th><th>Host</th><th>IP</th><th>UPS</th><th>Cap</th><th>Runtime</th><th>Load</th><th>Power</th><th>Temp</th><th>RH</th><th>Sensor</th><th>Last poll</th></tr></thead>
@@ -337,6 +342,7 @@ function page_fleet(PDO $db): void {
       </tbody>
     </table>
     <?php
+    ba_card_close();
     ba_layout_end();
 }
 
@@ -529,6 +535,7 @@ function page_climate(PDO $db): void {
     $closets = ba_climate_closets($rows);
     ba_layout_start('Climate', 'climate');
     echo '<h1>Closet climate</h1><p class="muted">Grouped by IDF. When any UPS in that IDF reports an EnviroSensor, the other UPS in the same IDF drop off this list. Until then each UPS stays visible. Not every UPS has a probe.</p>';
+    ba_card_open('Closet sensors');
     echo '<table><thead><tr><th>Closet</th><th>Sensor</th><th>Temp</th><th>RH</th><th>Host</th></tr></thead><tbody>';
     foreach ($closets as $c) {
         $r = $c['row'];
@@ -567,13 +574,16 @@ function page_climate(PDO $db): void {
         echo '<tr><td colspan="5" class="muted">No UPS on the schedule.</td></tr>';
     }
     echo '</tbody></table>';
+    ba_card_close();
     ba_layout_end();
 }
 
 function page_batteries(PDO $db): void {
     $rows = $db->query(ba_latest_join() . ' WHERE '.ba_ups_only_sql()." ORDER BY CASE WHEN s.capacity_pct IS NULL THEN 1 ELSE 0 END, s.capacity_pct ASC, d.last_battery_replacement")->fetchAll();
     ba_layout_start('Batteries', 'batteries');
-    echo '<h1>Battery fleet</h1><table><thead><tr><th>Closet</th><th>Host</th><th>Cap</th><th>Runtime</th><th>Status</th><th>Last replaced</th><th>Replace-by</th></tr></thead><tbody>';
+    echo '<h1>Battery fleet</h1>';
+    ba_card_open('Batteries');
+    echo '<table><thead><tr><th>Closet</th><th>Host</th><th>Cap</th><th>Runtime</th><th>Status</th><th>Last replaced</th><th>Replace-by</th></tr></thead><tbody>';
     foreach ($rows as $r) {
         echo '<tr class="'.h(ba_worst($r)).'">';
         echo '<td><a href="/device.php?id='.(int)$r['id'].'">'.h($r['idf_closet']).'</a></td>';
@@ -585,6 +595,7 @@ function page_batteries(PDO $db): void {
         echo '<td>'.h($r['warranty_replace_by'] ?: '—').'</td></tr>';
     }
     echo '</tbody></table>';
+    ba_card_close();
     ba_layout_end();
 }
 
@@ -638,23 +649,23 @@ function page_alerts(PDO $db, array $user): void {
         $scopeParams
     )->fetchAll();
     ba_layout_start('Alerts', 'alerts');
-    echo '<div class="dash-hero"><div><h1>Alerts</h1>';
+    echo '<h1>Alerts</h1>';
     echo '<p class="muted">Ack keeps an alert on this list. Clear takes it off.';
     if (ba_alert_scope_id($user) !== null) {
         echo ' This list is the devices your department owns.';
     }
-    echo '</p></div>';
+    echo '</p>';
+    $alertActions = '';
     if (ba_editor($user, 'edit_alerts') && $rows) {
-        echo '<form method="post" class="filters">';
-        echo '<button name="act" value="ack_all">Ack all</button>';
         $clearConfirm = ba_alert_scope_id($user) !== null
             ? 'Clear every alert for devices your department owns?'
             : 'Clear every alert on this page?';
-        echo '<button name="act" value="clear_all" onclick="return confirm(\'' . $clearConfirm . '\')">Clear all</button>';
-        echo '</form></div>';
-    } else {
-        echo '</div>';
+        $alertActions = '<form method="post" class="filters">';
+        $alertActions .= '<button class="btn" name="act" value="ack_all">Ack all</button>';
+        $alertActions .= '<button class="btn" name="act" value="clear_all" onclick="return confirm(\'' . $clearConfirm . '\')">Clear all</button>';
+        $alertActions .= '</form>';
     }
+    ba_card_open('Open alerts', $alertActions);
     if (!$rows) echo '<div class="empty">No open alerts.</div>';
     else {
         echo '<table><thead><tr><th>Opened</th><th>Sev</th><th>Closet</th><th>Department</th><th>Code</th><th>Message</th><th></th></tr></thead><tbody>';
@@ -673,17 +684,21 @@ function page_alerts(PDO $db, array $user): void {
         }
         echo '</tbody></table>';
     }
+    ba_card_close();
     ba_layout_end();
 }
 
 function page_events(PDO $db): void {
     $st = $db->query("SELECT e.*, d.hostname, d.idf_closet FROM events e LEFT JOIN devices d ON d.id=e.device_id ORDER BY e.id DESC LIMIT 300");
     ba_layout_start('Power events', 'events');
-    echo '<h1>Power events</h1><table><thead><tr><th>Time</th><th>Closet</th><th>Sev</th><th>Code</th><th>Message</th></tr></thead><tbody>';
+    echo '<h1>Power events</h1>';
+    ba_card_open('Recent events');
+    echo '<table><thead><tr><th>Time</th><th>Closet</th><th>Sev</th><th>Code</th><th>Message</th></tr></thead><tbody>';
     foreach ($st as $r) {
         echo '<tr><td>'.h($r['ts']).'</td><td>'.h($r['idf_closet'] ?: '—').'</td><td>'.h($r['severity']).'</td><td>'.h($r['code']).'</td><td>'.h($r['message']).'</td></tr>';
     }
     echo '</tbody></table>';
+    ba_card_close();
     ba_layout_end();
 }
 
@@ -764,25 +779,11 @@ function page_devices(PDO $db, array $user): void {
         echo '<div class="flash ok">'.h((string)$_GET['msg']).'</div>';
     }
     echo '<p class="muted">The owning department is responsible for a device. Department Admins in that department can edit it, add devices for it, and decommission it. Alerts for it go to that department.</p>';
-    if ($canEditDevices) {
-        echo '<div class="card"><form method="post" class="filters">';
-        echo '<input type="hidden" name="act" value="add">';
-        echo '<input name="ip" placeholder="IP" required>';
-        echo '<input name="hostname" placeholder="hostname">';
-        echo '<input name="site" value="Hospital" placeholder="site">';
-        echo '<input name="building" placeholder="building">';
-        echo '<input name="idf_closet" placeholder="IDF/closet">';
-        echo '<input name="rack" placeholder="rack label">';
-        echo '<select name="kind">'.ba_kind_options('ups').'</select>';
-        echo '<input name="circuit" placeholder="circuit">';
-        ba_department_field($db, $user, null);
-        echo '<label class="muted"><input type="checkbox" name="sensor_expected" checked> sensor expected</label>';
-        echo '<button>Add device</button></form><p class="muted">SNMPv3 profile comes from secrets.env. Model/serial/firmware auto-fill on next poll.</p></div>';
-    }
     $deptNames = [];
     foreach ($db->query('SELECT id, name, is_active FROM departments ORDER BY name') as $dep) {
         $deptNames[(int)ba_col($dep, 'id')] = (string)ba_col($dep, 'name');
     }
+    ba_card_open('Devices', $canEditDevices ? '<button type="button" class="btn" data-open-modal="modal-add-device">Add device</button>' : '');
     echo '<form method="get" action="'.h(ba_href('/devices')).'" class="filters">';
     echo '<select name="dept"><option value="">All departments</option>';
     foreach ($deptNames as $id => $name) {
@@ -866,6 +867,25 @@ function page_devices(PDO $db, array $user): void {
 })();
 </script>
 JS;
+    }
+    ba_card_close();
+    if ($canEditDevices) {
+        ba_users_modal_open('modal-add-device', 'Add device', false);
+        echo '<form method="post" class="filters">';
+        echo '<input type="hidden" name="act" value="add">';
+        echo '<input name="ip" placeholder="IP" required>';
+        echo '<input name="hostname" placeholder="hostname">';
+        echo '<input name="site" value="Hospital" placeholder="site">';
+        echo '<input name="building" placeholder="building">';
+        echo '<input name="idf_closet" placeholder="IDF/closet">';
+        echo '<input name="rack" placeholder="rack label">';
+        echo '<select name="kind">'.ba_kind_options('ups').'</select>';
+        echo '<input name="circuit" placeholder="circuit">';
+        ba_department_field($db, $user, null);
+        echo '<label class="muted"><input type="checkbox" name="sensor_expected" checked> sensor expected</label>';
+        echo '<button>Add device</button></form>';
+        echo '<p class="muted">SNMPv3 profile comes from secrets.env. Model/serial/firmware auto-fill on next poll.</p>';
+        ba_users_modal_close();
     }
     ba_layout_end();
 }
@@ -990,6 +1010,9 @@ function page_device(PDO $db, array $user): void {
       <div class="flash">Decommissioned <?= h((string)ba_col($r, 'decommissioned_at')) ?>. Polling is off. The record is kept.</div>
     <?php endif; ?>
     <?php ba_device_owner_card($db, $user, $r); ?>
+    <section class="ucard">
+      <div class="ucard-head"><h3>History</h3></div>
+      <div class="ucard-body">
     <div id="device-charts" data-id="<?= $id ?>" class="charts">
       <div><div class="legend">Capacity %</div><canvas data-series="capacity" data-color="#3ddc97"></canvas></div>
       <div><div class="legend">Runtime min</div><canvas data-series="runtime" data-color="#5b9fd4"></canvas></div>
@@ -998,10 +1021,13 @@ function page_device(PDO $db, array $user): void {
       <div><div class="legend">Temp °F</div><canvas data-series="temp" data-color="#ff7a45"></canvas></div>
       <div><div class="legend">Humidity %</div><canvas data-series="rh" data-color="#9fd"></canvas></div>
     </div>
+      </div>
+    </section>
     <?php if ($canEditThis): ?>
-    <div class="grid2">
-      <form method="post" class="card stack">
-        <h3>Inventory</h3>
+    <div class="card-board">
+      <form method="post" class="ucard stack">
+        <div class="ucard-head"><h3>Inventory</h3></div>
+        <div class="ucard-body">
         <label>IP</label><input name="ip" value="<?= h($r['ip']) ?>">
         <label>Hostname</label><input name="hostname" value="<?= h($r['hostname']) ?>">
         <label>Group</label>
@@ -1053,9 +1079,11 @@ function page_device(PDO $db, array $user): void {
         <label><input type="checkbox" name="sensor_expected" <?= $r['sensor_expected']?'checked':'' ?>> sensor expected</label>
         <label><input type="checkbox" name="enabled" <?= $r['enabled']?'checked':'' ?>> enabled</label>
         <button name="save" value="1">Save</button>
+        </div>
       </form>
-      <form method="post" class="card stack">
-        <h3>Thresholds (this device)</h3>
+      <form method="post" class="ucard stack">
+        <div class="ucard-head"><h3>Thresholds (this device)</h3></div>
+        <div class="ucard-body">
         <label>On battery longer than (min)</label><input name="on_battery_minutes" type="number" value="<?= h((string)($thr['on_battery_minutes']??5)) ?>">
         <label>Capacity below %</label><input name="capacity_low" type="number" value="<?= h((string)($thr['capacity_low']??30)) ?>">
         <label>Runtime below (min)</label><input name="runtime_low_min" type="number" value="<?= h((string)($thr['runtime_low_min']??15)) ?>">
@@ -1066,6 +1094,7 @@ function page_device(PDO $db, array $user): void {
         <label>Poll failures</label><input name="poll_fail_count" type="number" value="<?= h((string)($thr['poll_fail_count']??3)) ?>">
         <button name="thresh" value="1">Save thresholds</button>
         <p class="muted">Tighten a threshold against the live reading to fire an alert on the next poll.</p>
+        </div>
       </form>
     </div>
     <?php endif;
@@ -1237,9 +1266,10 @@ function page_admin(PDO $db, array $user): void {
         echo '<div class="'.$flashCls.'">'.h($updMsg).'</div>';
     }
     ?>
-    <div class="grid2">
-      <form method="post" class="card stack">
-        <h3>Default thresholds</h3>
+    <h1>Admin</h1>
+      <form method="post" class="ucard stack">
+        <div class="ucard-head"><h3>Default thresholds</h3></div>
+        <div class="ucard-body">
         <label>On battery minutes</label><input name="on_battery_minutes" type="number" value="<?= h((string)($thr['on_battery_minutes']??5)) ?>">
         <label>Capacity low %</label><input name="capacity_low" type="number" value="<?= h((string)($thr['capacity_low']??30)) ?>">
         <label>Runtime low min</label><input name="runtime_low_min" type="number" value="<?= h((string)($thr['runtime_low_min']??15)) ?>">
@@ -1251,15 +1281,35 @@ function page_admin(PDO $db, array $user): void {
         <input name="humidity_low" type="number" value="<?= h((string)($thr['humidity_low']??20)) ?>">
         <label>Poll fail count</label><input name="poll_fail_count" type="number" value="<?= h((string)($thr['poll_fail_count']??3)) ?>">
         <button name="global_thresh" value="1">Save defaults</button>
+        </div>
       </form>
-      <div class="card">
-        <h3>Users &amp; departments</h3>
-        <p class="muted">Local accounts, platform roles, departments, LDAPS, and security-group maps.</p>
-        <p><a class="btn" href="<?= h(ba_href('/users')) ?>">Open Users &amp; departments</a></p>
+    <?php
+      $caOk = !empty($caStatus['found']);
+      $canApply = $updStatus
+          && empty($updStatus['error'])
+          && !empty($updStatus['latest'])
+          && version_compare((string)$updStatus['latest'], (string)($updStatus['current'] ?? ba_version()), '>');
+    ?>
+    <section class="ucard" id="updates">
+      <div class="ucard-head">
+        <h3>Updates <span class="muted">v<?= h(ba_version()) ?></span></h3>
+        <div class="head-actions">
+          <form method="post" action="/admin.php" <?= $caOk ? 'onsubmit="return false;"' : '' ?>>
+            <button type="submit" class="btn" name="install_ca" value="1" <?= $caOk ? 'disabled' : '' ?>>Install CA certificates</button>
+          </form>
+          <form method="post" action="/admin.php"><button type="submit" class="btn" name="update_check" value="1">Check for updates</button></form>
+          <form method="post" action="/admin.php" onsubmit="return confirm('Create a recovery backup now? Writes a full site package and an application-files zip. Does not apply an update.');">
+            <button type="submit" class="btn" name="update_backup_now" value="1">Create recovery backup</button>
+          </form>
+          <?php if ($canApply): ?>
+            <form method="post" action="/admin.php" onsubmit="return confirm('Backup this install and update to v<?= h((string)$updStatus['latest']) ?>? The site may be briefly unavailable.');">
+              <input type="hidden" name="target_version" value="<?= h((string)$updStatus['latest']) ?>">
+              <button type="submit" class="btn" name="update_apply" value="1">Update to v<?= h((string)$updStatus['latest']) ?></button>
+            </form>
+          <?php endif; ?>
+        </div>
       </div>
-    </div>
-    <div class="card" id="updates">
-      <h3>Updates <span class="muted">v<?= h(ba_version()) ?></span></h3>
+      <div class="ucard-body">
       <p class="muted">Same flow as ColdAisle: Check for updates, then Update. If GitHub is blocked,
         jsDelivr is used. If the PHP curl extension is off, Check uses Windows curl.exe (same as the
         overlay). Keep <code>extension=curl</code> and <code>extension=openssl</code> in the site
@@ -1290,38 +1340,21 @@ function page_admin(PDO $db, array $user): void {
           <?php if (!empty($caStatus['found'])): ?>
             OK <code><?= h((string)$caStatus['path']) ?></code>
           <?php else: ?>
-            Missing — click <strong>Install CA certificates</strong> below (keeps verify enabled).
+            Missing — use <strong>Install CA certificates</strong> in the header (keeps verify enabled).
           <?php endif; ?>
         </p>
         <button name="updates_save" value="1">Save update settings</button>
       </form>
-      <div class="filters" style="margin-top:.8rem">
-        <?php $caOk = !empty($caStatus['found']); ?>
-        <form method="post" action="/admin.php" <?= $caOk ? 'onsubmit="return false;"' : '' ?>>
-          <button type="submit" name="install_ca" value="1" <?= $caOk ? 'disabled' : '' ?>>Install CA certificates</button>
-        </form>
-        <form method="post" action="/admin.php"><button type="submit" name="update_check" value="1">Check for updates</button></form>
-        <form method="post" action="/admin.php" onsubmit="return confirm('Create a recovery backup now? Writes a full site package and an application-files zip. Does not apply an update.');">
-          <button type="submit" name="update_backup_now" value="1">Create recovery backup</button>
-        </form>
-        <?php
-          $canApply = $updStatus
-              && empty($updStatus['error'])
-              && !empty($updStatus['latest'])
-              && version_compare((string)$updStatus['latest'], (string)($updStatus['current'] ?? ba_version()), '>');
-        ?>
-        <?php if ($canApply): ?>
-          <form method="post" action="/admin.php" onsubmit="return confirm('Backup this install and update to v<?= h((string)$updStatus['latest']) ?>? The site may be briefly unavailable.');">
-            <input type="hidden" name="target_version" value="<?= h((string)$updStatus['latest']) ?>">
-            <button type="submit" name="update_apply" value="1">Update to v<?= h((string)$updStatus['latest']) ?></button>
-          </form>
-        <?php endif; ?>
-      </div>
       <p class="muted">PHP zip: <?= extension_loaded('zip') ? 'loaded' : 'missing' ?>. IIS app pool needs Modify on the site folder. Restore inventory from the site package below — the <code>backup_</code> zip is files only.</p>
-    </div>
+      </div>
+    </section>
 
-    <div class="card" id="backup">
-      <h3>Site backup &amp; migration</h3>
+    <section class="ucard" id="backup">
+      <div class="ucard-head">
+        <h3>Site backup &amp; migration</h3>
+        <button type="button" class="btn" data-open-modal="modal-restore">Restore package</button>
+      </div>
+      <div class="ucard-body">
       <p class="muted">Export a portable package of this site (SQLite database, secrets, template pictures).
         Restore on this running site below. Packages do not include IIS bindings or PHP itself.
         Encrypted packages use AES-256-GCM (<code>.baisle</code>); the password is not stored.</p>
@@ -1331,20 +1364,6 @@ function page_admin(PDO $db, array $user): void {
         <label><input type="checkbox" name="encrypt_backup" value="1"> Encrypt backup with a password</label>
         <label>Password (if encrypting)</label><input type="password" name="backup_password" autocomplete="new-password">
         <button name="export_site_backup" value="1">Download site backup</button>
-      </form>
-      <h3>Restore on this site</h3>
-      <form method="post" enctype="multipart/form-data" class="stack" style="max-width:none" onsubmit="return confirm('Restore this package onto the running site? A pre-restore backup is created if checked.');">
-        <label>Existing package</label>
-        <select name="restore_file">
-          <option value="">(upload below)</option>
-          <?php foreach ($packages as $p): if ($p['kind'] !== 'site') continue; ?>
-            <option value="<?= h($p['name']) ?>"><?= h($p['name']) ?> · <?= h(BackAisleBackup::formatBytes($p['bytes'])) ?></option>
-          <?php endforeach; ?>
-        </select>
-        <label>Or upload</label><input type="file" name="restore_upload" accept=".zip,.baisle">
-        <label>Password (encrypted packages)</label><input type="password" name="restore_password" autocomplete="off">
-        <label><input type="checkbox" name="create_pre_backup" value="1" checked> Create a pre-restore backup first</label>
-        <button name="restore_site_backup" value="1">Restore site package</button>
       </form>
       <h3>Files on disk</h3>
       <table>
@@ -1364,14 +1383,33 @@ function page_admin(PDO $db, array $user): void {
         <?php endforeach; ?>
         </tbody>
       </table>
-    </div>
-
-    <div class="card">
-      <h3>Audit</h3>
+      </div>
+    </section>
+    <?php
+      ba_users_modal_open('modal-restore', 'Restore on this site', false, '', true);
+      echo '<form method="post" enctype="multipart/form-data" class="stack" onsubmit="return confirm(\'Restore this package onto the running site? A pre-restore backup is created if checked.\');">';
+      echo '<label>Existing package</label><select name="restore_file"><option value="">(upload below)</option>';
+      foreach ($packages as $p) {
+          if ($p['kind'] !== 'site') {
+              continue;
+          }
+          echo '<option value="' . h($p['name']) . '">' . h($p['name']) . ' · ' . h(BackAisleBackup::formatBytes($p['bytes'])) . '</option>';
+      }
+      echo '</select>';
+      echo '<label>Or upload</label><input type="file" name="restore_upload" accept=".zip,.baisle">';
+      echo '<label>Password (encrypted packages)</label><input type="password" name="restore_password" autocomplete="off">';
+      echo '<label><input type="checkbox" name="create_pre_backup" value="1" checked> Create a pre-restore backup first</label>';
+      echo '<button name="restore_site_backup" value="1">Restore site package</button></form>';
+      ba_users_modal_close();
+    ?>
+    <section class="ucard">
+      <div class="ucard-head"><h3>Audit</h3></div>
+      <div class="ucard-body">
       <table><thead><tr><th>Time</th><th>User</th><th>Action</th><th>Entity</th><th>Details</th></tr></thead><tbody>
       <?php foreach ($audit as $a) echo '<tr><td>'.h($a['ts']).'</td><td>'.h($a['username']).'</td><td>'.h($a['action']).'</td><td>'.h($a['entity'].' '.$a['entity_id']).'</td><td>'.h($a['details']).'</td></tr>'; ?>
       </tbody></table>
-    </div>
+      </div>
+    </section>
     <?php
     ba_layout_end();
 }

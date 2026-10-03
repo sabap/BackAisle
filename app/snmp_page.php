@@ -357,8 +357,8 @@ function page_snmp_body(PDO $db, array $user): void
             $profiles = [];
         }
         $groupOpts = function_exists('ba_group_options') ? ba_group_options(ba_groups($db)) : '';
-        echo '<form method="post" action="/snmp.php" class="card stack" id="snmp-bulk">';
-        echo '<h3>Bulk assign SNMPv3 profile</h3>';
+        ba_users_modal_open('modal-snmp-bulk', 'Bulk assign SNMPv3 profile', false);
+        echo '<form method="post" action="/snmp.php" class="stack" id="snmp-bulk">';
         echo '<input type="hidden" name="act" value="bulk_snmp">';
         echo '<p class="muted">Applies the credential profile to UPS records (authPriv secrets stay in ProgramData). Tick rows below for Selected, or choose All UPS / On schedule / IDF group.</p>';
         echo '<label>Profile</label><select name="snmp_profile_id" required><option value="">choose</option>';
@@ -374,8 +374,9 @@ function page_snmp_body(PDO $db, array $user): void
         echo '</select>';
         echo '<label>IDF group</label><select name="group_id"><option value="">(for IDF group scope)</option>'.$groupOpts.'</select>';
         echo '<button>Assign in BackAisle only</button></form>';
-        echo '<form method="post" action="/snmp.php" class="card stack" id="snmp-pushv3">';
-        echo '<h3>Write SNMPv3 slot on the RMCARD</h3>';
+        ba_users_modal_close();
+        ba_users_modal_open('modal-snmp-push', 'Write SNMPv3 slot on the RMCARD', false, '', true);
+        echo '<form method="post" action="/snmp.php" class="stack" id="snmp-pushv3">';
         echo '<input type="hidden" name="act" value="push_snmpv3">';
         echo '<p class="muted">CyberPower has <strong>4 SNMPv3 slots</strong>. This pulls the live config, then: if this username already exists, that slot is updated; else the first <em>empty</em> slot is used; if all four have other users, the unit is <strong>skipped</strong> (never overwritten). Each slot has one ACL IP/mask. Identity (card IP/hostname) is not changed. Requires the <strong>BackAisleWriter</strong> task. Several cards run at once (default 4, <code>WRITE_WORKERS</code> in secrets.env, max 8). A refused connection or a busy web login is retried (default 2 extra tries, <code>WRITE_RETRIES</code>). Config/firmware mass writes stay lab-gated; this SNMPv3 slot write does not. Firmware stays one card at a time.</p>';
         echo '<label>Profile</label><select name="snmp_profile_id" required><option value="">choose</option>';
@@ -401,18 +402,28 @@ function page_snmp_body(PDO $db, array $user): void
         echo '<label>Type PUSH SNMPV3 to write (leave blank if simulating)</label>';
         echo '<input name="confirm" autocomplete="off">';
         echo '<button>Queue SNMPv3 write</button></form>';
+        ba_users_modal_close();
         echo '<script>(function(){function wire(id){var f=document.getElementById(id);if(!f)return;f.addEventListener("submit",function(){document.querySelectorAll(".snmp-id:checked,.snmp-unsched:checked").forEach(function(c){var i=document.createElement("input");i.type="hidden";i.name="ids[]";i.value=c.value;f.appendChild(i);});});}wire("snmp-bulk");wire("snmp-pushv3");})();</script>';
     }
 
-    echo '<div class="grid2">';
-    echo '<div class="card"><h3>Poller</h3>';
+    $pollerActions = '';
+    if ($admin) {
+        $pollerActions = '<button type="button" class="btn" data-open-modal="modal-snmp-bulk">Bulk assign</button>';
+        $pollerActions .= '<button type="button" class="btn" data-open-modal="modal-snmp-push">Write SNMPv3 slot</button>';
+    }
+    echo '<div class="card-board">';
+    echo '<section class="ucard"><div class="ucard-head"><h3>Poller</h3>';
+    if ($pollerActions !== '') {
+        echo '<div class="head-actions">' . $pollerActions . '</div>';
+    }
+    echo '</div><div class="ucard-body">';
     echo '<p><span class="pill '.$st['cls'].'">'.h(ba_txt($st['label'], '')).'</span> PID '.((int)$st['pid'] ?: '-').'</p>';
     echo '<p class="muted">'.h(ba_txt($st['detail'], '')).'</p>';
     if (!empty($st['heartbeat']['at'])) {
         echo '<p class="muted">Heartbeat at '.h((string)$st['heartbeat']['at']).' UTC</p>';
     }
-    echo '</div>';
-    echo '<div class="card"><h3>Windows tasks</h3><table><thead><tr><th>Task</th><th>Status</th><th>Last run</th><th>Next</th></tr></thead><tbody>';
+    echo '</div></section>';
+    echo '<section class="ucard"><div class="ucard-head"><h3>Windows tasks</h3></div><div class="ucard-body"><table><thead><tr><th>Task</th><th>Status</th><th>Last run</th><th>Next</th></tr></thead><tbody>';
     foreach (['collector_task' => 'BackAisleCollector', 'watch_task' => 'Watch', 'writer_task' => 'Writer'] as $k => $lab) {
         $t = $st[$k];
         echo '<tr><td>'.h($lab).'</td><td>'.h($t['ok'] ? ($t['status'] ?: 'registered') : 'not readable / missing').'</td>';
@@ -422,18 +433,18 @@ function page_snmp_body(PDO $db, array $user): void
     if (!$st['collector_task']['ok']) {
         echo '<p class="muted">IIS often cannot query Task Scheduler. If the poller pill is green, the worker is running. To register tasks, run <code>scripts\\Register-BackAisle-CollectorTask.ps1</code> as Administrator.</p>';
     }
-    echo '</div></div>';
+    echo '</div></section></div>';
 
     if ($st['log_tail'] !== '') {
-        echo '<div class="card"><h3>Collector log (tail)</h3><pre class="update-notes">'.h($st['log_tail']).'</pre></div>';
+        echo '<section class="ucard"><div class="ucard-head"><h3>Collector log (tail)</h3></div><div class="ucard-body"><pre class="update-notes">'.h($st['log_tail']).'</pre></div></section>';
     }
 
     if ($admin) {
-        echo '<form method="post" action="/snmp.php" class="card" id="snmp-sched-form">';
-        echo '<div class="dash-list-head"><h2>Scheduled polling</h2><div>';
-        echo '<button type="submit" name="act" value="poll_selected">Poll selected</button> ';
-        echo '<button type="submit" name="act" value="poll_scheduled">Poll all scheduled</button>';
-        echo '</div></div>';
+        echo '<form method="post" action="/snmp.php" class="ucard" id="snmp-sched-form">';
+        echo '<div class="ucard-head"><h3>Scheduled polling</h3><div class="head-actions">';
+        echo '<button type="submit" class="btn" name="act" value="poll_selected">Poll selected</button> ';
+        echo '<button type="submit" class="btn" name="act" value="poll_scheduled">Poll all scheduled</button>';
+        echo '</div></div><div class="ucard-body">';
         echo '<p class="muted">'.count($scheduled).' device(s) on the schedule (collector ~60s status / 5 min climate).</p>';
         echo '<table><thead><tr><th><input type="checkbox" id="snmp-check-all"></th><th>Host</th><th>IP</th><th>Kind</th><th>Profile</th><th>Last OK</th><th>State</th><th></th></tr></thead><tbody>';
         foreach ($scheduled as $d) {
@@ -461,18 +472,18 @@ function page_snmp_body(PDO $db, array $user): void
         if (!$scheduled) {
             echo '<tr><td colspan="8" class="muted">Nothing scheduled. Add a UPS below or enable it on the device page.</td></tr>';
         }
-        echo '</tbody></table></form>';
+        echo '</tbody></table></div></form>';
         foreach ($scheduled as $d) {
             $id = (int)$d['id'];
             echo '<form method="post" action="/snmp.php" id="snmp-one-'.$id.'"><input type="hidden" name="act" value="poll_one"><input type="hidden" name="id" value="'.$id.'"></form>';
             echo '<form method="post" action="/snmp.php" id="snmp-off-'.$id.'"><input type="hidden" name="act" value="schedule_off"><input type="hidden" name="id" value="'.$id.'"></form>';
         }
 
-        echo '<form method="post" action="/snmp.php" class="card" id="snmp-unsched-form">';
-        echo '<div class="dash-list-head"><h2>Not on schedule</h2><div>';
-        echo '<button type="submit" name="act" value="schedule_selected">Add selected to schedule</button> ';
-        echo '<button type="submit" name="act" value="poll_selected">Poll selected</button>';
-        echo '</div></div>';
+        echo '<form method="post" action="/snmp.php" class="ucard" id="snmp-unsched-form">';
+        echo '<div class="ucard-head"><h3>Not on schedule</h3><div class="head-actions">';
+        echo '<button type="submit" class="btn" name="act" value="schedule_selected">Add selected to schedule</button> ';
+        echo '<button type="submit" class="btn" name="act" value="poll_selected">Poll selected</button>';
+        echo '</div></div><div class="ucard-body">';
         echo '<p class="muted">UPS with enabled=0. Add them so the collector includes them every cycle.</p>';
         echo '<table><thead><tr><th><input type="checkbox" id="snmp-check-unsched"></th><th>Host</th><th>IP</th><th>Profile</th><th>Last</th><th></th></tr></thead><tbody>';
         foreach ($unscheduled as $d) {
@@ -487,7 +498,7 @@ function page_snmp_body(PDO $db, array $user): void
         if (!$unscheduled) {
             echo '<tr><td colspan="6" class="muted">Every UPS is on the schedule.</td></tr>';
         }
-        echo '</tbody></table></form>';
+        echo '</tbody></table></div></form>';
         foreach ($unscheduled as $d) {
             $id = (int)$d['id'];
             echo '<form method="post" action="/snmp.php" id="snmp-on-'.$id.'"><input type="hidden" name="act" value="schedule_on"><input type="hidden" name="id" value="'.$id.'"></form>';
@@ -506,12 +517,12 @@ function page_snmp_body(PDO $db, array $user): void
         })();
         </script>';
     } else {
-        echo '<div class="card"><p class="muted">View Only: schedule is read-only. Ask an admin to poll or change membership.</p>';
+        echo '<section class="ucard"><div class="ucard-head"><h3>Scheduled polling</h3></div><div class="ucard-body"><p class="muted">View Only: schedule is read-only. Ask an admin to poll or change membership.</p>';
         echo '<table><thead><tr><th>Host</th><th>IP</th><th>Last OK</th><th>State</th></tr></thead><tbody>';
         foreach ($scheduled as $d) {
             echo '<tr><td>'.h(ba_txt($d['hostname'] ?: $d['ip'], '')).'</td><td>'.h(ba_txt($d['ip'])).'</td><td>'.h(ba_txt($d['last_success'])).'</td><td>'.h(ba_txt($d['comm_state'])).'</td></tr>';
         }
-        echo '</tbody></table></div>';
+        echo '</tbody></table></div></section>';
     }
     ba_layout_end();
 }
