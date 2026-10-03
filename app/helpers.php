@@ -169,7 +169,18 @@ function ba_python(): string {
         'C:\\Program Files\\Python313\\python.exe',
         'C:\\Python312\\python.exe',
         'C:\\Program Files\\Python311\\python.exe',
+        BA_ROOT . '\\runtime\\Python312\\python.exe',
+        BA_ROOT . '\\runtime\\Python313\\python.exe',
     ]);
+    $local = getenv('LOCALAPPDATA');
+    if (is_string($local) && $local !== '') {
+        $candidates[] = $local . '\\Programs\\Python\\Python312\\python.exe';
+        $candidates[] = $local . '\\Programs\\Python\\Python313\\python.exe';
+    }
+    // A per-user python.org install is not on the app-pool account's PATH.
+    foreach (glob('C:\\Users\\*\\AppData\\Local\\Programs\\Python\\Python3*\\python.exe') ?: [] as $found) {
+        $candidates[] = $found;
+    }
     foreach ($candidates as $p) {
         if (!is_string($p) || $p === '' || !is_file($p)) {
             continue;
@@ -277,6 +288,76 @@ function ba_python_run(array $args, ?string $cwd = null): array {
     fclose($pipes[2]);
     $code = proc_close($p);
     return ['code' => $code, 'stdout' => $stdout, 'stderr' => $stderr];
+}
+
+/** Start Python and return. The web request must not wait on a fleet poll. */
+function ba_python_spawn(array $args): void
+{
+    if (function_exists('ba_sync_collector_json')) {
+        try { ba_sync_collector_json(); } catch (Throwable $e) { /* poll still tries existing collector.json */ }
+    }
+    $py = ba_python();
+    if ($py === '') {
+        throw new RuntimeException('python.exe not found (Microsoft Store stub is ignored). Install Python 3.12 from python.org.');
+    }
+    $logDir = BA_ROOT . DIRECTORY_SEPARATOR . 'logs';
+    if (!is_dir($logDir) && !@mkdir($logDir, 0775, true) && !is_dir($logDir)) {
+        throw new RuntimeException('Could not create the log folder.');
+    }
+    $token = bin2hex(random_bytes(4));
+    $out = $logDir . DIRECTORY_SEPARATOR . 'collector-once.stdout.log';
+    $err = $logDir . DIRECTORY_SEPARATOR . 'collector-once.stderr.log';
+    $specFile = $logDir . DIRECTORY_SEPARATOR . 'poll-once-' . $token . '.json';
+    $launchFile = $logDir . DIRECTORY_SEPARATOR . 'poll-once-' . $token . '.py';
+    // cmd start fails under IIS: the app pool has no console, so start exits
+    // immediately. Python detaches the poll and returns; the request does not wait.
+    $spec = json_encode([
+        'argv' => array_merge([$py], $args),
+        'cwd' => BA_ROOT,
+        'out' => $out,
+        'err' => $err,
+    ], JSON_UNESCAPED_SLASHES);
+    $launcher = <<<'PY'
+import json, subprocess, sys
+spec = json.load(open(sys.argv[1], encoding="utf-8"))
+out = open(spec["out"], "ab", buffering=0)
+err = open(spec["err"], "ab", buffering=0)
+flags = 0x00000008 | 0x00000200
+kw = dict(args=spec["argv"], cwd=spec["cwd"], stdin=subprocess.DEVNULL, stdout=out, stderr=err, close_fds=True)
+try:
+    subprocess.Popen(creationflags=flags | 0x01000000, **kw)
+except OSError:
+    subprocess.Popen(creationflags=flags, **kw)
+out.close()
+err.close()
+PY;
+    if ($spec === false || file_put_contents($specFile, $spec) === false || file_put_contents($launchFile, $launcher) === false) {
+        @unlink($specFile);
+        @unlink($launchFile);
+        throw new RuntimeException('Could not start the poll.');
+    }
+    $desc = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+    $proc = @proc_open([$py, $launchFile, $specFile], $desc, $pipes, BA_ROOT, null, ['bypass_shell' => true]);
+    if (!is_resource($proc)) {
+        @unlink($specFile);
+        @unlink($launchFile);
+        throw new RuntimeException('Could not start the poll.');
+    }
+    fclose($pipes[0]);
+    $stdout = (string)stream_get_contents($pipes[1]);
+    $stderr = (string)stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    $code = proc_close($proc);
+    @unlink($specFile);
+    @unlink($launchFile);
+    if ($code !== 0) {
+        $detail = trim($stdout . "\n" . $stderr);
+        if (strlen($detail) > 400) {
+            $detail = substr($detail, -400);
+        }
+        throw new RuntimeException($detail !== '' ? ('Could not start the poll. ' . $detail) : 'Could not start the poll.');
+    }
 }
 
 function ba_status_class(?int $output, ?int $onBatt, ?string $comm, ?float $temp, ?int $sensorExpected, ?int $sensorPresent): string {

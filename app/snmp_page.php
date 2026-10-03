@@ -125,9 +125,6 @@ function ba_poll_devices_now(array $ids): array
     if (!$ids) {
         throw new RuntimeException('No devices selected.');
     }
-    if (count($ids) > 80) {
-        throw new RuntimeException('Select 80 devices or fewer per poll.');
-    }
     $script = BA_ROOT . DIRECTORY_SEPARATOR . 'collector' . DIRECTORY_SEPARATOR . 'collector.py';
     if (!is_file($script)) {
         throw new RuntimeException('collector.py is missing.');
@@ -155,6 +152,40 @@ function ba_poll_devices_now(array $ids): array
         throw new RuntimeException('Poll did not succeed (ok=0 fail=' . $fail . '). ' . $detail);
     }
     return ['ids' => $ids, 'output' => $blob, 'code' => $run['code'], 'ok' => $ok, 'fail' => $fail];
+}
+
+/** True while a background poll holds logs/collector-once.lock. */
+function ba_poll_once_busy(): bool
+{
+    $path = BA_ROOT . DIRECTORY_SEPARATOR . 'logs' . DIRECTORY_SEPARATOR . 'collector-once.lock';
+    $fh = @fopen($path, 'c+');
+    if ($fh === false) {
+        return false;
+    }
+    $busy = !flock($fh, LOCK_EX | LOCK_NB);
+    if (!$busy) {
+        flock($fh, LOCK_UN);
+    }
+    fclose($fh);
+    return $busy;
+}
+
+/** @param list<int> $ids Empty means every enabled UPS. */
+function ba_poll_spawn(array $ids): void
+{
+    if (ba_poll_once_busy()) {
+        throw new RuntimeException('A poll is already running. Refresh this page for the collector log.');
+    }
+    $script = BA_ROOT . DIRECTORY_SEPARATOR . 'collector' . DIRECTORY_SEPARATOR . 'collector.py';
+    if (!is_file($script)) {
+        throw new RuntimeException('collector.py is missing.');
+    }
+    $args = [$script, '--once'];
+    if ($ids) {
+        $args[] = '--ids';
+        $args[] = implode(',', $ids);
+    }
+    ba_python_spawn($args);
 }
 
 function page_snmp(PDO $db, array $user): void
@@ -193,28 +224,42 @@ function page_snmp_body(PDO $db, array $user): void
                     $msg .= ' Collector ok=' . (int)$r['ok'] . ' fail=' . (int)$r['fail'] . '.';
                 }
                 ba_audit($db, 'snmp_poll_one', 'device', (string)$id, $r['output']);
-            } elseif ($act === 'poll_selected') {
-                $ids = $_POST['ids'] ?? [];
-                if (!is_array($ids)) {
+            } elseif ($act === 'poll_selected' || $act === 'poll_scheduled') {
+                $all = $act === 'poll_scheduled';
+                if ($all) {
                     $ids = [];
+                    foreach ($db->query("SELECT id FROM devices WHERE enabled=1 AND IFNULL(kind,'ups')='ups'") as $row) {
+                        $ids[] = (int)$row['id'];
+                    }
+                } else {
+                    $ids = $_POST['ids'] ?? [];
+                    if (!is_array($ids)) {
+                        $ids = [];
+                    }
                 }
-                $r = ba_poll_devices_now($ids);
-                $msg = 'Polled ' . count($r['ids']) . ' selected device(s).';
-                if ($r['ok'] !== null) {
-                    $msg .= ' Collector ok=' . (int)$r['ok'] . ' fail=' . (int)$r['fail'] . '.';
+                $ids = array_values(array_unique(array_filter(array_map('intval', $ids), static fn (int $i): bool => $i > 0)));
+                if (!$ids) {
+                    throw new RuntimeException($all ? 'No UPS on the polling schedule.' : 'No devices selected.');
                 }
-                ba_audit($db, 'snmp_poll_selected', 'device', null, json_encode($r['ids']));
-            } elseif ($act === 'poll_scheduled') {
-                $ids = [];
-                foreach ($db->query("SELECT id FROM devices WHERE enabled=1 AND IFNULL(kind,'ups')='ups'") as $row) {
-                    $ids[] = (int)$row['id'];
+                // A climate poll can take 30s. The page allows about 120s, so a
+                // short list waits here and a full schedule runs in the background.
+                if (count($ids) > 40) {
+                    ba_poll_spawn($all ? [] : $ids);
+                    $who = $all ? 'scheduled' : 'selected';
+                    $msg = 'Polling ' . count($ids) . ' ' . $who . ' UPS in the background, 24 at a time. Refresh this page for the collector log. Battery replacement dates fill in as each card answers.';
+                    $_SESSION['ba_flash_cls'] = 'info';
+                } else {
+                    $r = ba_poll_devices_now($ids);
+                    $msg = 'Polled ' . count($r['ids']) . ' ' . ($all ? 'scheduled UPS' : 'selected device(s)') . '.';
+                    if ($r['ok'] !== null) {
+                        $msg .= ' Collector ok=' . (int)$r['ok'] . ' fail=' . (int)$r['fail'] . '.';
+                    }
                 }
-                $r = ba_poll_devices_now($ids);
-                $msg = 'Polled ' . count($r['ids']) . ' scheduled UPS.';
-                if ($r['ok'] !== null) {
-                    $msg .= ' Collector ok=' . (int)$r['ok'] . ' fail=' . (int)$r['fail'] . '.';
+                if ($all) {
+                    ba_audit($db, 'snmp_poll_scheduled', 'snmp', null, (string)count($ids));
+                } else {
+                    ba_audit($db, 'snmp_poll_selected', 'device', null, json_encode($ids));
                 }
-                ba_audit($db, 'snmp_poll_scheduled', 'snmp', null, (string)count($r['ids']));
             } elseif ($act === 'schedule_on') {
                 $id = (int)($_POST['id'] ?? 0);
                 $db->prepare('UPDATE devices SET enabled=1 WHERE id=?')->execute([$id]);
@@ -286,6 +331,11 @@ function page_snmp_body(PDO $db, array $user): void
     if ($msg === '' && !empty($_SESSION['ba_flash'])) {
         $msg = (string)$_SESSION['ba_flash'];
         unset($_SESSION['ba_flash']);
+        $cls = (string)($_SESSION['ba_flash_cls'] ?? '');
+        unset($_SESSION['ba_flash_cls']);
+        if ($cls === 'info' || $cls === 'ok' || $cls === 'err') {
+            $flashCls .= ' ' . $cls;
+        }
     }
 
     try {
@@ -338,7 +388,7 @@ function page_snmp_body(PDO $db, array $user): void
 
     ba_layout_start('SNMP', 'snmp');
     if ($msg) {
-        echo '<div class="flash">'.h($msg);
+        echo '<div class="'.h($flashCls).'">'.h($msg);
         $jidFlash = (int)($_SESSION['ba_flash_job'] ?? 0);
         unset($_SESSION['ba_flash_job']);
         if ($jidFlash > 0) {
@@ -445,7 +495,10 @@ function page_snmp_body(PDO $db, array $user): void
         echo '<button type="submit" class="btn" name="act" value="poll_selected">Poll selected</button> ';
         echo '<button type="submit" class="btn" name="act" value="poll_scheduled">Poll all scheduled</button>';
         echo '</div></div><div class="ucard-body">';
-        echo '<p class="muted">'.count($scheduled).' device(s) on the schedule (collector ~60s status / 5 min climate).</p>';
+        echo '<p class="muted">'.count($scheduled).' device(s) on the schedule (collector ~60s status / 5 min climate). Poll all scheduled polls every UPS on this list. You do not pick them by hand.</p>';
+        if (ba_poll_once_busy()) {
+            echo '<p class="muted">A poll is running now. Refresh this page for the collector log.</p>';
+        }
         echo '<table><thead><tr><th><input type="checkbox" id="snmp-check-all"></th><th>Host</th><th>IP</th><th>Kind</th><th>Profile</th><th>Last OK</th><th>State</th><th></th></tr></thead><tbody>';
         foreach ($scheduled as $d) {
             $id = (int)$d['id'];

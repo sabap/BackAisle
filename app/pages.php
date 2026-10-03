@@ -584,9 +584,19 @@ function page_climate(PDO $db): void {
 
 function page_batteries(PDO $db): void {
     $rows = $db->query(ba_latest_join() . ' WHERE '.ba_ups_only_sql()." ORDER BY CASE WHEN s.capacity_pct IS NULL THEN 1 ELSE 0 END, s.capacity_pct ASC, d.last_battery_replacement")->fetchAll();
+    $missing = 0;
+    foreach ($rows as $r) {
+        if (trim((string)ba_col($r, 'last_battery_replacement', '')) === '') {
+            $missing++;
+        }
+    }
     ba_layout_start('Batteries', 'batteries');
     echo '<h1>Battery fleet</h1>';
     ba_card_open('Batteries');
+    if ($missing > 0) {
+        $noun = $missing === 1 ? 'UPS has' : 'UPS have';
+        echo '<p class="muted">' . $missing . ' ' . $noun . ' no battery replacement date. Set the date on the card, then poll, and it will show in this list.</p>';
+    }
     echo '<table><thead><tr><th>Closet</th><th>Host</th><th>Cap</th><th>Runtime</th><th>Status</th><th>Last replaced</th><th>Replace-by</th></tr></thead><tbody>';
     foreach ($rows as $r) {
         echo '<tr class="'.h(ba_worst($r)).'">';
@@ -595,8 +605,14 @@ function page_batteries(PDO $db): void {
         echo '<td>'.h(ba_fmt($r['capacity_pct']??null,'%',0)).'</td>';
         echo '<td>'.h(ba_fmt($r['runtime_min']??null,'min',0)).'</td>';
         echo '<td>'.h(ba_output_text(isset($r['output_status'])?(int)$r['output_status']:null)).'</td>';
-        echo '<td>'.h($r['last_battery_replacement'] ?: '—').'</td>';
-        echo '<td>'.h($r['warranty_replace_by'] ?: '—').'</td></tr>';
+        $last = trim((string)ba_col($r, 'last_battery_replacement', ''));
+        if ($last === '') {
+            echo '<td class="pill warn">not set</td>';
+        } else {
+            echo '<td>'.h($last).'</td>';
+        }
+        $due = trim((string)ba_col($r, 'warranty_replace_by', ''));
+        echo '<td>'.h($due !== '' ? $due : '—').'</td></tr>';
     }
     echo '</tbody></table>';
     ba_card_close();
