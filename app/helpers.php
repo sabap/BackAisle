@@ -81,6 +81,7 @@ function ba_request_path(): string {
         'device.php' => '/device',
         'templates.php' => '/templates',
         'admin.php' => '/admin',
+        'users.php' => '/users',
         'writes.php' => '/writes',
         'org.php' => '/org',
         'snmp.php' => '/snmp',

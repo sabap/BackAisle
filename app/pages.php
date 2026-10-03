@@ -589,7 +589,7 @@ function page_batteries(PDO $db): void {
 }
 
 function page_alerts(PDO $db, array $user): void {
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && $user['role'] === 'admin') {
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && ba_editor($user, 'edit_alerts')) {
         $id = (int)($_POST['id'] ?? 0);
         $act = $_POST['act'] ?? '';
         if ($act === 'ack') {
@@ -617,7 +617,7 @@ function page_alerts(PDO $db, array $user): void {
     ba_layout_start('Alerts', 'alerts');
     echo '<div class="dash-hero"><div><h1>Alerts</h1>';
     echo '<p class="muted">Ack keeps an alert on this list. Clear takes it off.</p></div>';
-    if (($user['role'] ?? '') === 'admin' && $rows) {
+    if (ba_editor($user, 'edit_alerts') && $rows) {
         echo '<form method="post" class="filters">';
         echo '<button name="act" value="ack_all">Ack all</button>';
         echo '<button name="act" value="clear_all" onclick="return confirm(\'Clear every alert on this page?\')">Clear all</button>';
@@ -632,7 +632,7 @@ function page_alerts(PDO $db, array $user): void {
             echo '<tr><td>'.h($r['opened_at']).'</td><td class="pill '.($r['severity']==='crit'?'batt':'warn').'">'.h($r['severity']).'</td>';
             echo '<td><a href="/device.php?id='.(int)$r['device_id'].'">'.h($r['idf_closet']).'</a></td>';
             echo '<td>'.h($r['code']).'</td><td>'.h($r['message']).'</td><td>';
-            if ($user['role']==='admin') {
+            if (ba_editor($user, 'edit_alerts')) {
                 echo '<form method="post" style="display:inline">';
                 echo '<input type="hidden" name="id" value="'.(int)$r['id'].'">';
                 if ($r['status']==='open') echo '<button name="act" value="ack">ack</button> ';
@@ -657,7 +657,8 @@ function page_events(PDO $db): void {
 }
 
 function page_devices(PDO $db, array $user): void {
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && $user['role'] === 'admin') {
+    $canEditDevices = ba_can_edit_device($user, null);
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && $canEditDevices) {
         $ip = trim($_POST['ip'] ?? '');
         if (filter_var($ip, FILTER_VALIDATE_IP)) {
             $kind = $_POST['kind'] ?? 'ups';
@@ -670,6 +671,10 @@ function page_devices(PDO $db, array $user): void {
                     trim($_POST['load_notes'] ?? ''), isset($_POST['sensor_expected']) ? 1 : 0,
                     $kind,
                 ]);
+            $newId = ba_last_id($db);
+            if ($newId > 0) {
+                ba_pp_exec($db, 'UPDATE devices SET department_id=? WHERE id=?', [ba_device_department_choice($user), $newId]);
+            }
             ba_audit($db, 'add_device', 'device', $ip);
         }
         header('Location: ' . ba_href('/devices'));
@@ -678,7 +683,7 @@ function page_devices(PDO $db, array $user): void {
     $rows = $db->query("SELECT * FROM devices ORDER BY is_simulated, building, idf_closet")->fetchAll();
     ba_layout_start('Inventory', 'devices');
     echo '<h1>Inventory</h1>';
-    if ($user['role']==='admin') {
+    if ($canEditDevices) {
         echo '<div class="card"><form method="post" class="filters">';
         echo '<input name="ip" placeholder="IP" required>';
         echo '<input name="hostname" placeholder="hostname">';
@@ -688,10 +693,15 @@ function page_devices(PDO $db, array $user): void {
         echo '<input name="rack" placeholder="rack label">';
         echo '<select name="kind">'.ba_kind_options('ups').'</select>';
         echo '<input name="circuit" placeholder="circuit">';
+        ba_department_field($db, $user, null);
         echo '<label class="muted"><input type="checkbox" name="sensor_expected" checked> sensor expected</label>';
         echo '<button>Add device</button></form><p class="muted">SNMPv3 profile comes from secrets.env. Model/serial/firmware auto-fill on next poll.</p></div>';
     }
-    echo '<table><thead><tr><th>Kind</th><th>IP</th><th>Host</th><th>Model</th><th>Template</th><th>Serial</th><th>Closet</th><th>Rack / U</th></tr></thead><tbody>';
+    $deptNames = [];
+    foreach ($db->query('SELECT id, name FROM departments') as $dep) {
+        $deptNames[(int)ba_col($dep, 'id')] = (string)ba_col($dep, 'name');
+    }
+    echo '<table><thead><tr><th>Kind</th><th>IP</th><th>Host</th><th>Model</th><th>Template</th><th>Serial</th><th>Department</th><th>Closet</th><th>Rack / U</th></tr></thead><tbody>';
     $tplNames = [];
     foreach ($db->query('SELECT id, manufacturer, model FROM device_templates') as $t) {
         $tplNames[(int)$t['id']] = trim(($t['manufacturer'] ? $t['manufacturer'].' ' : '').$t['model']);
@@ -704,7 +714,7 @@ function page_devices(PDO $db, array $user): void {
         if (!empty($r['template_id']) && isset($tplNames[(int)$r['template_id']])) {
             echo '<a href="'.h(ba_href('/templates?id='.(int)$r['template_id'])).'">'.h($tplNames[(int)$r['template_id']]).'</a>';
         } else echo '—';
-        echo '</td><td>'.h($r['serial']).'</td><td>'.h($r['building'].' / '.$r['idf_closet']).'</td>';
+        echo '</td><td>'.h($r['serial']).'</td><td>'.h($deptNames[(int)ba_col($r, 'department_id')] ?? '—').'</td><td>'.h($r['building'].' / '.$r['idf_closet']).'</td>';
         echo '<td>';
         if (!empty($r['rack_id'])) echo '<a href="'.h(ba_href('/rack?id='.(int)$r['rack_id'])).'">'.h(($r['rack'] ?: 'rack').' '.$u).'</a>';
         else echo h($r['rack'] ?: '—');
@@ -720,14 +730,20 @@ function page_device(PDO $db, array $user): void {
     $st->execute([$id]);
     $r = $st->fetch();
     if (!$r) { http_response_code(404); echo 'not found'; return; }
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && $user['role'] === 'admin') {
+    $canEditThis = ba_can_edit_device($user, $r);
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && $canEditThis) {
         if (isset($_POST['save'])) {
             $newIp = trim($_POST['ip'] ?? $r['ip']);
             if (!filter_var($newIp, FILTER_VALIDATE_IP)) {
                 $newIp = $r['ip'];
             }
             $gid = $_POST['group_id'] === '' ? null : (int)$_POST['group_id'];
-            $sid = $_POST['snmp_profile_id'] === '' ? null : (int)$_POST['snmp_profile_id'];
+            if (ba_editor($user, 'edit_snmp')) {
+                $sid = $_POST['snmp_profile_id'] === '' ? null : (int)$_POST['snmp_profile_id'];
+            } else {
+                $curSid = ba_col($r, 'snmp_profile_id');
+                $sid = ($curSid === null || $curSid === '') ? null : (int)$curSid;
+            }
             $kind = $_POST['kind'] ?? ($r['kind'] ?? 'ups');
             if (!in_array($kind, ['ups', 'switch', 'patch_panel', 'other'], true)) $kind = 'ups';
             $rid = ($_POST['rack_id'] ?? '') === '' ? null : (int)$_POST['rack_id'];
@@ -744,6 +760,7 @@ function page_device(PDO $db, array $user): void {
                     $_POST['warranty_replace_by']?:null, isset($_POST['sensor_expected'])?1:0, isset($_POST['enabled'])?1:0,
                     $gid, $sid, $kind, $rid, $pos, $uh, $face, $tid, $id,
                 ]);
+            ba_pp_exec($db, 'UPDATE devices SET department_id=? WHERE id=?', [ba_device_department_choice($user), $id]);
             ba_audit($db, 'update_device', 'device', (string)$id, $newIp !== $r['ip'] ? 'ip '.$r['ip'].' -> '.$newIp : null);
         }
         if (isset($_POST['apply_template'])) {
@@ -806,7 +823,7 @@ function page_device(PDO $db, array $user): void {
       <div><div class="legend">Temp °F</div><canvas data-series="temp" data-color="#ff7a45"></canvas></div>
       <div><div class="legend">Humidity %</div><canvas data-series="rh" data-color="#9fd"></canvas></div>
     </div>
-    <?php if ($user['role']==='admin'): ?>
+    <?php if ($canEditThis): ?>
     <div class="grid2">
       <form method="post" class="card stack">
         <h3>Inventory</h3>
@@ -820,7 +837,7 @@ function page_device(PDO $db, array $user): void {
           }
         ?></select>
         <label>SNMPv3 profile</label>
-        <select name="snmp_profile_id"><option value="">(secrets.env default)</option><?php
+        <select name="snmp_profile_id"<?= ba_editor($user, 'edit_snmp') ? '' : ' disabled' ?>><option value="">(secrets.env default)</option><?php
           foreach ($db->query('SELECT id,name FROM snmp_profiles') as $p) {
               $sel = ((int)$r['snmp_profile_id'] === (int)$p['id']) ? ' selected' : '';
               echo '<option value="'.(int)$p['id'].'"'.$sel.'>'.h($p['name']).'</option>';
@@ -829,6 +846,7 @@ function page_device(PDO $db, array $user): void {
         <label>Site</label><input name="site" value="<?= h($r['site']) ?>">
         <label>Building</label><input name="building" value="<?= h($r['building']) ?>">
         <label>IDF / closet</label><input name="idf_closet" value="<?= h($r['idf_closet']) ?>">
+        <?php ba_department_field($db, $user, (int)ba_col($r, 'department_id') ?: null); ?>
         <label>Device template</label>
         <div class="filters">
           <select name="template_id"><?= ba_template_options($db, isset($r['template_id']) ? (int)$r['template_id'] : null) ?></select>
@@ -1014,16 +1032,7 @@ function page_admin(PDO $db, array $user): void {
         header('Location: ' . ba_href('/admin'));
         exit;
     }
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['new_user'])) {
-        $hash = password_hash($_POST['password'] ?? '', PASSWORD_DEFAULT);
-        $role = ($_POST['role'] ?? '') === 'admin' ? 'admin' : 'viewer';
-        $db->prepare('INSERT INTO users (username, password_hash, role) VALUES (?,?,?)')->execute([trim($_POST['username']??''), $hash, $role]);
-        ba_audit($db, 'create_user', 'user', $_POST['username'] ?? '');
-        header('Location: ' . ba_href('/admin'));
-        exit;
-    }
     $thr = $db->query("SELECT * FROM thresholds WHERE scope='global'")->fetch() ?: [];
-    $users = $db->query('SELECT id, username, role, created_at FROM users ORDER BY username')->fetchAll();
     $audit = $db->query('SELECT * FROM audit_log ORDER BY id DESC LIMIT 80')->fetchAll();
     if (!empty($_SESSION['ba_flash'])) {
         $updMsg = (string)$_SESSION['ba_flash'];
@@ -1069,14 +1078,9 @@ function page_admin(PDO $db, array $user): void {
         <button name="global_thresh" value="1">Save defaults</button>
       </form>
       <div class="card">
-        <h3>Users</h3>
-        <table><?php foreach ($users as $u) echo '<tr><td>'.h($u['username']).'</td><td>'.h($u['role']).'</td></tr>'; ?></table>
-        <form method="post" class="stack">
-          <label>New user</label><input name="username" required>
-          <input type="password" name="password" placeholder="password" required>
-          <select name="role"><option>viewer</option><option>admin</option></select>
-          <button name="new_user" value="1">Add user</button>
-        </form>
+        <h3>Users &amp; departments</h3>
+        <p class="muted">Local accounts, platform roles, departments, LDAPS, and security-group maps.</p>
+        <p><a class="btn" href="<?= h(ba_href('/users')) ?>">Open Users &amp; departments</a></p>
       </div>
     </div>
     <div class="card" id="updates">

@@ -250,7 +250,7 @@ function ba_render_loc_tree(array $groups, ?int $parent, array $summaries, array
 }
 
 function page_idfs(PDO $db, array $user): void {
-    $admin = ($user['role'] ?? '') === 'admin';
+    $admin = ba_editor($user, 'edit_infrastructure');
     $gid = (int)($_GET['group'] ?? 0);
     $msg = '';
     $groups = ba_groups($db);
@@ -428,7 +428,7 @@ function ba_render_tech_u_picker(array $rack, array $devices, int $focusU, strin
 }
 
 function page_rack(PDO $db, array $user): void {
-    $admin = ($user['role'] ?? '') === 'admin';
+    $admin = ba_editor($user, 'edit_infrastructure');
     $id = (int)($_GET['id'] ?? 0);
     $rack = ba_rack($db, $id);
     if (!$rack) {
