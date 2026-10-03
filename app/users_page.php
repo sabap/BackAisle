@@ -21,6 +21,10 @@ function page_users(PDO $db, array $user): void
 {
     ba_require_perm('manage_users');
     ba_ensure_access_schema($db);
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && (string)($_POST['act'] ?? '') === 'ldap_test') {
+        ba_users_ldap_test_response($db);
+        exit;
+    }
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $act = (string)($_POST['act'] ?? '');
         try {
@@ -128,7 +132,7 @@ function page_users(PDO $db, array $user): void
         echo '<div class="flash ' . $cls . '">' . h($msg) . '</div>';
     }
     echo '<h1>Users &amp; departments</h1>';
-    echo '<p class="muted">Local accounts, platform roles, and departments. A directory user is created the first time they sign in with LDAPS and match a security-group role map.</p>';
+    echo '<p class="muted">Local accounts, platform roles, and departments. A directory user is created the first time they sign in. A matching security-group map sets the role. The default role is used only when group requirement is off, or no role maps exist yet.</p>';
     echo '<div class="kpis">';
     echo '<div class="kpi"><span>Users</span><b>' . count($users) . '</b></div>';
     echo '<div class="kpi"><span>Active</span><b>' . $activeUsers . '</b></div>';
@@ -136,7 +140,7 @@ function page_users(PDO $db, array $user): void
     echo '<div class="kpi"><span>Group maps</span><b>' . (count($roleMaps) + count($deptMaps)) . '</b></div>';
     echo '</div>';
 
-    ba_users_ldap_card($ldap);
+    ba_users_ldap_card($ldap, $roles);
     ba_users_roles_card($db, $roles);
     ba_users_dept_card($depts, $editDept);
     ba_users_people_card($db, $users, $roles, $depts, $editUser, $q);
@@ -149,8 +153,19 @@ function ba_users_post(PDO $db, array $actor, string $act): void
 {
     if ($act === 'ldap_save') {
         ba_save_ldap_settings($db, $_POST);
+        $note = 'LDAPS settings saved';
+        if (!empty($_POST['ldap_remove_ca'])) {
+            $note = ba_ldap_remove_ca()
+                ? 'Removed the enterprise CA. LDAPS settings saved.'
+                : 'No enterprise CA file to remove. LDAPS settings saved.';
+            ba_audit($db, 'ldap_ca_remove', 'ldap', null);
+        } elseif (!empty($_FILES['ldap_ca_file']['name'])) {
+            $install = ba_ldap_install_ca_upload($_FILES['ldap_ca_file'], !empty($_POST['ldap_ca_append']));
+            $note = (string)$install['message'];
+            ba_audit($db, 'ldap_ca_install', 'ldap', null, (string)($install['cert_count'] ?? 0) . ' certs');
+        }
         ba_audit($db, 'ldap_save', 'ldap', null);
-        $_SESSION['ba_flash'] = 'LDAPS settings saved';
+        $_SESSION['ba_flash'] = $note;
         $_SESSION['ba_flash_type'] = 'ok';
         return;
     }
@@ -410,10 +425,41 @@ function ba_users_save_user(PDO $db, array $actor, string $act): void
     $_SESSION['ba_flash_type'] = 'ok';
 }
 
-function ba_users_ldap_card(array $ldap): void
+function ba_users_ldap_test_response(PDO $db): void
+{
+    header('Content-Type: application/json; charset=utf-8');
+    try {
+        $saved = ba_ldap_cfg($db);
+        $pass = (string)($_POST['ldap_bind_password'] ?? '');
+        if ($pass === '') {
+            $pass = (string)$saved['bind_password'];
+        }
+        $result = ba_ldap_test_connection(
+            [
+                'host' => trim((string)($_POST['ldap_host'] ?? '')),
+                'port' => (int)($_POST['ldap_port'] ?? 636),
+                'base_dn' => trim((string)($_POST['ldap_base_dn'] ?? '')),
+                'user_filter' => trim((string)($_POST['ldap_user_filter'] ?? '(sAMAccountName={username})')),
+                'bind_dn' => trim((string)($_POST['ldap_bind_dn'] ?? '')),
+                'bind_password' => $pass,
+                'use_ssl' => isset($_POST['ldap_use_ssl']),
+                'tls_insecure' => isset($_POST['ldap_tls_insecure']),
+            ],
+            trim((string)($_POST['ldap_test_username'] ?? '')),
+            (string)($_POST['ldap_test_password'] ?? '')
+        );
+    } catch (Throwable $e) {
+        $result = ['ok' => false, 'summary' => 'Test error: ' . $e->getMessage(), 'steps' => []];
+    }
+    echo json_encode($result, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+}
+
+function ba_users_ldap_card(array $ldap, array $roles): void
 {
     $ext = function_exists('ldap_connect') ? 'PHP LDAP is loaded.' : 'PHP LDAP is not loaded. LDAPS sign-in will not work until that extension is enabled.';
-    echo '<form method="post" class="card stack" id="ldaps"><h3>LDAPS authentication</h3>';
+    $ca = ba_ldap_ca_status();
+    $defaultId = (int)($ldap['default_role_id'] ?? 0);
+    echo '<form method="post" enctype="multipart/form-data" class="card stack" id="ldaps"><h3>LDAPS authentication</h3>';
     echo '<p class="muted">Service account search, then the user\'s own password. Nested groups use the Active Directory matching rule. ' . h($ext) . '</p>';
     echo '<label><input type="checkbox" name="ldap_enabled" ' . ($ldap['enabled'] ? 'checked' : '') . '> Enable LDAPS</label>';
     echo '<label>Host</label><input name="ldap_host" value="' . h($ldap['host']) . '" placeholder="dc.example.org">';
@@ -423,10 +469,111 @@ function ba_users_ldap_card(array $ldap): void
     echo '<label>Bind DN</label><input name="ldap_bind_dn" value="' . h($ldap['bind_dn']) . '">';
     echo '<label>Bind password (blank keeps the saved one)</label><input type="password" name="ldap_bind_password" autocomplete="new-password">';
     echo '<label><input type="checkbox" name="ldap_use_ssl" ' . ($ldap['use_ssl'] ? 'checked' : '') . '> Use LDAPS (SSL)</label>';
-    echo '<label><input type="checkbox" name="ldap_tls_insecure" ' . ($ldap['tls_insecure'] ? 'checked' : '') . '> Do not verify the LDAPS certificate (internal CA)</label>';
     echo '<label><input type="checkbox" name="ldap_require_group" ' . ($ldap['require_group'] ? 'checked' : '') . '> Require a mapped security group before creating an account</label>';
+    echo '<label>Default Role (fallback)</label><select name="ldap_default_role_id">';
+    echo '<option value=""' . ($defaultId === 0 ? ' selected' : '') . '>Viewer</option>';
+    foreach ($roles as $role) {
+        $rid = (int)ba_col($role, 'id');
+        echo '<option value="' . $rid . '"' . ($defaultId === $rid ? ' selected' : '') . '>' . h((string)ba_col($role, 'name')) . '</option>';
+    }
+    echo '</select>';
+    echo '<p class="muted">Used only when “Require security group…” is off (or no role maps exist yet). Mapped groups always set the role when they match.</p>';
+    echo '<div class="ldap-split"><label>Enterprise CA (AD Certificate Services)</label>';
+    echo '<p class="muted">Upload the root (and intermediate, if needed) so PHP can trust ldaps:// with verification on. Stored in the site data folder as ldap-ca.pem (not served by the site, and not in git). Export from AD Certificate Services as Base-64 X.509 (.CER) or PEM.</p>';
+    if (!empty($ca['installed'])) {
+        echo '<p>Status: <span class="pill ok">Installed</span> · ' . (int)$ca['cert_count'] . ' cert(s) · ' . number_format((int)$ca['bytes']) . ' bytes';
+        if (!empty($ca['subjects'])) {
+            echo '<br><span class="muted">Subject(s): ' . h(implode(' · ', $ca['subjects'])) . '</span>';
+        }
+        echo '</p>';
+    } else {
+        echo '<p>Status: <span class="pill down">Not installed</span> <span class="muted">— verification fails until a CA is uploaded, or certificate checks stay off.</span></p>';
+    }
+    echo '</div>';
+    echo '<label>Upload CA certificate (.pem / .crt / .cer)</label>';
+    echo '<input type="file" name="ldap_ca_file" accept=".pem,.crt,.cer,.cert,application/x-x509-ca-cert,application/x-pem-file,text/plain">';
+    echo '<label><input type="checkbox" name="ldap_ca_append" value="1"> Append to the existing chain</label>';
+    if (!empty($ca['installed'])) {
+        echo '<label><input type="checkbox" name="ldap_remove_ca" value="1"> Remove the installed enterprise CA</label>';
+    }
+    echo '<label><input type="checkbox" name="ldap_tls_insecure" ' . ($ldap['tls_insecure'] ? 'checked' : '') . '> Do not verify the LDAPS certificate (temporary / lab)</label>';
+    echo '<p class="muted">Use this only until the enterprise CA above is uploaded. After Save, uncheck it and run Test connection.</p>';
+    echo '<div class="ldap-split"><label>Connection test</label>';
+    echo '<p class="muted">Uses the values in this form (save is not required). Leave the bind password blank to use the saved password. An optional test user checks the filter, and the password if you provide one. This does not create a BackAisle user. A newly chosen CA file is trusted after Save.</p></div>';
+    echo '<label>Test username (optional)</label><input type="text" name="ldap_test_username" id="ldap_test_username" autocomplete="off" placeholder="sAMAccountName">';
+    echo '<label>Test password (optional)</label><input type="password" name="ldap_test_password" id="ldap_test_password" autocomplete="new-password">';
     echo '<input type="hidden" name="act" value="ldap_save"><input type="hidden" name="jump" value="ldaps">';
-    echo '<button>Save LDAPS</button></form>';
+    echo '<div class="ldap-actions"><button type="submit">Save LDAPS</button><button type="button" id="ldap_test_btn">Test connection</button></div></form>';
+    echo '<div id="ldap_test_modal" class="ldaps-modal" hidden aria-hidden="true">';
+    echo '<div class="ldaps-modal-backdrop" data-ldap-close></div>';
+    echo '<div class="ldaps-modal-panel" role="dialog" aria-modal="true" aria-labelledby="ldap_test_title">';
+    echo '<div class="ldaps-modal-head"><h3 id="ldap_test_title">LDAPS test</h3><button type="button" class="btn" data-ldap-close>Close</button></div>';
+    echo '<div id="ldap_test_body"></div></div></div>';
+    echo <<<'JS'
+<script>
+(function () {
+  var btn = document.getElementById('ldap_test_btn');
+  var modal = document.getElementById('ldap_test_modal');
+  var body = document.getElementById('ldap_test_body');
+  var title = document.getElementById('ldap_test_title');
+  if (!btn || !modal || !body || !title) return;
+  var form = document.getElementById('ldaps');
+  var panel = modal.querySelector('.ldaps-modal-panel');
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+  function openModal() {
+    modal.hidden = false;
+    modal.setAttribute('aria-hidden', 'false');
+  }
+  function closeModal() {
+    modal.hidden = true;
+    modal.setAttribute('aria-hidden', 'true');
+  }
+  modal.querySelectorAll('[data-ldap-close]').forEach(function (el) {
+    el.addEventListener('click', closeModal);
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && !modal.hidden) closeModal();
+  });
+  function showResult(data) {
+    var ok = !!(data && data.ok);
+    panel.classList.remove('ldaps-pass', 'ldaps-fail', 'ldaps-pending');
+    panel.classList.add(ok ? 'ldaps-pass' : 'ldaps-fail');
+    title.textContent = ok ? 'LDAPS test passed' : 'LDAPS test failed';
+    var html = '<p class="ldaps-summary">' + esc(data && data.summary ? data.summary : (ok ? 'OK' : 'Failed')) + '</p>';
+    (data && data.steps ? data.steps : []).forEach(function (step) {
+      html += '<div class="ldaps-step ' + (step.ok ? 'ok' : 'bad') + '"><b>' + esc(step.name || 'Step') + '</b><span>' + esc(step.detail || '') + '</span></div>';
+    });
+    body.innerHTML = html;
+  }
+  btn.addEventListener('click', function () {
+    if (!form) return;
+    panel.classList.remove('ldaps-pass', 'ldaps-fail');
+    panel.classList.add('ldaps-pending');
+    title.textContent = 'Testing LDAPS…';
+    body.innerHTML = '<p class="muted">Contacting the directory. Binding and search can take a few seconds.</p>';
+    openModal();
+    btn.disabled = true;
+    var fd = new FormData(form);
+    fd.set('act', 'ldap_test');
+    fd.delete('ldap_ca_file');
+    fetch(window.location.pathname + window.location.search, {
+      method: 'POST',
+      body: fd,
+      credentials: 'same-origin',
+      headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
+    }).then(function (r) {
+      return r.json().then(function (j) { return j; }).catch(function () {
+        return { ok: false, summary: 'The server did not return a test result.', steps: [] };
+      });
+    }).then(showResult).catch(function (err) {
+      showResult({ ok: false, summary: 'Network error: ' + (err && err.message ? err.message : 'request failed'), steps: [] });
+    }).finally(function () { btn.disabled = false; });
+  });
+})();
+</script>
+JS;
 }
 
 function ba_users_roles_card(PDO $db, array $roles): void

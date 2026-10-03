@@ -86,7 +86,8 @@ function Test-PreserveRel([string]$rel) {
     $n = ($rel -replace '\\', '/').TrimStart('/')
     foreach ($p in @(
         'data/', 'logs/', 'storage/backups/', 'storage/tmp/',
-        'php.ini', 'config/config.php', 'config/collector.json',
+        'php.ini', 'config/config.php', 'config/collector.json', 'config/cacert.pem',
+        'config/ldap-ca.pem', 'config/ldap-trust.pem', 'config/ldap.conf',
         'public/assets/tpl/', 'public/web.config'
     )) {
         if ($n -eq $p.TrimEnd('/') -or ($p.EndsWith('/') -and $n.StartsWith($p))) { return $true }

@@ -8,6 +8,12 @@
 /config/config.php
 /config/collector.json
 /config/cacert.pem
+/config/ldap-ca.pem
+/config/ldap-trust.pem
+/config/ldap.conf
+/data/ldap-ca.pem
+/data/ldap-trust.pem
+/data/ldap.conf
 /collector/__pycache__/
 *.pyc
 public/assets/tpl/
