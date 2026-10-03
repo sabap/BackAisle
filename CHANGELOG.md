@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.5.65] - 2026-10-03
+
+- Poll all scheduled polls every UPS on the schedule in one click. A long list runs in the background, 24 at a time, and the page comes back right away. Refresh the SNMP page for the collector log. A second click while that poll is running waits. Battery replacement dates fill in as each card answers.
+- The Batteries list marks a UPS with no battery replacement date as Not set, and counts how many still need that date on the card. Set the date on the card, then poll, and the date shows in the list.
+
 ## [0.5.64] - 2026-10-03
 
 - Battery last-replaced and replace-by come from the CyberPower card. Last replaced is the battery replacement date set in the RMCARD web interface. Replace-by is that date plus the card's recommended battery life. A blank reply does not clear a date already saved. Install stays as you typed it. Restart the collector so the next climate poll fills these in.

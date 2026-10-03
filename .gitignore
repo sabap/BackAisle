@@ -2,6 +2,7 @@
 /data/*.db-shm
 /data/*.db-wal
 /logs/
+/runtime/
 /storage/
 /secrets.env
 /php.ini
