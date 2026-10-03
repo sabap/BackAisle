@@ -517,10 +517,31 @@ body.tech .tech-u.busy { color: var(--muted); background: #0e141c; }
   body.tech .loc-sum .loc-meta, body.tech .loc-leaf .loc-meta,
   body.tech .loc-sum .loc-badge { display: none; }
 }
-#ldaps.stack { max-width: 44rem; }
-#ldaps .ldap-split { margin-top: .85rem; padding-top: .75rem; border-top: 1px solid var(--line); }
-#ldaps .ldap-actions { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .8rem; }
-#ldaps input[type=file] { width: 100%; }
+.ucard { background:var(--panel); border:1px solid var(--line); border-radius:10px; margin-bottom:1rem; overflow:hidden; }
+.ucard-head {
+  display:flex; align-items:center; justify-content:space-between; gap:.75rem; flex-wrap:wrap;
+  padding:.7rem 1rem; background:#3c2f24; color:#f4eadc; border-bottom:1px solid #8a6a45;
+}
+.ucard-head h3 { margin:0; color:#f4eadc; font-size:1rem; }
+.ucard-head .btn { background:#5a4332; border:1px solid #d7b48a; color:#fff8ee; white-space:nowrap; }
+.ucard-head .btn:hover { background:#6b4e38; }
+.ucard-body { padding:1rem; }
+.ucard th { position:static; }
+.users-board { display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-bottom:1rem; align-items:start; }
+.users-board > .ucard { margin-bottom:0; }
+.ldap-cols { display:grid; grid-template-columns:1.2fr 1fr 1fr; gap:1rem 1.25rem; align-items:start; }
+.ldap-col h4 { margin:0 0 .4rem; font-size:.92rem; }
+.ldap-col label { display:block; margin:.45rem 0 .15rem; color:var(--muted); font-size:.8rem; }
+.ldap-col input:not([type=checkbox]):not([type=radio]), .ldap-col select { width:100%; }
+.ldap-pair { display:grid; grid-template-columns:1fr 6rem; gap:.6rem; }
+.ldap-actions { display:flex; gap:.5rem; flex-wrap:wrap; margin-top:.9rem; }
+#ldaps input[type=file] { width:100%; }
+.ldaps-modal-panel form.stack { max-width:none; }
+.ldaps-modal-panel form.stack input:not([type=checkbox]):not([type=radio]),
+.ldaps-modal-panel form.stack select { width:100%; }
+.ldaps-modal-panel form.stack button { margin-top:.6rem; }
+@media (max-width:1100px) { .users-board { grid-template-columns:1fr; } }
+@media (max-width:1000px) { .ldap-cols { grid-template-columns:1fr; } }
 .ldaps-modal[hidden] { display: none; }
 .ldaps-modal { position: fixed; inset: 0; z-index: 40; display: flex; align-items: center; justify-content: center; padding: 1rem; }
 .ldaps-modal-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.55); }

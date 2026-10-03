@@ -37,11 +37,14 @@ function page_users(PDO $db, array $user): void
             ba_users_fail($e->getMessage());
         }
         $jump = (string)($_POST['jump'] ?? '');
+        $failed = (($_SESSION['ba_flash_type'] ?? '') === 'err');
         $extra = '';
-        if ($act === 'update_user') {
+        if ($failed && $act === 'update_user') {
             $extra = 'edit_user=' . (int)($_POST['id'] ?? 0);
-        } elseif ($act === 'update_department') {
+        } elseif ($failed && $act === 'update_department') {
             $extra = 'edit_dept=' . (int)($_POST['id'] ?? 0);
+        } elseif ($failed && in_array($act, ['add_department', 'add_user', 'add_role_map', 'add_dept_map'], true)) {
+            $extra = 'modal=' . rawurlencode($act);
         }
         $url = ba_href('/users' . ($extra !== '' ? '?' . $extra : ''));
         if ($jump !== '') {
@@ -54,6 +57,7 @@ function page_users(PDO $db, array $user): void
     $q = trim((string)($_GET['q'] ?? ''));
     $editUserId = (int)($_GET['edit_user'] ?? 0);
     $editDeptId = (int)($_GET['edit_dept'] ?? 0);
+    $openModal = (string)($_GET['modal'] ?? '');
     $msg = '';
     $flashType = 'ok';
     if (!empty($_SESSION['ba_flash'])) {
@@ -142,10 +146,14 @@ function page_users(PDO $db, array $user): void
 
     ba_users_ldap_card($ldap, $roles);
     ba_users_roles_card($db, $roles);
-    ba_users_dept_card($depts, $editDept);
-    ba_users_people_card($db, $users, $roles, $depts, $editUser, $q);
-    ba_users_role_map_card($roles, $roleMaps);
-    ba_users_dept_map_card($depts, $deptMaps);
+    echo '<div class="users-board">';
+    ba_users_dept_card($depts, $editDept, $openModal);
+    ba_users_people_card($db, $users, $roles, $depts, $editUser, $q, $openModal);
+    echo '</div><div class="users-board">';
+    ba_users_role_map_card($roles, $roleMaps, $openModal);
+    ba_users_dept_map_card($depts, $deptMaps, $openModal);
+    echo '</div>';
+    ba_users_modal_script();
     ba_layout_end();
 }
 
@@ -497,11 +505,15 @@ function ba_users_ldap_card(array $ldap, array $roles): void
     $ext = function_exists('ldap_connect') ? 'PHP LDAP is loaded.' : 'PHP LDAP is not loaded. LDAPS sign-in will not work until that extension is enabled.';
     $ca = ba_ldap_ca_status();
     $defaultId = (int)($ldap['default_role_id'] ?? 0);
-    echo '<form method="post" enctype="multipart/form-data" class="card stack" id="ldaps"><h3>LDAPS authentication</h3>';
+    echo '<div class="ucard" id="ldaps">';
+    echo '<div class="ucard-head"><h3>LDAPS authentication</h3></div>';
+    echo '<form id="ldap-form" method="post" enctype="multipart/form-data" class="ucard-body">';
     echo '<p class="muted">Service account search, then the user\'s own password. Nested groups use the Active Directory matching rule. ' . h($ext) . '</p>';
+    echo '<div class="ldap-cols">';
+    echo '<div class="ldap-col"><h4>Connection</h4>';
     echo '<label><input type="checkbox" name="ldap_enabled" ' . ($ldap['enabled'] ? 'checked' : '') . '> Enable LDAPS</label>';
-    echo '<label>Host</label><input name="ldap_host" value="' . h($ldap['host']) . '" placeholder="dc.example.org">';
-    echo '<label>Port</label><input name="ldap_port" value="' . h((string)$ldap['port']) . '">';
+    echo '<div class="ldap-pair"><div><label>Host</label><input name="ldap_host" value="' . h($ldap['host']) . '" placeholder="dc.example.org"></div>';
+    echo '<div><label>Port</label><input name="ldap_port" value="' . h((string)$ldap['port']) . '"></div></div>';
     echo '<label>Base DN</label><input name="ldap_base_dn" value="' . h($ldap['base_dn']) . '" placeholder="DC=example,DC=org">';
     echo '<label>User filter</label><input name="ldap_user_filter" value="' . h($ldap['user_filter']) . '">';
     echo '<label>Bind DN</label><input name="ldap_bind_dn" value="' . h($ldap['bind_dn']) . '">';
@@ -516,7 +528,8 @@ function ba_users_ldap_card(array $ldap, array $roles): void
     }
     echo '</select>';
     echo '<p class="muted">Used only when “Require security group…” is off (or no role maps exist yet). Mapped groups always set the role when they match.</p>';
-    echo '<div class="ldap-split"><label>Enterprise CA (AD Certificate Services)</label>';
+    echo '</div>';
+    echo '<div class="ldap-col"><h4>Enterprise CA</h4>';
     echo '<p class="muted">Upload the root (and intermediate, if needed) so PHP can trust ldaps:// with verification on. Stored in the site data folder as ldap-ca.pem (not served by the site, and not in git). Export from AD Certificate Services as Base-64 X.509 (.CER) or PEM.</p>';
     if (!empty($ca['installed'])) {
         echo '<p>Status: <span class="pill ok">Installed</span> · ' . (int)$ca['cert_count'] . ' cert(s) · ' . number_format((int)$ca['bytes']) . ' bytes';
@@ -527,7 +540,6 @@ function ba_users_ldap_card(array $ldap, array $roles): void
     } else {
         echo '<p>Status: <span class="pill down">Not installed</span> <span class="muted">— verification fails until a CA is uploaded, or certificate checks stay off.</span></p>';
     }
-    echo '</div>';
     echo '<label>Upload CA certificate (.pem / .crt / .cer)</label>';
     echo '<input type="file" name="ldap_ca_file" accept=".pem,.crt,.cer,.cert,application/x-x509-ca-cert,application/x-pem-file,text/plain">';
     echo '<label><input type="checkbox" name="ldap_ca_append" value="1"> Append to the existing chain</label>';
@@ -536,16 +548,19 @@ function ba_users_ldap_card(array $ldap, array $roles): void
     }
     echo '<label><input type="checkbox" name="ldap_tls_insecure" ' . ($ldap['tls_insecure'] ? 'checked' : '') . '> Do not verify the LDAPS certificate (temporary / lab)</label>';
     echo '<p class="muted">Use this only until the enterprise CA above is uploaded. After Save, uncheck it and run Test connection.</p>';
-    echo '<div class="ldap-split"><label>Connection test</label>';
-    echo '<p class="muted">Uses the values in this form (save is not required). Leave the bind password blank to use the saved password. An optional test user checks the filter, and the password if you provide one. This does not create a BackAisle user. A newly chosen CA file is trusted after Save.</p></div>';
+    echo '</div>';
+    echo '<div class="ldap-col"><h4>Connection test</h4>';
+    echo '<p class="muted">Uses the values in this form (save is not required). Leave the bind password blank to use the saved password. An optional test user checks the filter, and the password if you provide one. This does not create a BackAisle user. A newly chosen CA file is trusted after Save.</p>';
     echo '<label>Test username (optional)</label><input type="text" name="ldap_test_username" id="ldap_test_username" autocomplete="off" placeholder="sAMAccountName">';
     echo '<label>Test password (optional)</label><input type="password" name="ldap_test_password" id="ldap_test_password" autocomplete="new-password">';
+    echo '</div></div>';
     echo '<input type="hidden" name="act" value="ldap_save"><input type="hidden" name="jump" value="ldaps">';
-    echo '<div class="ldap-actions"><button type="submit">Save LDAPS</button><button type="button" id="ldap_test_btn">Test connection</button></div></form>';
+    echo '<div class="ldap-actions"><button type="submit">Save LDAPS</button><button type="button" id="ldap_test_btn">Test connection</button></div>';
+    echo '</form></div>';
     echo '<div id="ldap_test_modal" class="ldaps-modal" hidden aria-hidden="true">';
-    echo '<div class="ldaps-modal-backdrop" data-ldap-close></div>';
+    echo '<div class="ldaps-modal-backdrop" data-close-modal></div>';
     echo '<div class="ldaps-modal-panel" role="dialog" aria-modal="true" aria-labelledby="ldap_test_title">';
-    echo '<div class="ldaps-modal-head"><h3 id="ldap_test_title">LDAPS test</h3><button type="button" class="btn" data-ldap-close>Close</button></div>';
+    echo '<div class="ldaps-modal-head"><h3 id="ldap_test_title">LDAPS test</h3><button type="button" class="btn" data-close-modal>Close</button></div>';
     echo '<div id="ldap_test_body"></div></div></div>';
     echo <<<'JS'
 <script>
@@ -555,7 +570,7 @@ function ba_users_ldap_card(array $ldap, array $roles): void
   var body = document.getElementById('ldap_test_body');
   var title = document.getElementById('ldap_test_title');
   if (!btn || !modal || !body || !title) return;
-  var form = document.getElementById('ldaps');
+  var form = document.getElementById('ldap-form');
   var panel = modal.querySelector('.ldaps-modal-panel');
   function esc(s) {
     return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -564,16 +579,6 @@ function ba_users_ldap_card(array $ldap, array $roles): void
     modal.hidden = false;
     modal.setAttribute('aria-hidden', 'false');
   }
-  function closeModal() {
-    modal.hidden = true;
-    modal.setAttribute('aria-hidden', 'true');
-  }
-  modal.querySelectorAll('[data-ldap-close]').forEach(function (el) {
-    el.addEventListener('click', closeModal);
-  });
-  document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape' && !modal.hidden) closeModal();
-  });
   function showResult(data) {
     var ok = !!(data && data.ok);
     panel.classList.remove('ldaps-pass', 'ldaps-fail', 'ldaps-pending');
@@ -627,7 +632,7 @@ function ba_users_roles_card(PDO $db, array $roles): void
         return ($order[(string)ba_col($a, 'code')] ?? 50) <=> ($order[(string)ba_col($b, 'code')] ?? 50);
     });
     $privileged = array_flip(ba_privileged_permissions());
-    echo '<div class="card" id="roles"><h3>Platform roles</h3>';
+    echo '<div class="ucard" id="roles"><div class="ucard-head"><h3>Platform roles</h3></div><div class="ucard-body">';
     echo '<p class="muted">Change a name in the box at the top of its column. View Only is read-only. Department Admin edits devices in their department. IDFM Admin edits racks, inventory, SNMP, and fleet writes. Global Admin also manages users, LDAPS, backups, and updates. Users and Settings stay with Global Admin.</p>';
     echo '<form method="post">';
     echo '<input type="hidden" name="act" value="save_roles"><input type="hidden" name="jump" value="roles">';
@@ -678,7 +683,7 @@ function ba_users_roles_card(PDO $db, array $roles): void
     echo '<p><button>Save roles</button></p></form>';
     echo '<form method="post" onsubmit="return confirm(\'Restore Global Admin, IDFM Admin, Department Admin, and View Only, including their names?\')">';
     echo '<input type="hidden" name="act" value="reset_roles"><input type="hidden" name="jump" value="roles">';
-    echo '<button>Restore defaults</button></form></div>';
+    echo '<button>Restore defaults</button></form></div></div>';
 }
 
 function ba_users_dept_fields(?array $edit): void
@@ -699,24 +704,31 @@ function ba_users_dept_fields(?array $edit): void
     echo '<label>Notes</label><input name="notes" value="' . h($notes) . '">';
 }
 
-function ba_users_dept_card(array $depts, ?array $edit): void
+function ba_users_modal_open(string $id, string $title, bool $open, string $closeHref = ''): void
 {
-    echo '<div class="grid2" id="departments">';
-    echo '<form method="post" class="card stack"><h3>' . ($edit ? 'Edit department' : 'Add department') . '</h3>';
-    if ($edit) {
-        echo '<input type="hidden" name="act" value="update_department"><input type="hidden" name="id" value="' . (int)ba_col($edit, 'id') . '">';
-        echo '<p class="muted"><a href="' . h(ba_href('/users')) . '#departments">New department</a></p>';
-    } else {
-        echo '<input type="hidden" name="act" value="add_department">';
+    $titleId = $id . '-title';
+    echo '<div id="' . h($id) . '" class="ldaps-modal"' . ($open ? '' : ' hidden') . ' aria-hidden="' . ($open ? 'false' : 'true') . '"';
+    if ($closeHref !== '') {
+        echo ' data-close-href="' . h($closeHref) . '"';
     }
-    echo '<input type="hidden" name="jump" value="departments">';
-    ba_users_dept_fields($edit);
-    if ($edit) {
-        $on = (int)ba_col($edit, 'is_active', 1) === 1;
-        echo '<label><input type="checkbox" name="is_active"' . ($on ? ' checked' : '') . '> Active</label>';
-    }
-    echo '<button>' . ($edit ? 'Save department' : 'Add department') . '</button></form>';
-    echo '<div class="card"><h3>Departments</h3><table><thead><tr><th></th><th>Name</th><th>Code</th><th>Users</th><th>Devices</th><th></th></tr></thead><tbody>';
+    echo '>';
+    echo '<div class="ldaps-modal-backdrop" data-close-modal></div>';
+    echo '<div class="ldaps-modal-panel" role="dialog" aria-modal="true" aria-labelledby="' . h($titleId) . '">';
+    echo '<div class="ldaps-modal-head"><h3 id="' . h($titleId) . '">' . h($title) . '</h3>';
+    echo '<button type="button" class="btn" data-close-modal>Close</button></div>';
+}
+
+function ba_users_modal_close(): void
+{
+    echo '</div></div>';
+}
+
+function ba_users_dept_card(array $depts, ?array $edit, string $openModal): void
+{
+    echo '<div class="ucard" id="departments">';
+    echo '<div class="ucard-head"><h3>Departments</h3>';
+    echo '<button type="button" class="btn" data-open-modal="modal-add-dept">Add department</button></div>';
+    echo '<div class="ucard-body"><div class="users-scroll"><table><thead><tr><th></th><th>Name</th><th>Code</th><th>Users</th><th>Devices</th><th></th></tr></thead><tbody>';
     foreach ($depts as $d) {
         $color = ba_color_hex((string)ba_col($d, 'color_hex'));
         echo '<tr><td><span class="dept-swatch" style="background:' . h($color) . '"></span></td>';
@@ -735,7 +747,26 @@ function ba_users_dept_card(array $depts, ?array $edit): void
     if (!$depts) {
         echo '<tr><td colspan="6" class="muted">No departments yet.</td></tr>';
     }
-    echo '</tbody></table></div></div>';
+    echo '</tbody></table></div></div></div>';
+
+    ba_users_modal_open('modal-add-dept', 'Add department', $openModal === 'add_department');
+    echo '<form method="post" class="stack">';
+    echo '<input type="hidden" name="act" value="add_department"><input type="hidden" name="jump" value="departments">';
+    ba_users_dept_fields(null);
+    echo '<button>Add department</button></form>';
+    ba_users_modal_close();
+
+    if ($edit) {
+        ba_users_modal_open('modal-edit-dept', 'Edit department', true, ba_href('/users#departments'));
+        echo '<form method="post" class="stack">';
+        echo '<input type="hidden" name="act" value="update_department"><input type="hidden" name="id" value="' . (int)ba_col($edit, 'id') . '">';
+        echo '<input type="hidden" name="jump" value="departments">';
+        ba_users_dept_fields($edit);
+        $on = (int)ba_col($edit, 'is_active', 1) === 1;
+        echo '<label><input type="checkbox" name="is_active"' . ($on ? ' checked' : '') . '> Active</label>';
+        echo '<button>Save department</button></form>';
+        ba_users_modal_close();
+    }
 }
 
 function ba_users_role_select(array $roles, int $selected): void
@@ -763,14 +794,10 @@ function ba_users_dept_select(array $depts, int $selected): void
     echo '</select>';
 }
 
-function ba_users_people_card(PDO $db, array $users, array $roles, array $depts, ?array $edit, string $q): void
+function ba_users_user_fields(array $roles, array $depts, ?array $edit, bool $isEdit): void
 {
-    echo '<div class="grid2" id="people">';
-    $isEdit = $edit !== null;
-    echo '<form method="post" class="card stack"><h3>' . ($isEdit ? 'Edit user' : 'Add user') . '</h3>';
     if ($isEdit) {
         echo '<input type="hidden" name="act" value="update_user"><input type="hidden" name="id" value="' . (int)ba_col($edit, 'id') . '">';
-        echo '<p class="muted"><a href="' . h(ba_href('/users')) . '#people">New user</a></p>';
         echo '<label>Username</label><input value="' . h((string)ba_col($edit, 'username')) . '" disabled>';
         $src = (string)ba_col($edit, 'source', 'local') === 'ldap' ? 'ldap' : 'local';
     } else {
@@ -799,17 +826,24 @@ function ba_users_people_card(PDO $db, array $users, array $roles, array $depts,
     }
     $on = $edit ? (int)ba_col($edit, 'is_active', 1) === 1 : true;
     echo '<label><input type="checkbox" name="is_active"' . ($on ? ' checked' : '') . '> Active</label>';
-    echo '<button>' . ($isEdit ? 'Save user' : 'Add user') . '</button></form>';
+    echo '<button>' . ($isEdit ? 'Save user' : 'Add user') . '</button>';
+}
 
-    echo '<div class="card"><h3>Users</h3>';
+function ba_users_people_card(PDO $db, array $users, array $roles, array $depts, ?array $edit, string $q, string $openModal): void
+{
+    $peopleHref = ba_href('/users' . ($q !== '' ? '?q=' . rawurlencode($q) : '') . '#people');
+    echo '<div class="ucard" id="people">';
+    echo '<div class="ucard-head"><h3>Users</h3>';
+    echo '<button type="button" class="btn" data-open-modal="modal-add-user">Add user</button></div>';
+    echo '<div class="ucard-body">';
     echo '<form method="get" action="' . h(ba_href('/users')) . '" class="filters">';
     echo '<input name="q" value="' . h($q) . '" placeholder="Search name, email, department">';
     echo '<button>Search</button>';
     if ($q !== '') {
-        echo '<a href="' . h(ba_href('/users')) . '#people">Clear</a>';
+        echo '<a href="' . h(ba_href('/users#people')) . '">Clear</a>';
     }
     echo '</form>';
-    echo '<table><thead><tr><th>User</th><th>Role</th><th>Department</th><th>Status</th><th></th></tr></thead><tbody>';
+    echo '<div class="users-scroll"><table><thead><tr><th>User</th><th>Role</th><th>Department</th><th>Status</th><th></th></tr></thead><tbody>';
     foreach ($users as $u) {
         echo '<tr><td><strong>' . h((string)ba_col($u, 'username')) . '</strong>';
         $dn = trim((string)ba_col($u, 'display_name', ''));
@@ -830,29 +864,37 @@ function ba_users_people_card(PDO $db, array $users, array $roles, array $depts,
         }
         echo '</td><td>' . h((string)ba_col($u, 'source', 'local'));
         echo (int)ba_col($u, 'is_active', 1) === 1 ? ' · active' : ' · off';
-        echo '</td><td><a href="' . h(ba_href('/users?edit_user=' . (int)ba_col($u, 'id'))) . '#people">Edit</a></td></tr>';
+        $editHref = ba_href('/users?edit_user=' . (int)ba_col($u, 'id') . ($q !== '' ? '&q=' . rawurlencode($q) : '') . '#people');
+        echo '</td><td><a href="' . h($editHref) . '">Edit</a></td></tr>';
     }
     if (!$users) {
         echo '<tr><td colspan="5" class="muted">' . ($q !== '' ? 'No users match that search.' : 'No users yet.') . '</td></tr>';
     }
-    echo '</tbody></table></div></div>';
+    echo '</tbody></table></div></div></div>';
+
+    ba_users_modal_open('modal-add-user', 'Add user', $openModal === 'add_user');
+    echo '<form method="post" class="stack">';
+    ba_users_user_fields($roles, $depts, null, false);
+    echo '</form>';
+    ba_users_modal_close();
+
+    if ($edit) {
+        ba_users_modal_open('modal-edit-user', 'Edit user', true, $peopleHref);
+        echo '<form method="post" class="stack">';
+        ba_users_user_fields($roles, $depts, $edit, true);
+        echo '</form>';
+        ba_users_modal_close();
+    }
 }
 
-function ba_users_role_map_card(array $roles, array $maps): void
+function ba_users_role_map_card(array $roles, array $maps, string $openModal): void
 {
-    echo '<div class="card" id="role-maps"><h3>Security group → role mapping</h3>';
+    echo '<div class="ucard" id="role-maps">';
+    echo '<div class="ucard-head"><h3>Security group → role mapping</h3>';
+    echo '<button type="button" class="btn" data-open-modal="modal-add-role-map">Add role mapping</button></div>';
+    echo '<div class="ucard-body">';
     echo '<p class="muted">At LDAPS sign-in, group membership (including nested groups) is compared to these rows. The highest role wins: Global Admin, then IDFM Admin, then Department Admin, then View Only. Renaming a role does not change that order. The role is checked again on every sign-in. Group ID can be the group CN or the full DN. With “require a mapped security group” on, a first-time directory user is created only when one of these maps matches.</p>';
-    echo '<form method="post" class="filters">';
-    echo '<input type="hidden" name="act" value="add_role_map"><input type="hidden" name="jump" value="role-maps">';
-    echo '<select name="role_id" required>';
-    foreach ($roles as $r) {
-        echo '<option value="' . (int)ba_col($r, 'id') . '">' . h((string)ba_col($r, 'name')) . '</option>';
-    }
-    echo '</select>';
-    echo '<input name="group_name" placeholder="Group name (optional)">';
-    echo '<input name="group_id" placeholder="CN or full DN" required>';
-    echo '<button>Add mapping</button></form>';
-    echo '<table><thead><tr><th>Role</th><th>Group name</th><th>Group ID</th><th></th></tr></thead><tbody>';
+    echo '<div class="users-scroll"><table><thead><tr><th>Role</th><th>Group name</th><th>Group ID</th><th></th></tr></thead><tbody>';
     foreach ($maps as $m) {
         echo '<tr><td>' . h((string)ba_col($m, 'role_name')) . '</td>';
         echo '<td>' . h((string)ba_col($m, 'group_name')) . '</td>';
@@ -864,27 +906,30 @@ function ba_users_role_map_card(array $roles, array $maps): void
     if (!$maps) {
         echo '<tr><td colspan="4" class="muted">No role maps yet.</td></tr>';
     }
-    echo '</tbody></table></div>';
-}
+    echo '</tbody></table></div></div></div>';
 
-function ba_users_dept_map_card(array $depts, array $maps): void
-{
-    echo '<div class="card" id="dept-maps"><h3>Security group → department mapping</h3>';
-    echo '<p class="muted">When LDAPS sign-in matches one of these groups, the user\'s department is set from the map. If several match, the first one saved is used. A sign-in that matches no department map leaves the current department as it is.</p>';
-    echo '<form method="post" class="filters">';
-    echo '<input type="hidden" name="act" value="add_dept_map"><input type="hidden" name="jump" value="dept-maps">';
-    echo '<select name="department_id" required><option value="">Department</option>';
-    foreach ($depts as $d) {
-        if ((int)ba_col($d, 'is_active', 1) !== 1) {
-            continue;
-        }
-        echo '<option value="' . (int)ba_col($d, 'id') . '">' . h((string)ba_col($d, 'name')) . '</option>';
+    ba_users_modal_open('modal-add-role-map', 'Add role mapping', $openModal === 'add_role_map');
+    echo '<form method="post" class="stack">';
+    echo '<input type="hidden" name="act" value="add_role_map"><input type="hidden" name="jump" value="role-maps">';
+    echo '<label>Platform role</label><select name="role_id" required>';
+    foreach ($roles as $r) {
+        echo '<option value="' . (int)ba_col($r, 'id') . '">' . h((string)ba_col($r, 'name')) . '</option>';
     }
     echo '</select>';
-    echo '<input name="group_name" placeholder="Group name (optional)">';
-    echo '<input name="group_id" placeholder="CN or full DN" required>';
-    echo '<button>Add mapping</button></form>';
-    echo '<table><thead><tr><th>Department</th><th>Group name</th><th>Group ID</th><th></th></tr></thead><tbody>';
+    echo '<label>Group name (optional)</label><input name="group_name">';
+    echo '<label>Group ID</label><input name="group_id" placeholder="CN or full DN" required>';
+    echo '<button>Add role mapping</button></form>';
+    ba_users_modal_close();
+}
+
+function ba_users_dept_map_card(array $depts, array $maps, string $openModal): void
+{
+    echo '<div class="ucard" id="dept-maps">';
+    echo '<div class="ucard-head"><h3>Security group → department mapping</h3>';
+    echo '<button type="button" class="btn" data-open-modal="modal-add-dept-map">Add department mapping</button></div>';
+    echo '<div class="ucard-body">';
+    echo '<p class="muted">When LDAPS sign-in matches one of these groups, the user\'s department is set from the map. If several match, the first one saved is used. A sign-in that matches no department map leaves the current department as it is.</p>';
+    echo '<div class="users-scroll"><table><thead><tr><th>Department</th><th>Group name</th><th>Group ID</th><th></th></tr></thead><tbody>';
     foreach ($maps as $m) {
         $color = ba_color_hex((string)ba_col($m, 'color_hex'));
         echo '<tr><td><span class="dept-swatch" style="background:' . h($color) . '"></span> ' . h((string)ba_col($m, 'department_name')) . '</td>';
@@ -897,5 +942,61 @@ function ba_users_dept_map_card(array $depts, array $maps): void
     if (!$maps) {
         echo '<tr><td colspan="4" class="muted">No department maps yet.</td></tr>';
     }
-    echo '</tbody></table></div>';
+    echo '</tbody></table></div></div></div>';
+
+    ba_users_modal_open('modal-add-dept-map', 'Add department mapping', $openModal === 'add_dept_map');
+    echo '<form method="post" class="stack">';
+    echo '<input type="hidden" name="act" value="add_dept_map"><input type="hidden" name="jump" value="dept-maps">';
+    echo '<label>Department</label><select name="department_id" required><option value="">Department</option>';
+    foreach ($depts as $d) {
+        if ((int)ba_col($d, 'is_active', 1) !== 1) {
+            continue;
+        }
+        echo '<option value="' . (int)ba_col($d, 'id') . '">' . h((string)ba_col($d, 'name')) . '</option>';
+    }
+    echo '</select>';
+    echo '<label>Group name (optional)</label><input name="group_name">';
+    echo '<label>Group ID</label><input name="group_id" placeholder="CN or full DN" required>';
+    echo '<button>Add department mapping</button></form>';
+    ba_users_modal_close();
+}
+
+function ba_users_modal_script(): void
+{
+    echo <<<'JS'
+<script>
+(function () {
+  function hide(m) {
+    var href = m.getAttribute('data-close-href') || '';
+    if (href) {
+      window.location.href = href;
+      return;
+    }
+    m.hidden = true;
+    m.setAttribute('aria-hidden', 'true');
+  }
+  document.addEventListener('click', function (e) {
+    var opener = e.target.closest('[data-open-modal]');
+    if (opener) {
+      var id = opener.getAttribute('data-open-modal');
+      var modal = id ? document.getElementById(id) : null;
+      if (!modal) return;
+      modal.hidden = false;
+      modal.setAttribute('aria-hidden', 'false');
+      var field = modal.querySelector('input:not([type=hidden]), select, textarea');
+      if (field) field.focus();
+      return;
+    }
+    if (e.target.closest('[data-close-modal]')) {
+      var modal = e.target.closest('.ldaps-modal');
+      if (modal) hide(modal);
+    }
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    document.querySelectorAll('.ldaps-modal:not([hidden])').forEach(hide);
+  });
+})();
+</script>
+JS;
 }
