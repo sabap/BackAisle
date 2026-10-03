@@ -193,7 +193,7 @@ function ba_ldap_login(PDO $db, string $username, string $password): bool {
             ba_access_exec(
                 $db,
                 'UPDATE users SET role=?, display_name=?, source=?, role_id=?, department_id=?, email=? WHERE id=?',
-                [ba_role_column($resolved['name']), $display, 'ldap', $resolved['id'], $deptId, $email, (int)ba_col($row, 'id')]
+                [ba_role_column($resolved['name'], (string)($resolved['code'] ?? '')), $display, 'ldap', $resolved['id'], $deptId, $email, (int)ba_col($row, 'id')]
             );
         } else {
             ba_access_exec(
@@ -207,7 +207,7 @@ function ba_ldap_login(PDO $db, string $username, string $password): bool {
         ba_access_exec(
             $db,
             'INSERT INTO users (username, password_hash, role, source, display_name, email, role_id, department_id, is_active) VALUES (?,?,?,?,?,?,?,?,1)',
-            [$username, 'ldap', ba_role_column($resolved['name']), 'ldap', $display, $mail !== '' ? $mail : null, $resolved['id'], $deptId]
+            [$username, 'ldap', ba_role_column($resolved['name'], (string)($resolved['code'] ?? '')), 'ldap', $display, $mail !== '' ? $mail : null, $resolved['id'], $deptId]
         );
         $id = ba_last_id($db);
     }
@@ -242,8 +242,8 @@ function ba_ldap_choose_role(PDO $db, ?array $mapped, ?array $existing, bool $re
     if ($existing) {
         $keep = ba_ldap_pack_role(ba_role_by_id($db, (int)ba_col($existing, 'role_id')));
         if ($keep === null) {
-            $name = ba_role_gate((string)ba_col($existing, 'role', 'viewer')) === 'admin' ? 'Global Admin' : 'Viewer';
-            $keep = ba_ldap_pack_role(ba_role_by_id($db, ba_role_id_by_name($db, $name)));
+            $code = ba_role_gate((string)ba_col($existing, 'role', 'viewer')) === 'admin' ? 'global' : 'view';
+            $keep = ba_ldap_pack_role(ba_role_by_id($db, ba_role_id_by_code($db, $code)));
         }
         if ($keep !== null) {
             return ['deny' => false, 'assign' => false, 'role' => $keep];
@@ -288,7 +288,8 @@ function ba_ldap_pack_role(?array $role): ?array
     return [
         'id' => $role['id'],
         'name' => $role['name'],
-        'gate' => ba_role_gate($role['name']),
+        'code' => (string)($role['code'] ?? ''),
+        'gate' => ba_role_gate_for($role),
         'permissions' => $role['permissions'],
     ];
 }
@@ -298,7 +299,7 @@ function ba_ldap_default_role(PDO $db): ?array
     $id = (int)ba_setting($db, 'ldap_default_role_id', '0');
     $role = $id > 0 ? ba_role_by_id($db, $id) : null;
     if ($role === null) {
-        $role = ba_role_by_id($db, ba_role_id_by_name($db, 'Viewer'));
+        $role = ba_role_by_id($db, ba_role_id_by_code($db, 'view'));
     }
     return ba_ldap_pack_role($role);
 }
