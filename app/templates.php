@@ -169,7 +169,7 @@ function ba_tpl_save_picture(int $id, string $field, array $file): ?string {
 function page_templates(PDO $db, array $user): void {
     ba_ensure_column($db, 'device_templates', 'snmp_profile_id', 'INT NULL');
     ba_ensure_template_ports($db);
-    $admin = ($user['role'] ?? '') === 'admin';
+    $admin = ba_editor($user, 'edit_templates');
     $id = (int)($_GET['id'] ?? 0);
     $action = $_GET['action'] ?? '';
     $msg = '';

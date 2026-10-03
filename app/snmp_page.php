@@ -179,7 +179,7 @@ function page_snmp(PDO $db, array $user): void
 
 function page_snmp_body(PDO $db, array $user): void
 {
-    $admin = ($user['role'] ?? '') === 'admin';
+    $admin = ba_editor($user, 'edit_snmp');
     $msg = '';
     $flashCls = 'flash';
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && $admin) {

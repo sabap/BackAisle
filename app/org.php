@@ -88,7 +88,7 @@ function ba_group_path(PDO $db, ?int $id): string {
 }
 
 function page_org(PDO $db, array $user): void {
-    ba_require_admin();
+    ba_require_perm('edit_org');
     $tab = $_POST['tab'] ?? $_GET['tab'] ?? 'groups';
     $msg = '';
     $groups = ba_groups($db);
@@ -215,19 +215,16 @@ function page_org(PDO $db, array $user): void {
                 ba_audit($db, 'add_default_ups', 'device', (string)$did, $ip);
                 $msg = "Default UPS $ip queued (cyber/cyber + config profile). Job #$jid";
             } elseif ($act === 'ldap_save') {
-                foreach (['ldap_host','ldap_port','ldap_base_dn','ldap_user_filter','ldap_bind_dn'] as $k) {
-                    ba_set_setting($db, $k, trim($_POST[$k] ?? ''));
+                ba_save_ldap_settings($db, $_POST);
+                if (isset($_POST['alert_hold_sec'])) {
+                    ba_set_setting($db, 'alert_hold_sec', (string)(int)$_POST['alert_hold_sec']);
                 }
-                if (trim($_POST['ldap_bind_password'] ?? '') !== '') {
-                    ba_set_setting($db, 'ldap_bind_password', $_POST['ldap_bind_password']);
-                }
-                ba_set_setting($db, 'ldap_enabled', isset($_POST['ldap_enabled']) ? '1' : '0');
-                ba_set_setting($db, 'ldap_use_ssl', isset($_POST['ldap_use_ssl']) ? '1' : '0');
-                ba_set_setting($db, 'ldap_tls_insecure', isset($_POST['ldap_tls_insecure']) ? '1' : '0');
-                ba_set_setting($db, 'ldap_require_group', isset($_POST['ldap_require_group']) ? '1' : '0');
-                ba_set_setting($db, 'alert_hold_sec', (string)(int)($_POST['alert_hold_sec'] ?? 180));
                 ba_audit($db, 'ldap_save', 'ldap', null);
                 $msg = 'LDAPS settings saved';
+            } elseif ($act === 'ldap_hold') {
+                ba_set_setting($db, 'alert_hold_sec', (string)(int)($_POST['alert_hold_sec'] ?? 180));
+                ba_audit($db, 'ldap_hold', 'settings', null);
+                $msg = 'Alert hold saved';
             } elseif ($act === 'ldap_map') {
                 $db->prepare('INSERT INTO ldap_role_maps (group_token, role) VALUES (?,?)')
                     ->execute([trim($_POST['group_token']), $_POST['role'] === 'admin' ? 'admin' : 'viewer']);
@@ -435,29 +432,13 @@ PY);
     }
 
     if ($tab === 'ldap') {
-        $c = ba_ldap_cfg($db);
-        echo '<form method="post" class="card stack"><h3>LDAPS (Active Directory)</h3>';
-        echo '<p class="muted">Same model as ColdAisle: service bind, user search, nested group matching (LDAP_MATCHING_RULE_IN_CHAIN), map security group CN/DN to viewer or admin. PHP ldap extension is enabled for this site.</p>';
-        echo '<label><input type="checkbox" name="ldap_enabled" '.($c['enabled']?'checked':'').'> Enable LDAPS</label>';
-        echo '<label>Host</label><input name="ldap_host" value="'.h($c['host']).'" placeholder="dc.example.org">';
-        echo '<label>Port</label><input name="ldap_port" value="'.h((string)$c['port']).'">';
-        echo '<label>Base DN</label><input name="ldap_base_dn" value="'.h($c['base_dn']).'" placeholder="DC=example,DC=org">';
-        echo '<label>User filter</label><input name="ldap_user_filter" value="'.h($c['user_filter']).'">';
-        echo '<label>Bind DN</label><input name="ldap_bind_dn" value="'.h($c['bind_dn']).'">';
-        echo '<label>Bind password (blank = keep)</label><input type="password" name="ldap_bind_password">';
-        echo '<label><input type="checkbox" name="ldap_use_ssl" '.($c['use_ssl']?'checked':'').'> Use SSL (ldaps://)</label>';
-        echo '<label><input type="checkbox" name="ldap_tls_insecure" '.($c['tls_insecure']?'checked':'').'> Do not verify LDAPS cert (internal CA)</label>';
-        echo '<label><input type="checkbox" name="ldap_require_group" '.($c['require_group']?'checked':'').'> Require mapped security group to create accounts</label>';
-        echo '<label>Alert hold seconds (group vs individual)</label><input type="number" name="alert_hold_sec" value="'.h(ba_setting($db,'alert_hold_sec','180')).'">';
-        echo '<input type="hidden" name="act" value="ldap_save"><button>Save LDAPS</button></form>';
-        echo '<div class="card"><h3>Role maps</h3><form method="post" class="filters">';
-        echo '<input name="group_token" placeholder="CN or full DN of AD group" required>';
-        echo '<select name="role"><option value="viewer">viewer</option><option value="admin">admin</option></select>';
-        echo '<input type="hidden" name="act" value="ldap_map"><button>Add map</button></form><table>';
-        foreach ($db->query('SELECT * FROM ldap_role_maps') as $m) {
-            echo '<tr><td>'.h($m['group_token']).'</td><td>'.h($m['role']).'</td><td><form method="post"><input type="hidden" name="act" value="ldap_map_del"><input type="hidden" name="id" value="'.(int)$m['id'].'"><button>remove</button></form></td></tr>';
-        }
-        echo '</table></div>';
+        echo '<div class="card stack"><h3>LDAPS</h3>';
+        echo '<p class="muted">Directory sign-in, departments, users, platform roles, and security-group maps are on Users.</p>';
+        echo '<p><a class="btn" href="'.h(ba_href('/users')).'#ldaps">Open Users &amp; departments</a></p></div>';
+        echo '<form method="post" class="card stack"><h3>Alert hold</h3>';
+        echo '<p class="muted">How long a repeated reading waits before it becomes its own alert.</p>';
+        echo '<label>Seconds</label><input type="number" name="alert_hold_sec" value="'.h(ba_setting($db,'alert_hold_sec','180')).'">';
+        echo '<input type="hidden" name="act" value="ldap_hold"><button>Save alert hold</button></form>';
     }
 
     if ($tab === 'certs') {

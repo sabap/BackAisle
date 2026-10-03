@@ -111,7 +111,7 @@ function ba_cancel_write_job(PDO $db, int $id, string $by): array
 }
 
 function page_fleet_writes(PDO $db, array $user): void {
-    ba_require_admin();
+    ba_require_perm('edit_writes');
     $msg = '';
     $devices = ba_writable_devices($db);
     $templates = $db->query("SELECT * FROM config_templates ORDER BY id DESC")->fetchAll();
@@ -307,7 +307,7 @@ function page_fleet_writes(PDO $db, array $user): void {
 }
 
 function page_template_view(PDO $db): void {
-    ba_require_admin();
+    ba_require_perm('edit_writes');
     $id = (int)($_GET['id'] ?? 0);
     $t = $db->prepare('SELECT * FROM config_templates WHERE id=?');
     $t->execute([$id]);
@@ -322,7 +322,7 @@ function page_template_view(PDO $db): void {
 }
 
 function page_job_view(PDO $db): void {
-    $user = ba_require_admin();
+    $user = ba_require_perm('edit_writes');
     $id = (int)($_GET['id'] ?? $_POST['id'] ?? 0);
     $cancelMsg = '';
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && (string)($_POST['act'] ?? '') === 'cancel') {
