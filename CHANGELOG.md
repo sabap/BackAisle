@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.5.58] - 2026-10-03
+
+- The Users page is cards with a bronze header. Add department, Add user, Add role mapping, and Add department mapping are buttons on those headers and open a dialog. Edit department and edit user open the same way.
+- LDAPS authentication spans the page. Connection, the enterprise CA, and the connection test sit in columns so the form is shorter.
+
 ## [0.5.57] - 2026-10-03
 
 - Platform role names are editable. They start as Global Admin, IDFM Admin, Department Admin, and View Only. Save roles keeps a name you change. Restore defaults puts those four names and their original permissions back. The Area column is no longer covered by the table header.
