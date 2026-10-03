@@ -151,6 +151,42 @@ def log(msg: str) -> None:
         f.write(line + "\n")
 
 
+def _acquire_once_lock():
+    """One manual poll at a time. The web request checks this same file."""
+    import msvcrt
+    path = ROOT / "logs" / "collector-once.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fh = open(path, "a+b")
+    try:
+        # Do not read byte 0 here. Another poll may already have it locked,
+        # and a read of that byte is a sharing error rather than "busy".
+        fh.seek(0, 2)
+        if fh.tell() < 1:
+            fh.write(b"\0")
+            fh.flush()
+        fh.seek(0)
+        msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+    except OSError:
+        fh.close()
+        return None
+    return fh
+
+
+def _release_once_lock(fh) -> None:
+    import msvcrt
+    if fh is None:
+        return
+    try:
+        fh.seek(0)
+        msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+    except OSError:
+        pass
+    try:
+        fh.close()
+    except OSError:
+        pass
+
+
 def thresholds_for(con, device: dict) -> dict:
     rows = con.execute(
         """SELECT * FROM thresholds
@@ -1093,17 +1129,26 @@ def main():
     global snmp_get, new_engine, close_engine
     from snmp_client import close_engine, new_engine, snmp_get  # noqa: E402
     seed_from_env()
-    PID.write_text(str(os_getpid()), encoding="utf-8")
     if args.qc:
         asyncio.run(qc_poll(secrets, args.qc))
         return
-    if only_ids:
-        log(f"one-shot poll ids={only_ids}")
-        asyncio.run(poll_cycle(secrets, climate=True, only_ids=only_ids))
+    if only_ids or args.once or args.init:
+        lock = _acquire_once_lock()
+        if lock is None:
+            log("one-shot poll already running")
+            return
+        try:
+            if only_ids:
+                log(f"one-shot poll ids={len(only_ids)}")
+                asyncio.run(poll_cycle(secrets, climate=True, only_ids=only_ids))
+            else:
+                log("one-shot poll scheduled")
+                asyncio.run(poll_cycle(secrets, climate=True))
+        finally:
+            _release_once_lock(lock)
         return
-    if args.once or args.init:
-        asyncio.run(poll_cycle(secrets, climate=True))
-        return
+    # The daemon owns this pid. A one-shot must not replace it.
+    PID.write_text(str(os_getpid()), encoding="utf-8")
     threading.Thread(target=trap_loop, args=(secrets,), daemon=True).start()
     log("collector starting")
     asyncio.run(daemon(secrets))
