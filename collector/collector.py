@@ -453,6 +453,14 @@ def store_sample(con, device_id, sample, va_rating=2000):
     if sample.get("sensor_present") is not None:
         fields.append("sensor_present=?")
         args.append(sample["sensor_present"])
+    # Card is the editor for the replacement date. An empty SNMP reply must not
+    # wipe a date already stored. Recommended months fills replace-by the same way.
+    if sample.get("battery_last_replace"):
+        fields.append("last_battery_replacement=?")
+        args.append(sample["battery_last_replace"])
+    if sample.get("battery_replace_by"):
+        fields.append("warranty_replace_by=?")
+        args.append(sample["battery_replace_by"])
     if fields:
         args.append(device_id)
         con.execute(f"UPDATE devices SET {', '.join(fields)}, updated_at=? WHERE id=?", [*args[:-1], now(), device_id])
