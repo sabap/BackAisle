@@ -350,7 +350,8 @@ CREATE TABLE roles (
   name NVARCHAR(64) NOT NULL UNIQUE,
   description NVARCHAR(500) NULL,
   permissions NVARCHAR(MAX) NOT NULL,
-  is_system INT NOT NULL CONSTRAINT DF_ba_roles_system DEFAULT 1
+  is_system INT NOT NULL CONSTRAINT DF_ba_roles_system DEFAULT 1,
+  code NVARCHAR(32) NULL
 );
 GO
 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'role_group_maps')

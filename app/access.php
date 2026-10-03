@@ -53,34 +53,50 @@ function ba_view_permissions(): array
 }
 
 /**
- * Built-in platform roles. Names match ColdAisle. Permissions are BackAisle areas.
+ * Built-in platform roles, keyed by a stable code. The name is the editable label.
  *
- * @return array<string, array{description:string, permissions:list<string>}>
+ * @return array<string, array{name:string, description:string, permissions:list<string>}>
  */
 function ba_system_roles(): array
 {
     $view = ba_view_permissions();
     return [
-        'Viewer' => [
-            'description' => 'Read-only. Dashboard, inventory, fleet, climate, and alerts.',
-            'permissions' => $view,
+        'global' => [
+            'name' => 'Global Admin',
+            'description' => 'Full access, including users, departments, LDAPS, backups, and updates.',
+            'permissions' => ['*'],
         ],
-        'Department Admin' => [
-            'description' => 'View the site. Edit devices that belong to their department, and ack or clear alerts.',
-            'permissions' => array_merge($view, ['edit_devices_dept', 'edit_alerts']),
-        ],
-        'Data Center Admin' => [
+        'idfm' => [
+            'name' => 'IDFM Admin',
             'description' => 'Edit racks, inventory, templates, SNMP, org data, and fleet writes. No users or site settings.',
             'permissions' => array_merge($view, [
                 'edit_devices_all', 'edit_infrastructure', 'edit_templates', 'edit_snmp',
                 'edit_writes', 'edit_alerts', 'edit_org',
             ]),
         ],
-        'Global Admin' => [
-            'description' => 'Full access, including users, departments, LDAPS, backups, and updates.',
-            'permissions' => ['*'],
+        'department' => [
+            'name' => 'Department Admin',
+            'description' => 'View the site. Edit devices that belong to their department, and ack or clear alerts.',
+            'permissions' => array_merge($view, ['edit_devices_dept', 'edit_alerts']),
+        ],
+        'view' => [
+            'name' => 'View Only',
+            'description' => 'Read-only. Dashboard, inventory, fleet, climate, and alerts.',
+            'permissions' => $view,
         ],
     ];
+}
+
+/** Older labels that should become the current default name once. */
+function ba_role_legacy_names(string $code): array
+{
+    return match ($code) {
+        'global' => ['Global Admin'],
+        'idfm' => ['IDFM Admin', 'Data Center Admin'],
+        'department' => ['Department Admin'],
+        'view' => ['View Only', 'Viewer'],
+        default => [],
+    };
 }
 
 /** @return list<array{label:string, view:?string, edit:?string, edit_dept:?string}> */
@@ -121,13 +137,24 @@ function ba_privileged_permissions(): array
     return ['manage_users', 'manage_settings'];
 }
 
+function ba_role_code_gate(string $code): string
+{
+    return match (strtolower(trim($code))) {
+        'global' => 'admin',
+        'idfm' => 'dc_admin',
+        'department' => 'dept_admin',
+        'view' => 'viewer',
+        default => '',
+    };
+}
+
 function ba_role_gate(string $roleName): string
 {
     $n = strtolower(trim($roleName));
     if ($n === 'global admin' || $n === 'administrator' || $n === 'admin') {
         return 'admin';
     }
-    if ($n === 'data center admin' || $n === 'operator') {
+    if ($n === 'idfm admin' || $n === 'data center admin' || $n === 'operator') {
         return 'dc_admin';
     }
     if ($n === 'department admin') {
@@ -136,24 +163,41 @@ function ba_role_gate(string $roleName): string
     return 'viewer';
 }
 
-/** users.role stays admin or viewer. SQLite installs reject any other value. The platform role lives in role_id. */
-function ba_role_column(string $roleName): string
+function ba_role_gate_for(array $role): string
 {
-    return ba_role_gate($roleName) === 'admin' ? 'admin' : 'viewer';
+    $byCode = ba_role_code_gate((string)($role['code'] ?? ''));
+    if ($byCode !== '') {
+        return $byCode;
+    }
+    return ba_role_gate((string)($role['name'] ?? ''));
 }
 
-function ba_role_rank(string $name, array $perms): int
+/** users.role stays admin or viewer. SQLite installs reject any other value. The platform role lives in role_id. */
+function ba_role_column(string $roleName, string $code = ''): string
 {
+    $gate = $code !== '' ? ba_role_code_gate($code) : '';
+    if ($gate === '') {
+        $gate = ba_role_gate($roleName);
+    }
+    return $gate === 'admin' ? 'admin' : 'viewer';
+}
+
+function ba_role_rank(string $name, array $perms, string $code = ''): int
+{
+    $byCode = ['global' => 100, 'idfm' => 80, 'department' => 60, 'view' => 20];
     $rank = [
         'global admin' => 100,
         'administrator' => 100,
+        'idfm admin' => 80,
         'data center admin' => 80,
         'operator' => 70,
         'department admin' => 60,
         'auditor' => 30,
+        'view only' => 20,
         'viewer' => 20,
     ];
-    $score = $rank[strtolower(trim($name))] ?? 10;
+    $codeKey = strtolower(trim($code));
+    $score = $byCode[$codeKey] ?? ($rank[strtolower(trim($name))] ?? 10);
     if (in_array('*', $perms, true)) {
         $score = max($score, 100);
     }
@@ -256,7 +300,8 @@ function ba_ensure_access_schema(PDO $db): void
                name NVARCHAR(64) NOT NULL UNIQUE,
                description NVARCHAR(500) NULL,
                permissions NVARCHAR(MAX) NOT NULL,
-               is_system INT NOT NULL CONSTRAINT DF_ba_roles_system DEFAULT 1
+               is_system INT NOT NULL CONSTRAINT DF_ba_roles_system DEFAULT 1,
+               code NVARCHAR(32) NULL
              )"
         );
         $db->exec(
@@ -315,7 +360,8 @@ function ba_ensure_access_schema(PDO $db): void
                name TEXT NOT NULL UNIQUE,
                description TEXT,
                permissions TEXT NOT NULL,
-               is_system INTEGER NOT NULL DEFAULT 1
+               is_system INTEGER NOT NULL DEFAULT 1,
+               code TEXT
              )"
         );
         $db->exec(
@@ -372,25 +418,66 @@ function ba_table_exists(PDO $db, string $table): bool
     }
 }
 
+function ba_roles_add_code(PDO $db): void
+{
+    if (!ba_table_exists($db, 'roles')) {
+        return;
+    }
+    if (ba_db_driver() === 'sqlsrv') {
+        $db->exec("IF COL_LENGTH('roles', 'code') IS NULL ALTER TABLE roles ADD code NVARCHAR(32) NULL");
+        return;
+    }
+    if (function_exists('ba_add_col')) {
+        ba_add_col($db, 'roles', 'code', 'TEXT');
+    }
+}
+
 function ba_seed_roles(PDO $db): void
 {
-    foreach (ba_system_roles() as $name => $def) {
-        $st = ba_access_exec($db, 'SELECT id, permissions FROM roles WHERE name=?', [$name]);
-        $row = $st->fetch();
+    ba_roles_add_code($db);
+    foreach (ba_system_roles() as $code => $def) {
+        $row = null;
+        try {
+            $row = ba_access_exec($db, 'SELECT id, name, code FROM roles WHERE code=?', [$code])->fetch();
+        } catch (Throwable $e) {
+            $row = null;
+        }
+        if (!$row) {
+            foreach (ba_role_legacy_names($code) as $legacy) {
+                $found = ba_access_exec($db, 'SELECT id, name, code FROM roles WHERE name=?', [$legacy])->fetch();
+                if ($found) {
+                    $row = $found;
+                    break;
+                }
+            }
+        }
         $json = json_encode($def['permissions'], JSON_UNESCAPED_UNICODE);
         if ($row) {
-            $fields = [$def['description'], (int)ba_col($row, 'id')];
-            if ($name === 'Global Admin') {
-                ba_access_exec($db, 'UPDATE roles SET description=?, permissions=?, is_system=1 WHERE id=?', [$def['description'], '["*"]', (int)ba_col($row, 'id')]);
+            $id = (int)ba_col($row, 'id');
+            $name = (string)ba_col($row, 'name');
+            $rename = ['view' => 'Viewer', 'idfm' => 'Data Center Admin'];
+            if (isset($rename[$code]) && strcasecmp($name, $rename[$code]) === 0) {
+                $name = $def['name'];
+            }
+            if ($code === 'global') {
+                ba_access_exec(
+                    $db,
+                    'UPDATE roles SET name=?, description=?, permissions=?, is_system=1, code=? WHERE id=?',
+                    [$name, $def['description'], '["*"]', $code, $id]
+                );
             } else {
-                ba_access_exec($db, 'UPDATE roles SET description=?, is_system=1 WHERE id=?', $fields);
+                ba_access_exec(
+                    $db,
+                    'UPDATE roles SET name=?, description=?, is_system=1, code=? WHERE id=?',
+                    [$name, $def['description'], $code, $id]
+                );
             }
             continue;
         }
         ba_access_exec(
             $db,
-            'INSERT INTO roles (name, description, permissions, is_system) VALUES (?,?,?,1)',
-            [$name, $def['description'], $json]
+            'INSERT INTO roles (name, description, permissions, is_system, code) VALUES (?,?,?,1,?)',
+            [$def['name'], $def['description'], $json, $code]
         );
     }
 }
@@ -407,13 +494,13 @@ function ba_link_user_roles(PDO $db): void
     $rows = $db->query('SELECT id, role, role_id FROM users WHERE role_id IS NULL')->fetchAll();
     foreach ($rows as $u) {
         $gate = strtolower(trim((string)ba_col($u, 'role')));
-        $name = match ($gate) {
-            'admin' => 'Global Admin',
-            'dc_admin' => 'Data Center Admin',
-            'dept_admin' => 'Department Admin',
-            default => 'Viewer',
+        $code = match ($gate) {
+            'admin' => 'global',
+            'dc_admin' => 'idfm',
+            'dept_admin' => 'department',
+            default => 'view',
         };
-        $rid = ba_role_id_by_name($db, $name);
+        $rid = ba_role_id_by_code($db, $code);
         if ($rid > 0) {
             ba_access_exec($db, 'UPDATE users SET role_id=? WHERE id=?', [$rid, (int)ba_col($u, 'id')]);
         }
@@ -439,8 +526,8 @@ function ba_import_legacy_role_maps(PDO $db): void
         if ($token === '') {
             continue;
         }
-        $roleName = strtolower((string)ba_col($m, 'role')) === 'admin' ? 'Global Admin' : 'Viewer';
-        $rid = ba_role_id_by_name($db, $roleName);
+        $code = strtolower((string)ba_col($m, 'role')) === 'admin' ? 'global' : 'view';
+        $rid = ba_role_id_by_code($db, $code);
         if ($rid < 1) {
             continue;
         }
@@ -467,13 +554,32 @@ function ba_role_id_by_name(PDO $db, string $name): int
     return (int)$st->fetchColumn();
 }
 
+function ba_role_id_by_code(PDO $db, string $code): int
+{
+    try {
+        $st = ba_access_exec($db, 'SELECT id FROM roles WHERE code=?', [$code]);
+        $id = (int)$st->fetchColumn();
+        if ($id > 0) {
+            return $id;
+        }
+    } catch (Throwable $e) {
+    }
+    foreach (ba_role_legacy_names($code) as $name) {
+        $id = ba_role_id_by_name($db, $name);
+        if ($id > 0) {
+            return $id;
+        }
+    }
+    return 0;
+}
+
 /** @return array{id:int, name:string, permissions:list<string>}|null */
 function ba_role_by_id(PDO $db, int $id): ?array
 {
     if ($id < 1) {
         return null;
     }
-    $st = ba_access_exec($db, 'SELECT id, name, permissions FROM roles WHERE id=?', [$id]);
+    $st = ba_access_exec($db, 'SELECT id, name, permissions, code FROM roles WHERE id=?', [$id]);
     $row = $st->fetch();
     if (!$row) {
         return null;
@@ -481,6 +587,7 @@ function ba_role_by_id(PDO $db, int $id): ?array
     return [
         'id' => (int)ba_col($row, 'id'),
         'name' => (string)ba_col($row, 'name'),
+        'code' => (string)ba_col($row, 'code'),
         'permissions' => ba_perm_list(ba_col($row, 'permissions')),
     ];
 }
@@ -492,7 +599,7 @@ function ba_session_user(PDO $db, array $row): array
     $role = ba_role_by_id($db, $roleId);
     $roleName = $role['name'] ?? '';
     $perms = $role['permissions'] ?? [];
-    $gate = $roleName !== '' ? ba_role_gate($roleName) : (string)ba_col($row, 'role', 'viewer');
+    $gate = $role ? ba_role_gate_for($role) : (string)ba_col($row, 'role', 'viewer');
     if ($gate === '') {
         $gate = 'viewer';
     }
@@ -618,7 +725,7 @@ function ba_access_role_from_groups(PDO $db, array $tokens): ?array
     if (!$want) {
         return null;
     }
-    $sql = 'SELECT m.role_id, m.group_id, m.group_name, r.name AS role_name, r.permissions
+    $sql = 'SELECT m.role_id, m.group_id, m.group_name, r.name AS role_name, r.permissions, r.code AS role_code
             FROM role_group_maps m
             INNER JOIN roles r ON r.id = m.role_id
             WHERE m.is_active=1 AND m.auth_source=?';
@@ -634,14 +741,16 @@ function ba_access_role_from_groups(PDO $db, array $tokens): ?array
             continue;
         }
         $name = (string)ba_col($m, 'role_name');
+        $code = (string)ba_col($m, 'role_code');
         $perms = ba_perm_list(ba_col($m, 'permissions'));
-        $score = ba_role_rank($name, $perms);
+        $score = ba_role_rank($name, $perms, $code);
         if ($score > $bestScore) {
             $bestScore = $score;
             $best = [
                 'id' => (int)ba_col($m, 'role_id'),
                 'name' => $name,
-                'gate' => ba_role_gate($name),
+                'code' => $code,
+                'gate' => ba_role_gate_for(['name' => $name, 'code' => $code]),
                 'permissions' => $perms,
             ];
         }
@@ -672,22 +781,23 @@ function ba_access_role_from_legacy(PDO $db, array $tokens): ?array
         if ($token === '' || !isset($want[strtolower($token)])) {
             continue;
         }
-        $pick = strtolower((string)ba_col($m, 'role')) === 'admin' ? 'Global Admin' : ($pick ?? 'Viewer');
-        if ($pick === 'Global Admin') {
+        $pick = strtolower((string)ba_col($m, 'role')) === 'admin' ? 'global' : ($pick ?? 'view');
+        if ($pick === 'global') {
             break;
         }
     }
     if ($pick === null) {
         return null;
     }
-    $role = ba_role_by_id($db, ba_role_id_by_name($db, $pick));
+    $role = ba_role_by_id($db, ba_role_id_by_code($db, $pick));
     if (!$role) {
         return null;
     }
     return [
         'id' => $role['id'],
         'name' => $role['name'],
-        'gate' => ba_role_gate($role['name']),
+        'code' => $role['code'],
+        'gate' => ba_role_gate_for($role),
         'permissions' => $role['permissions'],
     ];
 }
@@ -705,8 +815,8 @@ function ba_access_pick_role(?array $a, ?array $b): ?array
     if ($b === null) {
         return $a;
     }
-    $sa = ba_role_rank($a['name'], $a['permissions']);
-    $sb = ba_role_rank($b['name'], $b['permissions']);
+    $sa = ba_role_rank($a['name'], $a['permissions'], (string)($a['code'] ?? ''));
+    $sb = ba_role_rank($b['name'], $b['permissions'], (string)($b['code'] ?? ''));
     return $sa >= $sb ? $a : $b;
 }
 
@@ -768,7 +878,7 @@ function ba_department_field(PDO $db, array $user, ?int $selected): void
 
 function ba_active_global_admins(PDO $db, int $exceptId = 0): int
 {
-    $gid = ba_role_id_by_name($db, 'Global Admin');
+    $gid = ba_role_id_by_code($db, 'global');
     if ($gid < 1) {
         $st = ba_access_exec($db, "SELECT COUNT(*) FROM users WHERE is_active=1 AND role='admin' AND id<>?", [$exceptId]);
         return (int)$st->fetchColumn();

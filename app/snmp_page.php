@@ -506,7 +506,7 @@ function page_snmp_body(PDO $db, array $user): void
         })();
         </script>';
     } else {
-        echo '<div class="card"><p class="muted">Viewer: schedule is read-only. Ask an admin to poll or change membership.</p>';
+        echo '<div class="card"><p class="muted">View Only: schedule is read-only. Ask an admin to poll or change membership.</p>';
         echo '<table><thead><tr><th>Host</th><th>IP</th><th>Last OK</th><th>State</th></tr></thead><tbody>';
         foreach ($scheduled as $d) {
             echo '<tr><td>'.h(ba_txt($d['hostname'] ?: $d['ip'], '')).'</td><td>'.h(ba_txt($d['ip'])).'</td><td>'.h(ba_txt($d['last_success'])).'</td><td>'.h(ba_txt($d['comm_state'])).'</td></tr>';

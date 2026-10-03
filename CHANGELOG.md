@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.57] - 2026-10-03
+
+- Platform role names are editable. They start as Global Admin, IDFM Admin, Department Admin, and View Only. Save roles keeps a name you change. Restore defaults puts those four names and their original permissions back. The Area column is no longer covered by the table header.
+
 ## [0.5.56] - 2026-10-03
 
 - LDAPS can trust an enterprise certificate authority. Upload the root, and an intermediate if you have one, exported from AD Certificate Services as PEM, Base-64 .CER, or DER. The file stays in the site data folder, outside the web site. After it is saved, turn certificate checks back on.
