@@ -572,6 +572,7 @@ class BackAisleUpdate
             'data/', 'logs/', 'storage/backups/', 'storage/tmp/',
             '.git/', 'secrets.env', 'php.ini',
             'config/config.php', 'config/collector.json', 'config/cacert.pem',
+            'config/ldap-ca.pem', 'config/ldap-trust.pem', 'config/ldap.conf',
             'public/web.config', 'public/assets/tpl/',
         ] as $p) {
             if ($relNorm === rtrim($p, '/') || str_starts_with($relNorm, $p)) {
