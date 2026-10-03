@@ -9,8 +9,14 @@ html,body { margin:0; background:var(--bg); color:var(--ink); }
 a { color:var(--acc); text-decoration:none; }
 a:hover { text-decoration:underline; }
 .top { display:flex; align-items:center; gap:1.5rem; padding:.6rem 1rem; background:#0e141c; border-bottom:1px solid var(--line); position:sticky; top:0; z-index:10; }
-.brand { font-weight:700; letter-spacing:.04em; }
-.brand small { color:var(--muted); font-weight:400; margin-left:.4rem; }
+a.brand, a.brand:hover { color:var(--ink); text-decoration:none; }
+.brand { display:flex; align-items:center; gap:.5rem; font-weight:700; letter-spacing:.02em; }
+.brand-mark { width:28px; height:28px; display:block; flex:0 0 28px; }
+.brand-text { display:flex; align-items:baseline; gap:.45rem; min-width:0; }
+.brand-name { line-height:1; }
+.brand small { color:#d7b48a; font-weight:700; letter-spacing:.14em; font-size:.68rem; margin:0; text-transform:uppercase; }
+.login .brand-mark { width:40px; height:40px; flex-basis:40px; }
+.login .brand-text { flex-direction:column; align-items:flex-start; gap:.12rem; }
 .mark { display:inline-block; background:#1c3b5a; color:#9fd; padding:.1rem .35rem; border-radius:4px; margin-right:.35rem; font-size:.8rem; }
 .top nav { display:flex; gap:.35rem; flex-wrap:wrap; align-items:center; }
 .top nav a { color:var(--muted); padding:.35rem .7rem; border-radius:6px; }

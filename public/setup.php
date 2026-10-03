@@ -267,12 +267,15 @@ $steps = [1 => 'Welcome', 2 => 'Database', 3 => 'Site data', 4 => 'Done'];
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Setup · BackAisle</title>
-  <link rel="stylesheet" href="/assets/app.css?v=setup1">
+  <link rel="icon" href="/assets/logo.svg" type="image/svg+xml">
+  <link rel="icon" href="/assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+  <link rel="stylesheet" href="/assets/app.css?v=layout4">
   <link rel="stylesheet" href="/assets/setup.css?v=setup1">
 </head>
 <body class="setup-body">
 <div class="setup-wrap">
-  <div class="brand"><span class="mark">BA</span> BackAisle <small>setup wizard</small></div>
+  <div class="brand"><img class="brand-mark" src="/assets/logo.svg" width="32" height="32" alt=""><span class="brand-text"><span class="brand-name">BackAisle</span><small title="IDF Management">IDFM</small></span></div>
   <ol class="setup-steps">
     <?php foreach ($steps as $n => $lab): ?>
       <li class="<?= $step === $n ? 'on' : ($step > $n ? 'done' : '') ?>"><?= $n ?>. <?= h($lab) ?></li>
@@ -284,7 +287,7 @@ $steps = [1 => 'Welcome', 2 => 'Database', 3 => 'Site data', 4 => 'Done'];
 
   <?php if ($step === 1): ?>
     <h1>Install BackAisle</h1>
-    <p class="muted">IDF infrastructure — racks, UPS, climate. This wizard writes config, connects the database, and can restore a site backup or import a PowerPanel profile.</p>
+    <p class="muted">IDF Management — racks, UPS, and closet climate. This wizard writes config, connects the database, and can restore a site backup or import a PowerPanel profile.</p>
     <div class="card">
       <h3>Prerequisites</h3>
       <ul class="setup-checks">
