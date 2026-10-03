@@ -802,11 +802,11 @@ function page_devices(PDO $db, array $user): void {
         foreach ($db->query('SELECT id, name FROM departments WHERE is_active=1 ORDER BY name') as $dep) {
             echo '<option value="'.(int)ba_col($dep, 'id').'">'.h((string)ba_col($dep, 'name')).'</option>';
         }
-        echo '</select><button>Assign department</button></div>';
+        echo '</select><label><input type="checkbox" data-device-select-all aria-label="Select all"> Select all</label><button>Assign department</button></div>';
     }
     echo '<table><thead><tr>';
     if ($canAssign) {
-        echo '<th></th>';
+        echo '<th><input type="checkbox" data-device-select-all aria-label="Select all" title="Select all"></th>';
     }
     echo '<th>Kind</th><th>IP</th><th>Host</th><th>Model</th><th>Template</th><th>Serial</th><th>Department</th><th>Closet</th><th>Rack / U</th></tr></thead><tbody>';
     $tplNames = [];
@@ -838,6 +838,34 @@ function page_devices(PDO $db, array $user): void {
     echo '</tbody></table>';
     if ($canAssign) {
         echo '</form>';
+        echo <<<'JS'
+<script>
+(function () {
+  var boxes = document.querySelectorAll('input[name="device_ids[]"]');
+  var masters = document.querySelectorAll('[data-device-select-all]');
+  if (!masters.length) return;
+  function paint(checked, mixed) {
+    masters.forEach(function (master) {
+      master.checked = checked;
+      master.indeterminate = mixed;
+    });
+  }
+  function sync() {
+    var n = 0;
+    boxes.forEach(function (box) { if (box.checked) n++; });
+    paint(boxes.length > 0 && n === boxes.length, n > 0 && n < boxes.length);
+  }
+  masters.forEach(function (master) {
+    master.addEventListener('change', function () {
+      var on = master.checked;
+      boxes.forEach(function (box) { box.checked = on; });
+      paint(on, false);
+    });
+  });
+  boxes.forEach(function (box) { box.addEventListener('change', sync); });
+})();
+</script>
+JS;
     }
     ba_layout_end();
 }

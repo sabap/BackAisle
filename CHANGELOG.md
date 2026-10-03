@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.60] - 2026-10-03
+
+- Inventory has a Select all checkbox beside Assign department, and the same checkbox in the table header. It selects every device in the current list. A department filter or Show decommissioned changes that list, and Select all follows it.
+
 ## [0.5.59] - 2026-10-03
 
 - A device's department owns it. IDFM Admin and Global Admin assign that department from the device page or from Inventory. Department Admin can add, edit, and decommission only the devices their department owns. A device with no department stays with IDFM Admin and Global Admin.
