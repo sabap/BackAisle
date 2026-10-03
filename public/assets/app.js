@@ -114,7 +114,7 @@ function renderRank(el, title, rows, key, unit, color) {
   if (!el) return;
   const list = rows || [];
   const max = Math.max(...list.map(r => Number(r[key]) || 0), 1);
-  let html = '<div class="dash-chart-head"><div class="legend">' + title + '</div></div><div class="dash-rank">';
+  let html = '<div class="dash-rank">';
   if (!list.length) html += '<p class="muted">No readings yet.</p>';
   list.forEach(row => {
     const v = row[key] != null ? row[key] : row[key.toUpperCase()];

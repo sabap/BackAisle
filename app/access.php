@@ -908,7 +908,19 @@ function ba_device_owner_card(PDO $db, array $user, array $device): void
         )->fetchAll();
     }
     $retired = trim((string)ba_col($device, 'decommissioned_at', '')) !== '';
-    echo '<div class="card" id="owner"><h3>Owner</h3>';
+    $ownerActions = '';
+    if (ba_can_edit_device($user, $device)) {
+        if ($retired) {
+            $ownerActions = '<form method="post"><button class="btn" name="recommission" value="1">Return to service</button></form>';
+        } else {
+            $ownerActions = '<form method="post" onsubmit="return confirm(\'Decommission this device? Polling stops. The record stays.\')"><button class="btn" name="decommission" value="1">Decommission</button></form>';
+        }
+    }
+    echo '<section class="ucard" id="owner"><div class="ucard-head"><h3>Owning department</h3>';
+    if ($ownerActions !== '') {
+        echo '<div class="head-actions">' . $ownerActions . '</div>';
+    }
+    echo '</div><div class="ucard-body">';
     if ($dept) {
         $color = ba_color_hex((string)ba_col($dept, 'color_hex'));
         echo '<p><span class="dept-swatch" style="background:' . h($color) . '"></span> <strong>' . h((string)ba_col($dept, 'name')) . '</strong>';
@@ -952,16 +964,10 @@ function ba_device_owner_card(PDO $db, array $user, array $device): void
         ba_department_field($db, $user, $deptId > 0 ? $deptId : null);
         echo '<button>Save owner</button></form>';
     }
-    if (ba_can_edit_device($user, $device)) {
-        if ($retired) {
-            echo '<form method="post"><button name="recommission" value="1">Return to service</button></form>';
-            echo '<p class="muted">Decommissioned ' . h((string)ba_col($device, 'decommissioned_at')) . '. Polling is off. The record is kept.</p>';
-        } else {
-            echo '<form method="post" onsubmit="return confirm(\'Decommission this device? Polling stops. The record stays.\')">';
-            echo '<button name="decommission" value="1">Decommission</button></form>';
-        }
+    if ($retired && ba_can_edit_device($user, $device)) {
+        echo '<p class="muted">Decommissioned ' . h((string)ba_col($device, 'decommissioned_at')) . '. Polling is off. The record is kept.</p>';
     }
-    echo '</div>';
+    echo '</div></section>';
 }
 
 function ba_active_global_admins(PDO $db, int $exceptId = 0): int

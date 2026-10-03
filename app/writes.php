@@ -205,9 +205,15 @@ function page_fleet_writes(PDO $db, array $user): void {
       Config files live in C:\ProgramData\BackAisle\configs (never served by IIS). Firmware bins in C:\ProgramData\BackAisle\firmware.
       Do not power off the UPS during RMCARD firmware. UPS-body firmware is out of scope.</p>
 
-    <div class="grid2">
-      <form method="post" class="card stack">
-        <h3>1. Clone config</h3>
+    <?php
+      $writeActions = '<button type="button" class="btn" data-open-modal="modal-clone">Clone config</button>';
+      $writeActions .= '<button type="button" class="btn" data-open-modal="modal-push">Push config</button>';
+      $writeActions .= '<button type="button" class="btn" data-open-modal="modal-mass">Mass edit</button>';
+      $writeActions .= '<button type="button" class="btn" data-open-modal="modal-fw-store">Store firmware</button>';
+      $writeActions .= '<button type="button" class="btn" data-open-modal="modal-fw-queue">Queue firmware</button>';
+      ba_users_modal_open('modal-clone', 'Clone config', false);
+    ?>
+      <form method="post" class="stack">
         <label>Source</label>
         <select name="source_id"><?php foreach ($devices as $d) echo '<option value="'.(int)$d['id'].'">'.h($d['hostname'].' '.$d['ip']).'</option>'; ?></select>
         <label>Template name</label>
@@ -216,9 +222,8 @@ function page_fleet_writes(PDO $db, array $user): void {
         <button>Pull config from card</button>
         <p class="muted">FTP GET (fw ≥ 1.4.0) or web Save. File is stored outside the web root. UI shows a redacted copy only.</p>
       </form>
-
-      <form method="post" class="card stack">
-        <h3>2. Push config</h3>
+    <?php ba_users_modal_close(); ba_users_modal_open('modal-push', 'Push config', false, '', true); ?>
+      <form method="post" class="stack">
         <label>Template</label>
         <select name="template_id"><?php foreach ($templates as $t) echo '<option value="'.(int)$t['id'].'">'.h($t['name'].' '.$t['pulled_at']).'</option>'; ?></select>
         <label>Targets</label>
@@ -233,11 +238,8 @@ function page_fleet_writes(PDO $db, array $user): void {
         <input type="hidden" name="act" value="push_config">
         <button>Queue config push</button>
       </form>
-    </div>
-
-    <div class="grid2">
-      <form method="post" class="card stack">
-        <h3>3. Mass edit (SNMP SET allow-list)</h3>
+    <?php ba_users_modal_close(); ba_users_modal_open('modal-mass', 'Mass edit (SNMP SET allow-list)', false, '', true); ?>
+      <form method="post" class="stack">
         <p class="muted">Name, location, env thresholds only. Not IP/gateway/SNMP ACL.</p>
         <?php foreach ($devices as $d): ?>
           <label><input type="checkbox" name="targets[]" value="<?= (int)$d['id'] ?>" checked><?= h($d['hostname']) ?></label>
@@ -253,9 +255,7 @@ function page_fleet_writes(PDO $db, array $user): void {
         <input type="hidden" name="act" value="mass_edit">
         <button>Queue SNMP mass edit</button>
       </form>
-
-      <div class="card">
-        <h3>4. RMCARD firmware</h3>
+    <?php ba_users_modal_close(); ba_users_modal_open('modal-fw-store', 'Store firmware pair', false); ?>
         <form method="post" enctype="multipart/form-data" class="stack">
           <label>cpsrm2scfw_XXX.bin</label><input type="file" name="fw" accept=".bin">
           <label>cpsrm2scdata_XXX.bin</label><input type="file" name="data" accept=".bin">
@@ -263,6 +263,7 @@ function page_fleet_writes(PDO $db, array $user): void {
           <input type="hidden" name="act" value="upload_fw">
           <button>Store pair in ProgramData</button>
         </form>
+    <?php ba_users_modal_close(); ba_users_modal_open('modal-fw-queue', 'Queue firmware job', false, '', true); ?>
         <form method="post" class="stack">
           <label>Stored image</label>
           <select name="firmware_id"><?php foreach ($images as $im) echo '<option value="'.(int)$im['id'].'">'.h($im['version']).'</option>'; ?></select>
@@ -275,19 +276,14 @@ function page_fleet_writes(PDO $db, array $user): void {
           <input type="hidden" name="act" value="push_fw">
           <button>Queue firmware job</button>
         </form>
-      </div>
-    </div>
+    <?php ba_users_modal_close(); ?>
 
-    <div class="card">
-      <h3>Templates (redacted preview)</h3>
+    <?php ba_card_open('Templates (redacted preview)'); ?>
       <?php if (!$templates) echo '<p class="muted">None yet.</p>'; ?>
       <ul><?php foreach ($templates as $t): ?>
         <li><a href="<?= h(ba_href('/writes/template?id='.(int)$t['id'])) ?>"><?= h($t['name']) ?></a> · <?= h($t['source_ip']) ?> · <?= h($t['pulled_at']) ?></li>
       <?php endforeach; ?></ul>
-    </div>
-
-    <div class="card">
-      <h3>Jobs</h3>
+    <?php ba_card_close(); ba_card_open('Jobs', $writeActions); ?>
       <table><thead><tr><th>ID</th><th>Kind</th><th>Status</th><th>Sim</th><th>By</th><th>Started</th><th>Ended</th></tr></thead><tbody>
       <?php foreach ($jobs as $j): ?>
         <tr>
@@ -301,8 +297,7 @@ function page_fleet_writes(PDO $db, array $user): void {
         </tr>
       <?php endforeach; ?>
       </tbody></table>
-    </div>
-    <?php
+    <?php ba_card_close();
     ba_layout_end();
 }
 
@@ -317,7 +312,9 @@ function page_template_view(PDO $db): void {
     $red = ba_redact_config($raw);
     ba_layout_start('Template '.$row['name'], 'writes');
     echo '<h1>'.h($row['name']).'</h1><p class="muted">'.h($row['path']).' · secrets redacted · original never served</p>';
-    echo '<pre class="card" style="white-space:pre-wrap;max-height:70vh;overflow:auto">'.h($red).'</pre>';
+    ba_card_open('Redacted config');
+    echo '<pre style="white-space:pre-wrap;max-height:70vh;overflow:auto;margin:0">'.h($red).'</pre>';
+    ba_card_close();
     ba_layout_end();
 }
 
@@ -356,18 +353,19 @@ function page_job_view(PDO $db): void {
     }
     if ($live) {
         echo '<p class="muted">Writer is still working. This page reloads every 4 seconds. There is no extra toast when it finishes — status here is the result (ok / fail per UPS, slot choice in the step detail).</p>';
-        echo '<form method="post" action="'.h(ba_href('/writes/job?id='.$id)).'" class="card">';
+        echo '<section class="ucard"><div class="ucard-head"><h3>Stop job</h3></div><div class="ucard-body">';
+        echo '<form method="post" action="'.h(ba_href('/writes/job?id='.$id)).'">';
         echo '<input type="hidden" name="act" value="cancel"><input type="hidden" name="id" value="'.$id.'">';
         echo '<label>Stop remaining units</label> <input name="confirm" placeholder="STOP JOB" autocomplete="off"> ';
         echo '<button type="submit">Stop job</button>';
         echo '<p class="muted">Units already ok or fail stay that way. Queued units are cancelled. A card already restoring is left to finish on writer 0.5.36+. An older writer keeps going until the BackAisleWriter task is stopped.</p>';
-        echo '</form>';
+        echo '</form></div></section>';
     } else {
         echo '<p class="muted">Job finished. Per-UPS result and SNMPv3 slot notes are in the tables below.</p>';
     }
     if ($job['error']) echo '<div class="flash">'.h($job['error']).'</div>';
     foreach ($targets as $t) {
-        echo '<div class="card"><h3>'.h($t['hostname'].' '.$t['ip']).' · '.h($t['status']).' · '.h($t['step']).'</h3>';
+        echo '<section class="ucard"><div class="ucard-head"><h3>'.h($t['hostname'].' '.$t['ip']).' · '.h($t['status']).' · '.h($t['step']).'</h3></div><div class="ucard-body">';
         echo '<p class="muted">start '.h($t['started_at']).' end '.h($t['ended_at']).'</p>';
         if ($t['error']) echo '<p class="pill batt">'.h($t['error']).'</p>';
         echo '<p>post poll: model '.h($t['post_model']).' fw '.h($t['post_firmware']).' name '.h($t['post_name']).' loc '.h($t['post_location']).'</p>';
@@ -377,7 +375,7 @@ function page_job_view(PDO $db): void {
         foreach ($st as $s) {
             echo '<tr><td>'.(int)$s['seq'].'</td><td>'.h($s['name']).'</td><td>'.h($s['status']).'</td><td>'.h($s['ts']).'</td><td>'.h($s['detail']).'</td></tr>';
         }
-        echo '</tbody></table></div>';
+        echo '</tbody></table></div></section>';
     }
     ba_layout_end();
 }

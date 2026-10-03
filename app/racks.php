@@ -310,7 +310,11 @@ function page_idfs(PDO $db, array $user): void {
         echo '<p class="muted">'.(ba_tech_mode()
             ? 'Add a rack, open it, then tap a U to place a device. U1 is the bottom.'
             : 'Click an empty U to place a UPS, switch, or patch panel. U1 is the bottom of the rack.').'</p>';
-        echo '</div></div>';
+        echo '</div>';
+        if ($admin && !ba_tech_mode()) {
+            echo '<button type="button" class="btn" data-open-modal="modal-add-rack">Add network rack</button>';
+        }
+        echo '</div>';
 
         if ($racks) {
             echo '<div class="idf-row-shell"><div class="idf-row-viewport" data-idf-pan="1"><div class="idf-row-strip" style="--max-units:'.$maxU.'">';
@@ -339,14 +343,27 @@ function page_idfs(PDO $db, array $user): void {
         }
 
         if ($admin) {
-            echo '<form method="post" class="card stack idf-add-rack"><h3>Add network rack</h3>';
+            $rackName = 'Rack '.chr(65 + count($racks));
+            $rackSort = (string)(count($racks) + 1);
+            if (ba_tech_mode()) {
+                echo '<section class="ucard idf-add-rack"><div class="ucard-head"><h3>Add network rack</h3></div>';
+                echo '<form method="post" class="ucard-body stack idf-add-rack">';
+            } else {
+                ba_users_modal_open('modal-add-rack', 'Add network rack', false);
+                echo '<form method="post" class="stack idf-add-rack">';
+            }
             echo '<input type="hidden" name="act" value="add_rack">';
             echo '<input type="hidden" name="group_id" value="'.$gid.'">';
-            echo '<div class="tech-field"><label>Name</label><input name="name" value="Rack '.chr(65 + count($racks)).'" required></div>';
+            echo '<div class="tech-field"><label>Name</label><input name="name" value="'.h($rackName).'" required></div>';
             echo '<div class="tech-field"><label>Height (U)</label><input type="number" name="u_height" min="4" max="58" value="42"></div>';
-            echo '<div class="tech-field"><label>Left-to-right order</label><input type="number" name="sort_order" value="'.(count($racks)+1).'"></div>';
+            echo '<div class="tech-field"><label>Left-to-right order</label><input type="number" name="sort_order" value="'.h($rackSort).'"></div>';
             echo '<div class="tech-field"><label>Notes</label><input name="notes" placeholder="optional"></div>';
             echo '<button>Add rack</button></form>';
+            if (ba_tech_mode()) {
+                echo '</section>';
+            } else {
+                ba_users_modal_close();
+            }
         }
         echo '</div>';
         ba_layout_end();
@@ -382,17 +399,22 @@ function page_idfs(PDO $db, array $user): void {
       <div class="kpi"><span>Racks</span><b><?= $nRacks ?></b></div>
       <div class="kpi"><span>UPS</span><b><?= $nUps ?></b></div>
     </div>
-    <div class="loc-toolbar">
-      <input type="search" id="loc-search" placeholder="Filter locations…" autocomplete="off">
-      <button type="button" class="btn" id="loc-expand">Expand all</button>
-      <button type="button" class="btn btn-quiet" id="loc-collapse">Collapse all</button>
-    </div>
-    <div class="card loc-tree" data-loc-tree="1">
+    <section class="ucard">
+      <div class="ucard-head">
+        <h3>Locations</h3>
+        <div class="head-actions loc-toolbar">
+          <input type="search" id="loc-search" placeholder="Filter locations…" autocomplete="off">
+          <button type="button" class="btn" id="loc-expand">Expand all</button>
+          <button type="button" class="btn" id="loc-collapse">Collapse all</button>
+        </div>
+      </div>
+      <div class="ucard-body loc-tree" data-loc-tree="1">
       <?php
       if (!$sites) echo '<p class="empty">No locations yet. Add groups under Org.</p>';
       else ba_render_loc_tree($groups, null, $summaries, $memo, 0);
       ?>
-    </div>
+      </div>
+    </section>
     <?php
     if (ba_tech_mode()) {
         echo '<p class="muted">Open a closet to add a rack, then tap a U to place a device.</p>';
@@ -596,18 +618,21 @@ function page_rack(PDO $db, array $user): void {
       <div class="idf-cab-actions">
         <a class="btn" href="<?= h(ba_href('/idfs?group='.(int)$rack['group_id'])) ?>">All racks</a>
         <?php if ($admin): ?>
-          <a class="btn" href="#place">+ Device</a>
+          <button type="button" class="btn" data-open-modal="modal-place-ups">Place existing UPS</button>
+          <button type="button" class="btn" data-open-modal="modal-add-item">Add switch or patch panel</button>
         <?php endif; ?>
       </div>
     </div>
 
     <div class="idf-detail-grid">
       <div class="card idf-col">
+        <div class="card-header"><h2>Front</h2></div>
         <div class="card-body">
           <?php ba_render_elevation($rack, $devices, 'front', false, $admin, $focusFace === 'rear' ? 0 : $focusU); ?>
         </div>
       </div>
       <div class="card idf-col">
+        <div class="card-header"><h2>Rear</h2></div>
         <div class="card-body">
           <?php ba_render_elevation($rack, $devices, 'rear', false, $admin, $focusFace === 'rear' ? $focusU : 0); ?>
         </div>
@@ -702,9 +727,8 @@ function page_rack(PDO $db, array $user): void {
     <?php if ($admin): ?>
     <div id="place">
       <?php if (ba_tech_mode()) { ba_render_tech_u_picker($rack, $devices, $focusU, $focusFace); } ?>
-    <div class="idf-place-grid">
-      <form method="post" class="card stack">
-        <h3>Place existing UPS</h3>
+      <?php ba_users_modal_open('modal-place-ups', 'Place existing UPS', $focusU > 0); ?>
+      <form method="post" class="stack">
         <?php if ($focusU): ?><p class="muted">Clicked U<?= $focusU ?> (<?= h($focusFace) ?>).</p><?php endif; ?>
         <input type="hidden" name="act" value="place_existing">
         <label>UPS</label>
@@ -725,8 +749,9 @@ function page_rack(PDO $db, array $user): void {
         <button>Place UPS</button>
         <p class="muted">Unplaced UPS in this closet. A 2U UPS at U1 occupies U1–U2.</p>
       </form>
-      <form method="post" class="card stack">
-        <h3>Add switch or patch panel</h3>
+      <?php ba_users_modal_close(); ?>
+      <?php ba_users_modal_open('modal-add-item', 'Add switch or patch panel', false, '', true); ?>
+      <form method="post" class="stack">
         <input type="hidden" name="act" value="add_item">
         <label>Template</label>
         <select name="template_id" data-tpl-fill="1"><?= ba_template_options($db) ?></select>
@@ -753,7 +778,7 @@ function page_rack(PDO $db, array $user): void {
         <button>Add to rack</button>
         <p class="muted">Inventory on the U grid only. SNMPv3 polling stays UPS-only.</p>
       </form>
-    </div>
+      <?php ba_users_modal_close(); ?>
     </div>
     <?php endif; ?>
     <?php
