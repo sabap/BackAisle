@@ -22,11 +22,14 @@ function ba_layout_start(string $title, string $nav = 'fleet'): void {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title><?= h($title) ?> · BackAisle</title>
-  <link rel="stylesheet" href="/assets/app.css?v=layout3">
+  <link rel="icon" href="/assets/logo.svg" type="image/svg+xml">
+  <link rel="icon" href="/assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+  <link rel="stylesheet" href="/assets/app.css?v=layout4">
 </head>
 <body<?= ba_tech_mode() ? ' class="tech"' : '' ?>>
 <header class="top">
-  <div class="brand"><span class="mark">BA</span> BackAisle <small>IDF infrastructure</small></div>
+  <a class="brand" href="/index.php"><img class="brand-mark" src="/assets/logo.svg" width="28" height="28" alt=""><span class="brand-text"><span class="brand-name">BackAisle</span><small title="IDF Management">IDFM</small></span></a>
   <nav>
     <a class="<?= $nav==='dash'?'on':'' ?>" href="/index.php">Dashboard</a>
     <a class="<?= $nav==='idfs'?'on':'' ?>" href="/idfs.php">IDFs</a>
