@@ -156,11 +156,11 @@ function page_org(PDO $db, array $user): void {
                     (string)($_POST['web_pass'] ?? '')
                 );
                 ba_audit($db, 'add_snmp_profile', 'snmp_profile', (string)$id);
-                $msg = 'SNMPv3 profile saved (secrets outside web root)';
+                $msg = 'SNMPv3 credentials saved (secrets outside web root)';
             } elseif ($act === 'save_snmp') {
                 $id = (int)($_POST['id'] ?? 0);
                 if ($id < 1) {
-                    throw new RuntimeException('Missing SNMPv3 profile');
+                    throw new RuntimeException('Missing SNMPv3 credentials');
                 }
                 $db->prepare('UPDATE snmp_profiles SET name=?, username=?, auth_proto=?, priv_proto=?, web_user=?, notes=? WHERE id=?')
                     ->execute([
@@ -176,14 +176,14 @@ function page_org(PDO $db, array $user): void {
                     ba_snmp_store_secret($id, $auth, $priv !== '' ? $priv : $auth, $web !== '' ? $web : null);
                 }
                 ba_audit($db, 'edit_snmp_profile', 'snmp_profile', (string)$id);
-                $msg = 'SNMPv3 profile updated';
+                $msg = 'SNMPv3 credentials updated';
             } elseif ($act === 'bulk_snmp') {
                 $sid = (int)($_POST['snmp_profile_id'] ?? 0);
                 $gid = ($_POST['group_id'] ?? '') === '' ? null : (int)$_POST['group_id'];
                 $scope = $gid ? 'group' : 'all';
                 $n = ba_assign_snmp_profile($db, $sid, $scope, [], $gid);
                 ba_audit($db, 'bulk_snmp', 'snmp_profile', (string)$sid, 'devices='.$n);
-                $msg = 'Assigned SNMPv3 profile to '.(int)$n.' UPS';
+                $msg = 'Assigned SNMPv3 credentials to '.(int)$n.' UPS';
             } elseif ($act === 'import_pp') {
                 if (empty($_FILES['zip']['tmp_name'])) throw new RuntimeException('Choose a profile.zip');
                 $dest = sys_get_temp_dir().DIRECTORY_SEPARATOR.'pp_'.bin2hex(random_bytes(4)).'.zip';
@@ -309,7 +309,7 @@ PY);
     ba_layout_start('Organization', 'org');
     if ($msg) echo '<div class="flash">'.h($msg).'</div>';
     echo '<h1>Organization</h1>';
-    $tabs = ['groups'=>'Groups','snmp'=>'SNMPv3 profiles','configs'=>'Config profiles','import'=>'PowerPanel import','certs'=>'SSL/TLS certs'];
+    $tabs = ['groups'=>'Groups','snmp'=>'SNMPv3 credentials','configs'=>'Config profiles','import'=>'PowerPanel import','certs'=>'SSL/TLS certs'];
     echo '<nav class="page-tabs">';
     foreach ($tabs as $k=>$lab) {
         echo '<a class="'.($tab===$k?'on':'').'" href="'.h(ba_href('/org?tab='.$k)).'">'.h($lab).'</a>';
@@ -462,9 +462,9 @@ JS;
             $st->execute([$editId]);
             $edit = $st->fetch() ?: null;
         }
-        $snmpActions = '<button type="button" class="btn" data-open-modal="modal-snmp-profile">' . ($edit ? 'Edit profile' : 'New profile') . '</button>';
+        $snmpActions = '<button type="button" class="btn" data-open-modal="modal-snmp-profile">' . ($edit ? 'Edit credentials' : 'New credentials') . '</button>';
         $snmpActions .= '<button type="button" class="btn" data-open-modal="modal-snmp-bulk">Bulk assign</button>';
-        ba_card_open('Profiles', $snmpActions);
+        ba_card_open('SNMPv3 credentials', $snmpActions);
         echo '<table><thead><tr><th>Name</th><th>User</th><th>Auth</th><th>Priv</th><th>Web</th><th></th></tr></thead><tbody>';
         foreach ($db->query('SELECT * FROM snmp_profiles ORDER BY name') as $p) {
             echo '<tr><td>'.h($p['name']).($p['is_default']?' <span class="muted">default</span>':'').'</td><td>'.h($p['username']).'</td><td>'.h($p['auth_proto']).'</td><td>'.h($p['priv_proto']).'</td><td>'.h($p['web_user']).'</td>';
@@ -472,7 +472,7 @@ JS;
         }
         echo '</tbody></table>';
         ba_card_close();
-        ba_users_modal_open('modal-snmp-profile', $edit ? 'Edit SNMPv3 profile' : 'New SNMPv3 profile', (bool)$edit, $edit ? ba_href('/org?tab=snmp') : '');
+        ba_users_modal_open('modal-snmp-profile', $edit ? 'Edit SNMPv3 credentials' : 'New SNMPv3 credentials', (bool)$edit, $edit ? ba_href('/org?tab=snmp') : '');
         echo '<form method="post" action="/org.php?tab=snmp" class="stack">';
         if ($edit) {
             echo '<input type="hidden" name="act" value="save_snmp"><input type="hidden" name="id" value="'.(int)$edit['id'].'">';
@@ -490,14 +490,14 @@ JS;
         echo '<label>Priv passphrase'.($edit?' (blank = keep)':'').'</label><input type="password" name="priv_pass" autocomplete="new-password">';
         echo '<label>Web user (optional)</label><input name="web_user" value="'.h($edit['web_user'] ?? '').'" placeholder="Infrastructure or cyber">';
         echo '<label>Web password'.($edit?' (blank = keep)':'').'</label><input type="password" name="web_pass" autocomplete="new-password">';
-        echo '<button>'.($edit ? 'Save changes' : 'Save profile').'</button>';
+        echo '<button>'.($edit ? 'Save changes' : 'Save credentials').'</button>';
         echo '<p class="muted">Secrets go to C:\\ProgramData\\BackAisle\\snmp_profiles.json and are never shown again.</p></form>';
         ba_users_modal_close();
-        ba_users_modal_open('modal-snmp-bulk', 'Bulk assign SNMPv3 profile', false);
+        ba_users_modal_open('modal-snmp-bulk', 'Bulk assign SNMPv3 credentials', false);
         echo '<form method="post" action="/org.php?tab=snmp" class="stack">';
         echo '<input type="hidden" name="act" value="bulk_snmp"><input type="hidden" name="tab" value="snmp">';
-        echo '<p class="muted">Sets snmp_profile_id on devices. Use a device template to assign the same profile whenever that template is applied.</p>';
-        echo '<label>Profile</label><select name="snmp_profile_id" required><option value="">choose</option>';
+        echo '<p class="muted">Sets the SNMPv3 credentials on the UPS records. A device template can apply the same credentials when that template is applied. Card slots stay as they are.</p>';
+        echo '<label>Credentials</label><select name="snmp_profile_id" required><option value="">choose</option>';
         foreach ($db->query('SELECT id,name FROM snmp_profiles ORDER BY name') as $p) {
             echo '<option value="'.(int)$p['id'].'">'.h($p['name']).'</option>';
         }
@@ -517,7 +517,7 @@ JS;
         echo '</tbody></table>';
         ba_card_close();
         ba_users_modal_open('modal-add-default', 'Add default UPS', false, '', true);
-        echo '<p class="muted">Connects with factory <code>cyber</code>/<code>cyber</code>, applies a config profile, then polls with the selected SNMPv3 profile.</p>';
+        echo '<p class="muted">Connects with factory <code>cyber</code>/<code>cyber</code>, applies a config profile, then polls with the selected SNMPv3 credentials.</p>';
         echo '<form method="post" class="stack">';
         echo '<input name="ip" placeholder="IP" required>';
         echo '<input name="hostname" placeholder="hostname">';

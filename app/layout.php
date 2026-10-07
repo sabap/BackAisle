@@ -13,7 +13,7 @@ function ba_layout_start(string $title, string $nav = 'fleet'): void {
     $canSettings = function_exists('ba_can') && ba_can($u, 'manage_settings');
     $canUsers = function_exists('ba_can') && ba_can($u, 'manage_users');
     $canWrites = function_exists('ba_editor') && ba_editor($u, 'edit_writes');
-    $powerOn = ba_nav_on($nav, ['fleet', 'batteries', 'battery', 'alerts', 'events', 'writes', 'snmp']);
+    $powerOn = ba_nav_on($nav, ['fleet', 'batteries', 'battery', 'alerts', 'events', 'writes', 'snmp', 'models']);
     $envOn = ba_nav_on($nav, ['climate']);
     ?>
 <!doctype html>
@@ -40,6 +40,7 @@ function ba_layout_start(string $title, string $nav = 'fleet'): void {
     <span class="nav-cat <?= $powerOn ?>">
       <span class="nav-cat-label">Power</span>
       <a class="<?= $nav==='snmp'?'on':'' ?>" href="/snmp.php">SNMP</a>
+      <a class="<?= $nav==='models'?'on':'' ?>" href="/models.php">Models</a>
       <a class="<?= $nav==='fleet'?'on':'' ?>" href="/fleet.php">UPS fleet</a>
       <a class="<?= $nav==='batteries'?'on':'' ?>" href="/batteries.php">Batteries</a>
       <a class="<?= $nav==='battery'?'on':'' ?>" href="/battery.php">Due</a>

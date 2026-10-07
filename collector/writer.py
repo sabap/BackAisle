@@ -598,7 +598,7 @@ def run_push_snmpv3(con, job: dict, secrets: dict) -> None:
         raise RuntimeError("snmp_profile_id required")
     prof = con.execute("SELECT * FROM snmp_profiles WHERE id=?", (profile_id,)).fetchone()
     if not prof:
-        raise RuntimeError("SNMPv3 profile missing")
+        raise RuntimeError("SNMPv3 credentials missing")
     sec = get_secret(profile_id)
     username = (prof["username"] or sec.get("user") or "").strip()
     if not username:
