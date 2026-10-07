@@ -394,7 +394,7 @@ function page_templates(PDO $db, array $user): void {
             echo '<label>Watts</label><input type="number" name="watts" step="0.1" value="'.h((string)($tpl['watts'] ?? '')).'">';
             echo '<label>Weight (kg)</label><input type="number" name="weight_kg" step="0.01" value="'.h((string)($tpl['weight_kg'] ?? '')).'">';
             echo '<label>Notes</label><textarea name="notes">'.h($tpl['notes'] ?? '').'</textarea>';
-            echo '<label>SNMPv3 profile (applied to devices using this template)</label><select name="snmp_profile_id"><option value="">(none)</option>';
+            echo '<label>SNMPv3 credentials (applied to devices using this template)</label><select name="snmp_profile_id"><option value="">(none)</option>';
             $curSid = (int)($tpl['snmp_profile_id'] ?? 0);
             foreach ($db->query('SELECT id, name FROM snmp_profiles ORDER BY name') as $sp) {
                 $sel = $curSid === (int)$sp['id'] ? ' selected' : '';

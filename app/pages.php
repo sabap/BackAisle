@@ -904,13 +904,14 @@ JS;
         ba_department_field($db, $user, null);
         echo '<label class="muted"><input type="checkbox" name="sensor_expected" checked> sensor expected</label>';
         echo '<button>Add device</button></form>';
-        echo '<p class="muted">SNMPv3 profile comes from secrets.env. Model/serial/firmware auto-fill on next poll.</p>';
+        echo '<p class="muted">SNMPv3 credentials come from secrets.env. Model/serial/firmware auto-fill on next poll.</p>';
         ba_users_modal_close();
     }
     ba_layout_end();
 }
 
 function page_device(PDO $db, array $user): void {
+    ba_ensure_model_schema($db);
     $id = (int)($_GET['id'] ?? 0);
     $st = $db->prepare(ba_latest_join() . ' WHERE d.id=?');
     $st->execute([$id]);
@@ -964,6 +965,12 @@ function page_device(PDO $db, array $user): void {
                     $_POST['warranty_replace_by']?:null, isset($_POST['sensor_expected'])?1:0, isset($_POST['enabled'])?1:0,
                     $gid, $sid, $kind, $rid, $pos, $uh, $face, $tid, $id,
                 ]);
+            $mpRaw = trim((string)($_POST['model_profile_id'] ?? ''));
+            $mpid = $mpRaw === '' ? null : (int)$mpRaw;
+            if ($mpid !== null && $mpid < 1) {
+                $mpid = null;
+            }
+            $db->prepare('UPDATE devices SET model_profile_id=? WHERE id=?')->execute([$mpid, $id]);
             ba_pp_exec($db, 'UPDATE devices SET department_id=? WHERE id=?', [ba_device_department_choice($user), $id]);
             $enabledNow = isset($_POST['enabled']) ? 1 : 0;
             $decom = null;
@@ -1026,6 +1033,7 @@ function page_device(PDO $db, array $user): void {
       <?php endif; ?>
       · <?= h(ba_kind_label($r['kind'] ?? 'ups')) ?>
       · comm <?= h($r['comm_state'] ?: 'unknown') ?> · last ok <?= h($r['last_success'] ?: 'never') ?> · SNMP name <?= h($r['snmp_name']) ?> · fw <?= h($r['firmware']) ?></p>
+    <?php ba_render_device_readings($db, $r); ?>
     <?php if (trim((string)ba_col($r, 'decommissioned_at', '')) !== ''): ?>
       <div class="flash">Decommissioned <?= h((string)ba_col($r, 'decommissioned_at')) ?>. Polling is off. The record is kept.</div>
     <?php endif; ?>
@@ -1057,13 +1065,22 @@ function page_device(PDO $db, array $user): void {
               echo '<option value="'.(int)$g['id'].'"'.$sel.'>'.h($g['name']).'</option>';
           }
         ?></select>
-        <label>SNMPv3 profile</label>
+        <label>SNMPv3 credentials</label>
         <select name="snmp_profile_id"<?= ba_editor($user, 'edit_snmp') ? '' : ' disabled' ?>><option value="">(secrets.env default)</option><?php
           foreach ($db->query('SELECT id,name FROM snmp_profiles') as $p) {
               $sel = ((int)$r['snmp_profile_id'] === (int)$p['id']) ? ' selected' : '';
               echo '<option value="'.(int)$p['id'].'"'.$sel.'>'.h($p['name']).'</option>';
           }
         ?></select>
+        <label>Model profile</label>
+        <select name="model_profile_id"><option value="">(automatic)</option><?php
+          $curMp = (int)ba_col($r, 'model_profile_id', 0);
+          foreach (ba_model_profiles($db) as $mp) {
+              $sel = ($curMp === (int)$mp['id']) ? ' selected' : '';
+              echo '<option value="'.(int)$mp['id'].'"'.$sel.'>'.h((string)$mp['name']).'</option>';
+          }
+        ?></select>
+        <p class="muted">Automatic uses the model name, then the only profile on the site. A field shows on this device only after the card returns it.</p>
         <label>Site</label><input name="site" value="<?= h($r['site']) ?>">
         <label>Building</label><input name="building" value="<?= h($r['building']) ?>">
         <label>IDF / closet</label><input name="idf_closet" value="<?= h($r['idf_closet']) ?>">

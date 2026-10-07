@@ -18,6 +18,7 @@ require __DIR__ . '/../app/snmp_page.php';
 require __DIR__ . '/../app/backup.php';
 require __DIR__ . '/../app/update.php';
 require __DIR__ . '/../app/users_page.php';
+require __DIR__ . '/../app/model_profile.php';
 
 try {
 $path = function_exists('ba_request_path') ? ba_request_path() : (rtrim((string)parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH), '/') ?: '/');
@@ -127,6 +128,9 @@ switch ($path) {
         break;
     case '/snmp':
         page_snmp($db, $user);
+        break;
+    case '/models':
+        page_models($db, $user);
         break;
     case '/battery':
         page_battery_report($db);
