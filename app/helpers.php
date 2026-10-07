@@ -85,6 +85,7 @@ function ba_request_path(): string {
         'writes.php' => '/writes',
         'org.php' => '/org',
         'snmp.php' => '/snmp',
+        'models.php' => '/models',
         'api_health.php' => '/api/health',
         'api_series.php' => '/api/series',
         'api_dashboard.php' => '/api/dashboard',
@@ -237,7 +238,7 @@ function ba_ups_ids_for_scope(PDO $db, string $scope, array $selectedIds = [], ?
 function ba_assign_snmp_profile(PDO $db, int $profileId, string $scope, array $selectedIds = [], ?int $groupId = null): int
 {
     if ($profileId < 1) {
-        throw new RuntimeException('Choose an SNMPv3 profile');
+        throw new RuntimeException('Choose SNMPv3 credentials');
     }
     $ups = "(kind='ups' OR kind IS NULL OR kind='')";
     if ($scope === 'selected') {

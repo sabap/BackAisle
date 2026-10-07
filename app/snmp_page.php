@@ -291,7 +291,7 @@ function page_snmp_body(PDO $db, array $user): void
                 }
                 $n = ba_assign_snmp_profile($db, $sid, $scope, $ids, $gid);
                 ba_audit($db, 'bulk_snmp', 'snmp_profile', (string)$sid, 'scope='.$scope.' devices='.$n);
-                $msg = 'Assigned SNMPv3 profile to '.(int)$n.' UPS (database only; card slots unchanged)';
+                $msg = 'Assigned SNMPv3 credentials to '.(int)$n.' UPS (database only; card slots unchanged)';
             } elseif ($act === 'push_snmpv3') {
                 if (!function_exists('ba_create_job')) {
                     throw new RuntimeException('Writer helpers missing');
@@ -302,7 +302,7 @@ function page_snmp_body(PDO $db, array $user): void
                 }
                 $sid = (int)($_POST['snmp_profile_id'] ?? 0);
                 if ($sid < 1) {
-                    throw new RuntimeException('Choose an SNMPv3 profile');
+                    throw new RuntimeException('Choose SNMPv3 credentials');
                 }
                 $scope = (string)($_POST['scope'] ?? 'selected');
                 $gid = ($_POST['group_id'] ?? '') === '' ? null : (int)$_POST['group_id'];
@@ -407,11 +407,11 @@ function page_snmp_body(PDO $db, array $user): void
             $profiles = [];
         }
         $groupOpts = function_exists('ba_group_options') ? ba_group_options(ba_groups($db)) : '';
-        ba_users_modal_open('modal-snmp-bulk', 'Bulk assign SNMPv3 profile', false);
+        ba_users_modal_open('modal-snmp-bulk', 'Bulk assign SNMPv3 credentials', false);
         echo '<form method="post" action="/snmp.php" class="stack" id="snmp-bulk">';
         echo '<input type="hidden" name="act" value="bulk_snmp">';
-        echo '<p class="muted">Applies the credential profile to UPS records (authPriv secrets stay in ProgramData). Tick rows below for Selected, or choose All UPS / On schedule / IDF group.</p>';
-        echo '<label>Profile</label><select name="snmp_profile_id" required><option value="">choose</option>';
+        echo '<p class="muted">Applies the SNMPv3 credentials to UPS records (authPriv secrets stay in ProgramData). Tick rows below for Selected, or choose All UPS / On schedule / IDF group.</p>';
+        echo '<label>Credentials</label><select name="snmp_profile_id" required><option value="">choose</option>';
         foreach ($profiles as $p) {
             echo '<option value="'.(int)$p['id'].'">'.h((string)$p['name']).'</option>';
         }
@@ -429,7 +429,7 @@ function page_snmp_body(PDO $db, array $user): void
         echo '<form method="post" action="/snmp.php" class="stack" id="snmp-pushv3">';
         echo '<input type="hidden" name="act" value="push_snmpv3">';
         echo '<p class="muted">CyberPower has <strong>4 SNMPv3 slots</strong>. This pulls the live config, then: if this username already exists, that slot is updated; else the first <em>empty</em> slot is used; if all four have other users, the unit is <strong>skipped</strong> (never overwritten). Each slot has one ACL IP/mask. Identity (card IP/hostname) is not changed. Requires the <strong>BackAisleWriter</strong> task. Several cards run at once (default 4, <code>WRITE_WORKERS</code> in secrets.env, max 8). A refused connection or a busy web login is retried (default 2 extra tries, <code>WRITE_RETRIES</code>). Config/firmware mass writes stay lab-gated; this SNMPv3 slot write does not. Firmware stays one card at a time.</p>';
-        echo '<label>Profile</label><select name="snmp_profile_id" required><option value="">choose</option>';
+        echo '<label>Credentials</label><select name="snmp_profile_id" required><option value="">choose</option>';
         foreach ($profiles as $p) {
             echo '<option value="'.(int)$p['id'].'">'.h((string)$p['name']).'</option>';
         }
@@ -499,7 +499,7 @@ function page_snmp_body(PDO $db, array $user): void
         if (ba_poll_once_busy()) {
             echo '<p class="muted">A poll is running now. Refresh this page for the collector log.</p>';
         }
-        echo '<table><thead><tr><th><input type="checkbox" id="snmp-check-all"></th><th>Host</th><th>IP</th><th>Kind</th><th>Profile</th><th>Last OK</th><th>State</th><th></th></tr></thead><tbody>';
+        echo '<table><thead><tr><th><input type="checkbox" id="snmp-check-all"></th><th>Host</th><th>IP</th><th>Kind</th><th>Credentials</th><th>Last OK</th><th>State</th><th></th></tr></thead><tbody>';
         foreach ($scheduled as $d) {
             $id = (int)$d['id'];
             echo '<tr>';
@@ -538,7 +538,7 @@ function page_snmp_body(PDO $db, array $user): void
         echo '<button type="submit" class="btn" name="act" value="poll_selected">Poll selected</button>';
         echo '</div></div><div class="ucard-body">';
         echo '<p class="muted">UPS with enabled=0. Add them so the collector includes them every cycle.</p>';
-        echo '<table><thead><tr><th><input type="checkbox" id="snmp-check-unsched"></th><th>Host</th><th>IP</th><th>Profile</th><th>Last</th><th></th></tr></thead><tbody>';
+        echo '<table><thead><tr><th><input type="checkbox" id="snmp-check-unsched"></th><th>Host</th><th>IP</th><th>Credentials</th><th>Last</th><th></th></tr></thead><tbody>';
         foreach ($unscheduled as $d) {
             $id = (int)$d['id'];
             echo '<tr>';

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.66] - 2026-10-07
+
+- Models, under Power, is the field list for one kind of device. The first profile is CyberPower UPS and keeps the readings already on the device page. While it is the only profile, every UPS uses it. Assign a profile on the device when a second kind of equipment is added.
+- Upload a vendor MIB to name OIDs. Search that list, type an OID, or walk one live unit and check the objects it returned. A walk stays on the branch you type and stops after 40 answers. The MIB is a dictionary, not the poll list.
+- An extra field is read on the climate poll and shows on that device only after the card returns a value. Input frequency is the first extra field. Screens that used to say SNMPv3 profile now say SNMPv3 credentials. Config profiles are unchanged.
+- Open Models once after updating so the CyberPower profile is created. Restart the collector if it is already running. Poll all scheduled starts its own poll and uses this version without that restart.
+
 ## [0.5.65] - 2026-10-03
 
 - Poll all scheduled polls every UPS on the schedule in one click. A long list runs in the background, 24 at a time, and the page comes back right away. Refresh the SNMP page for the collector log. A second click while that poll is running waits. Battery replacement dates fill in as each card answers.

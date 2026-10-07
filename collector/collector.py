@@ -79,7 +79,7 @@ def _device_row(r) -> dict:
     d = dict(r)
     for key in (
         "id", "is_simulated", "enabled", "sensor_expected", "sensor_present",
-        "snmp_profile_id", "group_id", "consecutive_failures", "kind",
+        "snmp_profile_id", "model_profile_id", "group_id", "consecutive_failures", "kind",
     ):
         if key == "kind":
             continue
@@ -569,11 +569,20 @@ async def poll_live(device, secrets, climate=False, engine=None):
 
 
 def _apply_result(con, secrets, kind: str, device: dict, payload) -> None:
+    extra = None
+    if isinstance(payload, dict):
+        extra = payload.pop("_profile_fields", None)
     try:
         if kind == "err":
             mark_fail(con, device, payload, secrets)
         else:
             store_sample(con, device["id"], payload, device.get("va_rating") or 2000)
+            if extra:
+                try:
+                    from profile_fields import store_profile_fields
+                    store_profile_fields(con, device["id"], extra)
+                except Exception as e:
+                    log(f"profile fields store {device.get('id')}: {e}")
             evaluate(con, device, payload, secrets)
     except Exception as e:
         log(f"store fail device {device['id']}: {e}")
@@ -795,6 +804,18 @@ class WorkerPool:
                 t0 = time.time()
                 try:
                     sample = await self._poll_one(device, climate)
+                    if climate and isinstance(sample, dict):
+                        try:
+                            from profile_fields import read_profile_fields
+                            extra = await read_profile_fields(
+                                device,
+                                self.secrets,
+                                self.engines.get(str(device.get("ip") or "")),
+                            )
+                            if extra:
+                                sample["_profile_fields"] = extra
+                        except Exception as e:
+                            log(f"profile fields {device.get('ip')}: {e}")
                     apply_result(self.secrets, "ok", device, sample)
                     self.ok += 1
                 except asyncio.CancelledError:

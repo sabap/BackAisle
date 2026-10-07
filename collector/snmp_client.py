@@ -412,6 +412,46 @@ SET_OIDS = {
 }
 
 
+async def snmp_get_oid(engine, host: str, user: str, auth: str, priv: str, oid: tuple[int, ...], timeout: float = 2.0):
+    """GET one OID on the engine the worker already holds.
+
+    None means the card did not answer, so the stored value stays.
+    An empty string means the object is missing, so the stored value is cleared.
+    """
+    from pysnmp.hlapi.v3arch.asyncio import (
+        UsmUserData, UdpTransportTarget, ContextData,
+        ObjectType, ObjectIdentity, get_cmd, usmHMACSHAAuthProtocol, usmAesCfb128Protocol,
+    )
+    if engine is None:
+        return None
+    creds = UsmUserData(
+        user, auth, priv,
+        authProtocol=usmHMACSHAAuthProtocol,
+        privProtocol=usmAesCfb128Protocol,
+    )
+    target = await UdpTransportTarget.create((host, 161), timeout=timeout, retries=0)
+    try:
+        err_ind, err_stat, _err_idx, var_binds = await get_cmd(
+            engine, creds, target, ContextData(),
+            ObjectType(ObjectIdentity(oid)),
+            lookupMib=False,
+        )
+    except Exception:
+        return None
+    if err_ind or not var_binds:
+        return None
+    val = var_binds[0][1]
+    pretty = val.prettyPrint()
+    name = val.__class__.__name__
+    if name in ("Null", "NoSuchObject", "NoSuchInstance", "EndOfMibView") or pretty in (
+        "noSuchObject", "noSuchInstance", "endOfMibView", "",
+    ):
+        return ""
+    if err_stat and str(err_stat).strip().lower() not in ("0", "noerror"):
+        return ""
+    return pretty
+
+
 async def snmp_get_one(host: str, user: str, auth: str, priv: str, oid: tuple[int, ...], timeout: float = 4.0):
     from pysnmp.hlapi.v3arch.asyncio import (
         SnmpEngine, UsmUserData, UdpTransportTarget, ContextData,
