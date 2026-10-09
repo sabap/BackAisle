@@ -2,8 +2,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="BackAisle">
   <rect x="1.25" y="1.25" width="61.5" height="61.5" rx="14" fill="#5a4332"/>
   <rect x="3.25" y="3.25" width="57.5" height="57.5" rx="12" fill="#1c1612"/>
-  <rect x="13" y="15" width="6.5" height="31" rx="2" fill="#f4eadc"/>
-  <rect x="44.5" y="15" width="6.5" height="31" rx="2" fill="#f4eadc"/>
-  <rect x="13" y="45.5" width="38" height="4.5" rx="2" fill="#c4a574"/>
-  <path d="M43 18 L21 42" fill="none" stroke="#e2b15a" stroke-width="6" stroke-linecap="round"/>
+  <path d="M18 46 V33 A14 14 0 0 1 46 33 V46" fill="none" stroke="#e2b15a" stroke-width="4.6" stroke-linecap="round"/>
 </svg>

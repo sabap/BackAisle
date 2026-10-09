@@ -537,6 +537,16 @@ function page_rack(PDO $db, array $user): void {
                 $did = ba_last_id($db);
                 if ($did > 0) {
                     ba_pp_exec($db, 'UPDATE devices SET department_id=? WHERE id=?', [ba_device_department_choice($user), $did]);
+                    if ($tid > 0) {
+                        ba_ensure_template_links($db);
+                        $linked = ba_template($db, $tid);
+                        if ($linked && !empty($linked['model_profile_id'])) {
+                            $db->prepare('UPDATE devices SET model_profile_id=? WHERE id=?')->execute([(int)$linked['model_profile_id'], $did]);
+                        }
+                        if ($linked && !empty($linked['snmp_profile_id'])) {
+                            $db->prepare('UPDATE devices SET snmp_profile_id=? WHERE id=?')->execute([(int)$linked['snmp_profile_id'], $did]);
+                        }
+                    }
                 }
                 ba_sync_location_from_group($db, $did, (int)$rack['group_id'], $rack['name']);
                 ba_audit($db, 'add_rack_item', 'device', (string)$did, $kind.' U'.$pos);
@@ -776,7 +786,7 @@ function page_rack(PDO $db, array $user): void {
         <label>Management IP (optional)</label><input name="ip" placeholder="not polled unless kind is UPS">
         <?php ba_department_field($db, $user, null); ?>
         <button>Add to rack</button>
-        <p class="muted">Inventory on the U grid only. SNMPv3 polling stays UPS-only.</p>
+        <p class="muted">Inventory on the U grid only. A template also copies its credentials and model profile. SNMPv3 polling stays UPS-only.</p>
       </form>
       <?php ba_users_modal_close(); ?>
     </div>

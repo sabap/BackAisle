@@ -127,7 +127,16 @@ function ba_template_options(PDO $db, ?int $selected = null, ?string $kind = nul
     return $html;
 }
 
+function ba_ensure_template_links(PDO $db): void {
+    ba_ensure_column($db, 'device_templates', 'snmp_profile_id', 'INT NULL');
+    ba_ensure_column($db, 'device_templates', 'model_profile_id', 'INT NULL');
+    if (function_exists('ba_ensure_model_schema')) {
+        ba_ensure_model_schema($db);
+    }
+}
+
 function ba_apply_template(PDO $db, int $deviceId, int $templateId): void {
+    ba_ensure_template_links($db);
     $tpl = ba_template($db, $templateId);
     if (!$tpl || !(int)$tpl['is_active']) throw new RuntimeException('Template not found');
     $st = $db->prepare('SELECT * FROM devices WHERE id=?');
@@ -146,9 +155,84 @@ function ba_apply_template(PDO $db, int $deviceId, int $templateId): void {
     $ports = $tpl['port_count'] !== null && $tpl['port_count'] !== '' ? (int)$tpl['port_count'] : $dev['port_count'];
     $va = $tpl['va_rating'] !== null && $tpl['va_rating'] !== '' ? (float)$tpl['va_rating'] : $dev['va_rating'];
     $sid = !empty($tpl['snmp_profile_id']) ? (int)$tpl['snmp_profile_id'] : ($dev['snmp_profile_id'] ?? null);
+    $mpid = !empty($tpl['model_profile_id']) ? (int)$tpl['model_profile_id'] : ($dev['model_profile_id'] ?? null);
     $db->prepare(
-        'UPDATE devices SET template_id=?, kind=?, model=?, manufacturer=?, u_height=?, face=?, port_count=?, va_rating=?, snmp_profile_id=?, updated_at=datetime(\'now\') WHERE id=?'
-    )->execute([$templateId, $kind, $tpl['model'], $tpl['manufacturer'], $uh, $face, $ports, $va, $sid ?: null, $deviceId]);
+        'UPDATE devices SET template_id=?, kind=?, model=?, manufacturer=?, u_height=?, face=?, port_count=?, va_rating=?, snmp_profile_id=?, model_profile_id=?, updated_at=datetime(\'now\') WHERE id=?'
+    )->execute([$templateId, $kind, $tpl['model'], $tpl['manufacturer'], $uh, $face, $ports, $va, $sid ?: null, $mpid ?: null, $deviceId]);
+}
+
+/** Save the hardware on this device as a template. Optionally create a model profile and assign both. */
+function ba_save_device_as_template(PDO $db, array $device, string $manufacturer, string $model, int $uHeight, bool $createProfile, ?bool &$profileCreated = null): int {
+    ba_ensure_template_links($db);
+    $model = trim($model);
+    $manufacturer = trim($manufacturer);
+    if ($model === '') {
+        throw new RuntimeException('Model is required.');
+    }
+    if (strlen($model) > 150 || strlen($manufacturer) > 100) {
+        throw new RuntimeException('Manufacturer or model is too long.');
+    }
+    $kind = (string)ba_col($device, 'kind', 'ups');
+    if (!in_array($kind, ['ups', 'switch', 'patch_panel', 'other'], true)) {
+        $kind = 'other';
+    }
+    $face = (string)ba_col($device, 'face', 'both');
+    if (!in_array($face, ['front', 'rear', 'both'], true)) {
+        $face = 'both';
+    }
+    $dup = $db->prepare('SELECT manufacturer FROM device_templates WHERE is_active=1 AND kind=? AND LOWER(model)=LOWER(?)');
+    $dup->execute([$kind, $model]);
+    foreach ($dup->fetchAll() ?: [] as $have) {
+        $haveMfr = trim((string)($have['manufacturer'] ?? ''));
+        if ($manufacturer === '' || $haveMfr === '' || strcasecmp($haveMfr, $manufacturer) === 0) {
+            throw new RuntimeException('A template for this model already exists. Apply it from this device instead of creating another.');
+        }
+    }
+    $sid = (int)ba_col($device, 'snmp_profile_id', 0);
+    $profileCreated = false;
+    $own = !$db->inTransaction();
+    if ($own) {
+        $db->beginTransaction();
+    }
+    try {
+        $mpid = null;
+        if ($createProfile) {
+            $found = $db->prepare('SELECT id FROM model_profiles WHERE is_active=1 AND match_model IS NOT NULL AND LOWER(match_model)=LOWER(?) ORDER BY id');
+            $found->execute([$model]);
+            $existing = (int)$found->fetchColumn();
+            if ($existing > 0) {
+                $mpid = $existing;
+            } else {
+                $mpid = ba_create_model_profile($db, $model, $manufacturer, $model);
+                $profileCreated = true;
+            }
+        }
+        $db->prepare(
+            'INSERT INTO device_templates (manufacturer, model, kind, u_height, face, snmp_profile_id, model_profile_id) VALUES (?,?,?,?,?,?,?)'
+        )->execute([
+            $manufacturer !== '' ? $manufacturer : null,
+            $model,
+            $kind,
+            max(1, min(60, $uHeight)),
+            $face,
+            $sid > 0 ? $sid : null,
+            $mpid,
+        ]);
+        $tid = ba_last_id($db);
+        if ($tid < 1) {
+            throw new RuntimeException('Could not create the template.');
+        }
+        ba_apply_template($db, (int)ba_col($device, 'id', 0), $tid);
+        if ($own) {
+            $db->commit();
+        }
+        return $tid;
+    } catch (Throwable $e) {
+        if ($own && $db->inTransaction()) {
+            $db->rollBack();
+        }
+        throw $e;
+    }
 }
 
 function ba_tpl_save_picture(int $id, string $field, array $file): ?string {
@@ -167,7 +251,7 @@ function ba_tpl_save_picture(int $id, string $field, array $file): ?string {
 }
 
 function page_templates(PDO $db, array $user): void {
-    ba_ensure_column($db, 'device_templates', 'snmp_profile_id', 'INT NULL');
+    ba_ensure_template_links($db);
     ba_ensure_template_ports($db);
     $admin = ba_editor($user, 'edit_templates');
     $id = (int)($_GET['id'] ?? 0);
@@ -197,15 +281,16 @@ function page_templates(PDO $db, array $user): void {
                     ($_POST['weight_kg'] ?? '') === '' ? null : (float)$_POST['weight_kg'],
                     trim($_POST['notes'] ?? ''),
                     ($_POST['snmp_profile_id'] ?? '') === '' ? null : (int)$_POST['snmp_profile_id'],
+                    ($_POST['model_profile_id'] ?? '') === '' ? null : (int)$_POST['model_profile_id'],
                 ];
                 if ($tid) {
                     $row[] = $tid;
                     $db->prepare(
-                        'UPDATE device_templates SET manufacturer=?, model=?, kind=?, u_height=?, face=?, port_count=?, va_rating=?, watts=?, weight_kg=?, notes=?, snmp_profile_id=?, updated_at=datetime(\'now\') WHERE id=?'
+                        'UPDATE device_templates SET manufacturer=?, model=?, kind=?, u_height=?, face=?, port_count=?, va_rating=?, watts=?, weight_kg=?, notes=?, snmp_profile_id=?, model_profile_id=?, updated_at=datetime(\'now\') WHERE id=?'
                     )->execute($row);
                 } else {
                     $db->prepare(
-                        'INSERT INTO device_templates (manufacturer, model, kind, u_height, face, port_count, va_rating, watts, weight_kg, notes, snmp_profile_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
+                        'INSERT INTO device_templates (manufacturer, model, kind, u_height, face, port_count, va_rating, watts, weight_kg, notes, snmp_profile_id, model_profile_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)'
                     )->execute($row);
                     $tid = ba_last_id($db);
                 }
@@ -273,7 +358,7 @@ function page_templates(PDO $db, array $user): void {
         if ($msg) echo '<div class="flash">'.h($msg).'</div>';
         echo '<p class="muted"><a href="/templates.php">All templates</a></p>';
         echo '<h1>'.h($tpl ? $tpl['model'] : 'New device template').'</h1>';
-        echo '<p class="muted">Catalog entry for IDF gear. Apply it to a UPS, switch, or patch panel to fill model, U height, and ports. A UPS template also stores the plug type, output outlets, data ports, and environmental ports.</p>';
+        echo '<p class="muted">Catalog entry for IDF gear. Apply it to a UPS, switch, or patch panel to fill model, U height, ports, credentials, and the model profile. A UPS template also stores the plug type, output outlets, data ports, and environmental ports.</p>';
         if ($admin) {
             echo '<form method="post" enctype="multipart/form-data" class="ucard stack">';
             echo '<div class="ucard-head"><h3>Template</h3></div><div class="ucard-body">';
@@ -401,6 +486,14 @@ function page_templates(PDO $db, array $user): void {
                 echo '<option value="'.(int)$sp['id'].'"'.$sel.'>'.h($sp['name']).'</option>';
             }
             echo '</select>';
+            echo '<label id="template-model-profile">Model profile (applied to devices using this template)</label><select name="model_profile_id"><option value="">(none)</option>';
+            $curMp = (int)($tpl['model_profile_id'] ?? 0);
+            foreach (ba_model_profiles($db) as $mp) {
+                $sel = $curMp === (int)$mp['id'] ? ' selected' : '';
+                echo '<option value="'.(int)$mp['id'].'"'.$sel.'>'.h((string)$mp['name']).'</option>';
+            }
+            echo '</select>';
+            echo '<p class="muted">The next device that uses this template gets this field list. Leave it empty when the hardware has no profile yet.</p>';
             echo '<label>Front picture</label><input type="file" name="front_picture" accept="image/jpeg,image/png,image/webp">';
             if (!empty($tpl['front_picture'])) {
                 echo '<p><img class="idf-tpl-preview" src="'.h($tpl['front_picture']).'" alt="front"> <label><input type="checkbox" name="clear_front_picture"> clear</label></p>';

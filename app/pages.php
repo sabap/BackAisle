@@ -22,36 +22,48 @@ SQL;
 
 function page_login(PDO $db): void {
     $err = '';
+    $postedUser = '';
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-        $u = trim($_POST['username'] ?? '');
+        $postedUser = trim($_POST['username'] ?? '');
         $p = $_POST['password'] ?? '';
-        if (ba_login($db, $u, $p)) {
+        if (ba_login($db, $postedUser, $p)) {
             header('Location: /home.php');
             exit;
         }
-        $err = 'Invalid credentials';
+        $err = 'Invalid username or password.';
+    }
+    $ldapOn = false;
+    if (function_exists('ba_ldap_cfg')) {
+        try {
+            $ldapOn = !empty(ba_ldap_cfg($db)['enabled']);
+        } catch (Throwable $e) {
+            $ldapOn = false;
+        }
     }
     ?>
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Sign in · BackAisle</title>
-<link rel="icon" href="/assets/logo.svg" type="image/svg+xml">
-<link rel="icon" href="/assets/favicon-32.png" type="image/png" sizes="32x32">
-<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
-<link rel="stylesheet" href="/assets/app.css?v=layout4"></head>
-<body>
-<div class="login ucard">
-  <div class="ucard-head"><h3>Sign in</h3></div>
-  <div class="ucard-body">
-  <div class="brand"><img class="brand-mark" src="/assets/logo.svg" width="40" height="40" alt=""><span class="brand-text"><span class="brand-name">BackAisle</span><small title="IDF Management">IDFM</small></span></div>
-  <p class="muted">IDF Management — racks, UPS, and closet climate. Not ColdAisle, not PowerPanel. Local or AD (LDAPS) accounts.</p>
-  <?php if ($err): ?><div class="flash"><?= h($err) ?></div><?php endif; ?>
-  <form method="post" class="stack">
-    <label>User</label><input name="username" autofocus>
-    <label>Password</label><input type="password" name="password">
-    <p><button type="submit">Sign in</button></p>
-  </form>
+<link rel="icon" href="/assets/logo.svg?v=aisle1" type="image/svg+xml">
+<link rel="icon" href="/assets/favicon-32.png?v=aisle1" type="image/png" sizes="32x32">
+<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=aisle1">
+<link rel="stylesheet" href="/assets/app.css?v=layout6"></head>
+<body class="login-page">
+<div class="login-card">
+  <div class="login-brand">
+    <img src="/assets/logo.svg?v=aisle1" width="64" height="64" alt="">
+    <h1>BackAisle <small title="IDF Management">IDFM</small></h1>
   </div>
+  <p class="subtitle">The aisle behind the racks.</p>
+  <?php if ($err): ?><div class="flash err"><?= h($err) ?></div><?php endif; ?>
+  <form method="post" class="stack" autocomplete="on">
+    <label for="username">Username</label>
+    <input id="username" name="username" autofocus autocomplete="username" value="<?= h($postedUser) ?>">
+    <label for="password">Password</label>
+    <input id="password" type="password" name="password" autocomplete="current-password">
+    <button type="submit">Sign in</button>
+  </form>
+  <?php if ($ldapOn): ?><p class="login-note muted">Directory accounts sign in on this form.</p><?php endif; ?>
 </div>
 </body></html>
     <?php
@@ -771,10 +783,32 @@ function page_devices(PDO $db, array $user): void {
                         $kind,
                     ]);
                 $newId = ba_last_id($db);
+                $usedTemplate = false;
                 if ($newId > 0) {
                     ba_pp_exec($db, 'UPDATE devices SET department_id=? WHERE id=?', [ba_device_department_choice($user), $newId]);
+                    $tid = (int)($_POST['template_id'] ?? 0);
+                    if ($tid > 0) {
+                        try {
+                            ba_apply_template($db, $newId, $tid);
+                            $usedTemplate = true;
+                        } catch (Throwable $e) {
+                            header('Location: ' . ba_href('/device?id=' . $newId . '&err=' . rawurlencode($e->getMessage())));
+                            exit;
+                        }
+                    }
+                    if (ba_editor($user, 'edit_snmp')) {
+                        $cred = trim((string)($_POST['snmp_profile_id'] ?? ''));
+                        if ($cred !== '') {
+                            $db->prepare('UPDATE devices SET snmp_profile_id=? WHERE id=?')->execute([(int)$cred, $newId]);
+                        }
+                    }
                 }
                 ba_audit($db, 'add_device', 'device', $ip);
+                if ($newId > 0) {
+                    $offer = !$usedTemplate && ba_editor($user, 'edit_templates');
+                    header('Location: ' . ba_href('/device?id=' . $newId . ($offer ? '&save_as=1' : '')));
+                    exit;
+                }
             }
             header('Location: ' . ba_href('/devices'));
             exit;
@@ -891,20 +925,29 @@ JS;
     ba_card_close();
     if ($canEditDevices) {
         ba_users_modal_open('modal-add-device', 'Add device', false);
-        echo '<form method="post" class="filters">';
+        echo '<form method="post" class="stack">';
         echo '<input type="hidden" name="act" value="add">';
-        echo '<input name="ip" placeholder="IP" required>';
-        echo '<input name="hostname" placeholder="hostname">';
-        echo '<input name="site" value="Hospital" placeholder="site">';
-        echo '<input name="building" placeholder="building">';
-        echo '<input name="idf_closet" placeholder="IDF/closet">';
-        echo '<input name="rack" placeholder="rack label">';
-        echo '<select name="kind">'.ba_kind_options('ups').'</select>';
-        echo '<input name="circuit" placeholder="circuit">';
+        echo '<label>Template</label><select name="template_id">'.ba_template_options($db).'</select>';
+        echo '<p class="muted">Pick a template when this hardware is already in the catalog. It fills the kind, the model, the height, the outlets, the credentials, and the model profile. A credential choice here overrides the template.</p>';
+        if (ba_editor($user, 'edit_snmp')) {
+            echo '<label>SNMPv3 credentials</label><select name="snmp_profile_id"><option value="">(from the template, or the site default)</option>';
+            foreach ($db->query('SELECT id, name FROM snmp_profiles ORDER BY name') as $sp) {
+                echo '<option value="'.(int)$sp['id'].'">'.h($sp['name']).'</option>';
+            }
+            echo '</select>';
+        }
+        echo '<label>IP</label><input name="ip" placeholder="IP" required>';
+        echo '<label>Hostname</label><input name="hostname" placeholder="hostname">';
+        echo '<label>Site</label><input name="site" value="Hospital" placeholder="site">';
+        echo '<label>Building</label><input name="building" placeholder="building">';
+        echo '<label>IDF / closet</label><input name="idf_closet" placeholder="IDF/closet">';
+        echo '<label>Rack label</label><input name="rack" placeholder="rack label">';
+        echo '<label>Kind</label><select name="kind">'.ba_kind_options('ups').'</select>';
+        echo '<label>Circuit</label><input name="circuit" placeholder="circuit">';
         ba_department_field($db, $user, null);
         echo '<label class="muted"><input type="checkbox" name="sensor_expected" checked> sensor expected</label>';
         echo '<button>Add device</button></form>';
-        echo '<p class="muted">SNMPv3 credentials come from secrets.env. Model/serial/firmware auto-fill on next poll.</p>';
+        echo '<p class="muted">Leave the template empty to enter this unit by hand. You can save it as a template afterward. Model, serial, and firmware fill in on the next poll.</p>';
         ba_users_modal_close();
     }
     ba_layout_end();
@@ -930,6 +973,45 @@ function page_device(PDO $db, array $user): void {
             ba_audit($db, 'recommission_device', 'device', (string)$id);
             header('Location: ' . ba_href('/device?id='.$id));
             exit;
+        }
+        if (isset($_POST['save_as_template']) && $canEditThis && ba_editor($user, 'edit_templates')) {
+            try {
+                $createProfile = ba_editor($user, 'edit_snmp') && isset($_POST['create_model']);
+                $created = false;
+                $tid = ba_save_device_as_template(
+                    $db,
+                    $r,
+                    (string)($_POST['manufacturer'] ?? ''),
+                    (string)($_POST['model'] ?? ''),
+                    (int)($_POST['u_height'] ?? 1),
+                    $createProfile,
+                    $created
+                );
+                ba_audit($db, 'add_template', 'device_template', (string)$tid, 'device=' . $id);
+                $savedFlag = $created ? 'model' : ($createProfile ? 'linked' : '1');
+                header('Location: ' . ba_href('/device?id=' . $id . '&saved=' . $savedFlag));
+                exit;
+            } catch (Throwable $e) {
+                header('Location: ' . ba_href('/device?id=' . $id . '&save_as=1&err=' . rawurlencode($e->getMessage())));
+                exit;
+            }
+        }
+        if (isset($_POST['create_model_profile']) && $canEditThis && ba_editor($user, 'edit_snmp')) {
+            try {
+                $pid = ba_create_model_profile(
+                    $db,
+                    (string)($_POST['profile_name'] ?? ''),
+                    (string)($_POST['profile_vendor'] ?? ''),
+                    (string)($_POST['profile_match'] ?? '')
+                );
+                $db->prepare('UPDATE devices SET model_profile_id=? WHERE id=?')->execute([$pid, $id]);
+                ba_audit($db, 'add_model_profile', 'model_profile', (string)$pid, 'device=' . $id);
+                header('Location: ' . ba_href('/models?id=' . $pid));
+                exit;
+            } catch (Throwable $e) {
+                header('Location: ' . ba_href('/device?id=' . $id . '&err=' . rawurlencode($e->getMessage())));
+                exit;
+            }
         }
         if (isset($_POST['save_owner']) && ba_can($user, 'edit_devices_all')) {
             ba_pp_exec($db, 'UPDATE devices SET department_id=? WHERE id=?', [ba_device_department_choice($user), $id]);
@@ -1009,6 +1091,15 @@ function page_device(PDO $db, array $user): void {
     $thr = $th->fetch() ?: [];
     ba_layout_start($r['hostname'] ?: $r['ip'], 'devices');
     if (!empty($_GET['err'])) echo '<div class="flash">'.h((string)$_GET['err']).'</div>';
+    if (!empty($_GET['saved'])) {
+        $savedText = 'Template saved. The next unit of this hardware can use it.';
+        if ((string)$_GET['saved'] === 'model') {
+            $savedText .= ' The model profile has no extra fields yet. Add those on Models.';
+        } elseif ((string)$_GET['saved'] === 'linked') {
+            $savedText .= ' It uses the model profile that already matches this model.';
+        }
+        echo '<div class="flash">'.h($savedText).'</div>';
+    }
     ?>
     <h1><?= h($r['hostname'] ?: $r['ip']) ?> <span class="muted"><?= h($r['model']) ?> · <?= h($r['serial']) ?> · <?= h($r['mac']) ?></span></h1>
     <div class="kpis">
@@ -1033,7 +1124,14 @@ function page_device(PDO $db, array $user): void {
       <?php endif; ?>
       · <?= h(ba_kind_label($r['kind'] ?? 'ups')) ?>
       · comm <?= h($r['comm_state'] ?: 'unknown') ?> · last ok <?= h($r['last_success'] ?: 'never') ?> · SNMP name <?= h($r['snmp_name']) ?> · fw <?= h($r['firmware']) ?></p>
-    <?php ba_render_device_readings($db, $r); ?>
+    <?php
+    $canMakeProfile = $canEditThis && ba_editor($user, 'edit_snmp');
+    $profileAction = '';
+    if ($canMakeProfile) {
+        $profileAction = '<a class="btn" href="' . h(ba_href('/device?id=' . $id . '&new_profile=1')) . '">Create model profile</a>';
+    }
+    ba_render_device_readings($db, $r, $profileAction);
+    ?>
     <?php if (trim((string)ba_col($r, 'decommissioned_at', '')) !== ''): ?>
       <div class="flash">Decommissioned <?= h((string)ba_col($r, 'decommissioned_at')) ?>. Polling is off. The record is kept.</div>
     <?php endif; ?>
@@ -1081,6 +1179,9 @@ function page_device(PDO $db, array $user): void {
           }
         ?></select>
         <p class="muted">Automatic uses the model name, then the only profile on the site. A field shows on this device only after the card returns it.</p>
+        <?php if ($canMakeProfile): ?>
+        <p><a class="btn" href="<?= h(ba_href('/device?id=' . $id . '&new_profile=1')) ?>">Create model profile</a></p>
+        <?php endif; ?>
         <label>Site</label><input name="site" value="<?= h($r['site']) ?>">
         <label>Building</label><input name="building" value="<?= h($r['building']) ?>">
         <label>IDF / closet</label><input name="idf_closet" value="<?= h($r['idf_closet']) ?>">
@@ -1090,7 +1191,7 @@ function page_device(PDO $db, array $user): void {
           <select name="template_id"><?= ba_template_options($db, isset($r['template_id']) ? (int)$r['template_id'] : null) ?></select>
           <button name="apply_template" value="1">Apply template</button>
         </div>
-        <p class="muted">Apply copies manufacturer, model, kind, U height, face, ports, and VA from the template.</p>
+        <p class="muted">Apply copies manufacturer, model, kind, U height, face, ports, VA, credentials, and the model profile from the template.</p>
         <label>Kind</label><select name="kind"><?= ba_kind_options($r['kind'] ?? 'ups') ?></select>
         <label>Network rack</label>
         <select name="rack_id"><option value="">(not placed)</option><?php
@@ -1135,6 +1236,45 @@ function page_device(PDO $db, array $user): void {
       </form>
     </div>
     <?php endif;
+    $offerSave = isset($_GET['save_as']) && $canEditThis && ba_editor($user, 'edit_templates') && (int)ba_col($r, 'template_id', 0) < 1;
+    if ($offerSave) {
+        $kindNow = (string)($r['kind'] ?? 'ups');
+        $uhNow = (int)($r['u_height'] ?? 0);
+        if ($uhNow < 1) {
+            $uhNow = $kindNow === 'ups' ? 2 : 1;
+        }
+        ba_users_modal_open('modal-save-template', 'Save a template for the next one?', true, ba_href('/device?id=' . $id));
+        echo '<form method="post" class="stack">';
+        echo '<input type="hidden" name="save_as_template" value="1">';
+        if (!empty($_GET['err'])) {
+            echo '<div class="flash">' . h((string)$_GET['err']) . '</div>';
+        }
+        echo '<p class="muted">This device is already saved. A template lets the next unit of the same hardware be one choice. Close, or Not now, leaves the device without a template.</p>';
+        echo '<label>Manufacturer</label><input name="manufacturer" value="' . h(trim((string)ba_col($r, 'manufacturer', ''))) . '" placeholder="CyberPower, APC, Cisco">';
+        echo '<label>Model</label><input name="model" required autofocus value="' . h(trim((string)ba_col($r, 'model', ''))) . '">';
+        echo '<label>Height (U)</label><input type="number" name="u_height" min="1" max="60" value="' . $uhNow . '">';
+        if (ba_editor($user, 'edit_snmp')) {
+            echo '<label><input type="checkbox" name="create_model"> Also create a model profile</label>';
+            echo '<p class="muted">The profile uses this model name as its match. If a profile already matches this exact name, that profile is used instead of a second one. A new profile means a UPS with a blank model no longer uses the only profile on the site. Summary readings stay either way.</p>';
+        }
+        echo '<button>Save template</button> <a href="' . h(ba_href('/device?id=' . $id)) . '">Not now</a></form>';
+        ba_users_modal_close();
+    }
+    if ($canMakeProfile) {
+        $modelName = trim((string)ba_col($r, 'model', ''));
+        $vendorName = trim((string)ba_col($r, 'manufacturer', ''));
+        $hostName = trim((string)(($r['hostname'] ?? '') !== '' ? $r['hostname'] : $r['ip']));
+        $suggest = $modelName !== '' ? $modelName : trim($vendorName . ' ' . $hostName);
+        ba_users_modal_open('modal-new-model', 'Create model profile', isset($_GET['new_profile']), ba_href('/device?id=' . $id));
+        echo '<form method="post" class="stack">';
+        echo '<input type="hidden" name="create_model_profile" value="1">';
+        echo '<label>Name</label><input name="profile_name" value="' . h($suggest) . '" required>';
+        echo '<label>Vendor</label><input name="profile_vendor" value="' . h($vendorName) . '">';
+        echo '<label>Match model</label><input name="profile_match" value="' . h($modelName) . '">';
+        echo '<p class="muted">This device is assigned to the new profile. Other units use it when their model name contains the match text. Use the full model name. A short match such as PR also selects other units of that family. Adding a profile means a UPS with a blank model no longer uses the only profile on the site. Summary readings stay on the device page. The next page is where you add OIDs.</p>';
+        echo '<button>Create model profile</button></form>';
+        ba_users_modal_close();
+    }
     ba_layout_end();
 }
 
