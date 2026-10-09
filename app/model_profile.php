@@ -170,6 +170,28 @@ function ba_oid_ok(string $oid): bool
 }
 
 /** @return list<array<string, mixed>> */
+function ba_create_model_profile(PDO $db, string $name, string $vendor, string $match, string $notes = ''): int
+{
+    ba_ensure_model_schema($db);
+    $name = trim($name);
+    $vendor = trim($vendor);
+    $match = trim($match);
+    $notes = trim($notes);
+    if ($name === '') {
+        throw new RuntimeException('Name is required.');
+    }
+    if (strlen($name) > 150 || strlen($vendor) > 100 || strlen($match) > 150 || strlen($notes) > 500) {
+        throw new RuntimeException('Name, vendor, or match text is too long.');
+    }
+    $db->prepare('INSERT INTO model_profiles (name, vendor, match_model, notes) VALUES (?,?,?,?)')
+        ->execute([$name, $vendor !== '' ? $vendor : null, $match !== '' ? $match : null, $notes !== '' ? $notes : null]);
+    $id = ba_last_id($db);
+    if ($id < 1) {
+        throw new RuntimeException('Could not create the model profile.');
+    }
+    return $id;
+}
+
 function ba_model_profiles(PDO $db): array
 {
     ba_ensure_model_schema($db);
@@ -252,11 +274,15 @@ function ba_model_add_field(PDO $db, int $profileId, string $label, string $oid,
         ->execute([$profileId, $key, $label, $oid, $unit, $scale, $enumJson !== '' ? $enumJson : null, 1, $sort]);
 }
 
-function ba_render_device_readings(PDO $db, array $device): void
+function ba_render_device_readings(PDO $db, array $device, string $actionsHtml = ''): void
 {
     ba_ensure_model_schema($db);
     $profile = ba_model_for_device($db, $device);
-    echo '<section class="ucard"><div class="ucard-head"><h3>Readings</h3></div><div class="ucard-body">';
+    echo '<section class="ucard"><div class="ucard-head"><h3>Readings</h3>';
+    if ($actionsHtml !== '') {
+        echo '<div class="head-actions readings-create">' . $actionsHtml . '</div>';
+    }
+    echo '</div><div class="ucard-body">';
     if (!$profile) {
         echo '<p class="muted">No model profile yet. Models is where a vendor MIB becomes the fields for this device.</p>';
         echo '</div></section>';

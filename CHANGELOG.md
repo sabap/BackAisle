@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.67] - 2026-10-09
+
+- The mark is a gold arch, the entrance to the aisle. Sign-in is a centered card with that mark, the name, IDFM, and "The aisle behind the racks."
+- Add device can start from a template. The template fills the kind, the model, the height, the outlets, the credentials, and the model profile. A credential chosen on that form overrides the template.
+- A device entered by hand can be saved as a template for the next one. Not now keeps the device. Creating a model profile is optional. The match is the full model name. A profile that already uses that name is reused. A new profile has no extra fields yet, and a UPS with a blank model no longer uses the only profile on the site.
+- A template can store a model profile. Applying it sets the profile and the credentials when the template has them, and leaves the device's current assignment alone when those links are empty. Adding a device from a rack copies those links and does not move the U you placed.
+- Create model profile, on the device page, makes an empty profile from that unit, assigns it, and opens Models so the OIDs can be added.
+
 ## [0.5.66] - 2026-10-07
 
 - Models, under Power, is the field list for one kind of device. The first profile is CyberPower UPS and keeps the readings already on the device page. While it is the only profile, every UPS uses it. Assign a profile on the device when a second kind of equipment is added.
