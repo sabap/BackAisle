@@ -15,8 +15,6 @@ a.brand, a.brand:hover { color:var(--ink); text-decoration:none; }
 .brand-text { display:flex; align-items:baseline; gap:.45rem; min-width:0; }
 .brand-name { line-height:1; }
 .brand small { color:#d7b48a; font-weight:700; letter-spacing:.14em; font-size:.68rem; margin:0; text-transform:uppercase; }
-.login .brand-mark { width:40px; height:40px; flex-basis:40px; }
-.login .brand-text { flex-direction:column; align-items:flex-start; gap:.12rem; }
 .mark { display:inline-block; background:#1c3b5a; color:#9fd; padding:.1rem .35rem; border-radius:4px; margin-right:.35rem; font-size:.8rem; }
 .top nav { display:flex; gap:.35rem; flex-wrap:wrap; align-items:center; }
 .top nav a { color:var(--muted); padding:.35rem .7rem; border-radius:6px; }
@@ -103,7 +101,50 @@ form button, .btn { background:#1c3b5a; cursor:pointer; color:var(--ink); border
 .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:1rem; margin-bottom:1rem; }
 .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:1rem; }
 @media (max-width:900px) { .grid2 { grid-template-columns:1fr; } th { top:0; } }
-.login { max-width:360px; margin:12vh auto; }
+.login-page {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem;
+  background:
+    radial-gradient(ellipse at 28% 12%, #5a433266, transparent 52%),
+    radial-gradient(ellipse at 78% 88%, #3c2f2488, transparent 48%),
+    var(--bg);
+}
+.login-card {
+  width: 100%;
+  max-width: 26rem;
+  background: var(--panel);
+  border: 1px solid #8a6a45;
+  border-radius: 14px;
+  padding: 2rem 1.75rem 1.55rem;
+  box-shadow: 0 25px 60px rgba(0,0,0,.45);
+}
+.login-brand { display: flex; flex-direction: column; align-items: center; gap: .75rem; }
+.login-brand img {
+  width: 64px; height: 64px; display: block;
+  filter: drop-shadow(0 10px 22px rgba(0,0,0,.45));
+}
+.login-brand h1 {
+  margin: 0; font-size: 1.55rem; letter-spacing: .02em;
+  display: flex; align-items: baseline; gap: .5rem;
+}
+.login-brand h1 small {
+  color: #d7b48a; font-weight: 700; letter-spacing: .14em;
+  font-size: .72rem; text-transform: uppercase;
+}
+.login-card .subtitle { text-align: center; color: #d7c4a8; margin: .4rem 0 1.35rem; font-size: .95rem; }
+.login-card form.stack { max-width: none; }
+.login-card form.stack input { width: 100%; }
+.login-card form.stack button {
+  width: 100%; margin-top: .95rem; padding: .55rem .8rem;
+  background: #5a4332; border-color: #d7b48a; color: #fff8ee; font-weight: 600;
+}
+.login-card form.stack button:hover { background: #6b4e38; }
+.login-card .flash { margin-bottom: .9rem; }
+.login-note { text-align: center; font-size: .8rem; margin: .95rem 0 0; }
 h1 { font-size:1.2rem; margin:.2rem 0 1rem; }
 .muted { color:var(--muted); }
 .charts { display:grid; grid-template-columns:1fr 1fr; gap:1rem; }
@@ -588,6 +629,10 @@ body.tech .tech-u.busy { color: var(--muted); background: #0e141c; }
 .ucard-head .btn:hover, .ucard-head button:hover { background:#6b4e38; }
 .ucard-head .muted { color:#d7c4a8; }
 .ucard-head .head-actions { display:flex; gap:.45rem; flex-wrap:wrap; align-items:center; justify-content:flex-end; }
+@media (max-width: 720px) {
+  .ucard-head .readings-create { flex: 1 1 100%; justify-content: flex-start; }
+  .ucard-head .readings-create .btn { white-space: normal; }
+}
 .ucard-head .head-actions .filters,
 .ucard-head .filters,
 .ucard-head .loc-toolbar { margin:0; }
@@ -612,7 +657,6 @@ form.ucard.stack select, form.ucard.stack textarea { width:100%; max-width:100%;
 .page-tabs a.on, .page-tabs a:hover { background:#3c2f24; border-color:#d7b48a; color:#fff8ee; text-decoration:none; }
 .dash-charts > .ucard { margin-bottom:0; }
 .ucard.dash-chart-card { padding:0; }
-.login.ucard { padding:0; overflow:hidden; }
 .ldap-cols { display:grid; grid-template-columns:1.2fr 1fr 1fr; gap:1rem 1.25rem; align-items:start; }
 .ldap-col h4 { margin:0 0 .4rem; font-size:.92rem; }
 .ldap-col label { display:block; margin:.45rem 0 .15rem; color:var(--muted); font-size:.8rem; }
