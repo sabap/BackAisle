@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.5.69] - 2026-10-09
+
+- Settings is in the header. A person enrolls there for department notices. A Global Admin chooses system problems and device alerts for the whole site. A Department Admin chooses device alerts for that department's devices. Each alert can send email, show an in-app pop-up, and be kept for the future NOC view.
+- Group by IDF sends one notice when several devices in the same IDF have the same alert. Leave it off to send a notice for every device.
+- Department email goes to the department contact and to people who enroll. Nothing is sent until a box is checked, and alerts that are already open stay quiet.
+- Org → Mail sets the mail server, the from address, and the site notification address. A blank password keeps the one already stored.
+- Pop-ups appear at the lower right and fade after a few seconds.
+- Open the site once after updating so the notification tables are created. Restart the collector if it is already running, so department mail follows these boxes.
+
 ## [0.5.68] - 2026-10-09
 
 - The dashboard lists the IDFs on the first page after sign-in. That page opens the same dashboard as the Dashboard link.

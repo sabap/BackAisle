@@ -377,3 +377,53 @@ CREATE TABLE department_group_maps (
   is_active INT NOT NULL CONSTRAINT DF_ba_dgm_active DEFAULT 1
 );
 GO
+IF COL_LENGTH('users', 'notify_enroll') IS NULL ALTER TABLE users ADD notify_enroll INT NOT NULL CONSTRAINT DF_ba_user_enroll DEFAULT 0;
+IF COL_LENGTH('departments', 'notify_group_idf') IS NULL ALTER TABLE departments ADD notify_group_idf INT NOT NULL CONSTRAINT DF_ba_dept_group_idf DEFAULT 0;
+GO
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'notify_rules')
+CREATE TABLE notify_rules (
+  scope NVARCHAR(16) NOT NULL,
+  scope_id INT NOT NULL,
+  kind NVARCHAR(64) NOT NULL,
+  email INT NOT NULL CONSTRAINT DF_ba_nr_email DEFAULT 0,
+  in_app INT NOT NULL CONSTRAINT DF_ba_nr_app DEFAULT 0,
+  noc INT NOT NULL CONSTRAINT DF_ba_nr_noc DEFAULT 0,
+  CONSTRAINT PK_ba_notify_rules PRIMARY KEY (scope, scope_id, kind)
+);
+GO
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'notify_claims')
+CREATE TABLE notify_claims (
+  dedupe_key NVARCHAR(255) NOT NULL,
+  audience NVARCHAR(64) NOT NULL,
+  channel NVARCHAR(16) NOT NULL,
+  announced INT NOT NULL CONSTRAINT DF_ba_nc_ann DEFAULT 0,
+  note NVARCHAR(MAX) NULL,
+  created_at NVARCHAR(32) NOT NULL,
+  CONSTRAINT PK_ba_notify_claims PRIMARY KEY (dedupe_key, audience, channel)
+);
+GO
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'notifications')
+CREATE TABLE notifications (
+  id INT IDENTITY(1,1) PRIMARY KEY,
+  user_id INT NULL,
+  kind NVARCHAR(64) NOT NULL,
+  title NVARCHAR(255) NOT NULL,
+  message NVARCHAR(MAX) NOT NULL,
+  severity NVARCHAR(16) NOT NULL,
+  noc INT NOT NULL CONSTRAINT DF_ba_notes_noc DEFAULT 0,
+  department_id INT NULL,
+  group_id INT NULL,
+  device_id INT NULL,
+  dedupe_key NVARCHAR(255) NOT NULL,
+  created_at NVARCHAR(32) NOT NULL,
+  read_at NVARCHAR(32) NULL
+);
+GO
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'notify_system')
+CREATE TABLE notify_system (
+  kind NVARCHAR(64) NOT NULL PRIMARY KEY,
+  is_open INT NOT NULL,
+  message NVARCHAR(MAX) NULL,
+  updated_at NVARCHAR(32) NOT NULL
+);
+GO

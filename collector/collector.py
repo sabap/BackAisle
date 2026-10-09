@@ -4,9 +4,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import random
 import smtplib
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -597,7 +599,42 @@ def apply_result(secrets, kind: str, device: dict, payload) -> None:
         con.close()
 
 
-def _housekeep(con, secrets) -> None:
+def _notify_ready(con) -> bool:
+    try:
+        row = con.execute("SELECT v FROM settings WHERE k='notify_ready'").fetchone()
+    except Exception:
+        return False
+    if not row:
+        return False
+    if isinstance(row, dict):
+        val = row.get("v", row.get("V"))
+    else:
+        val = row[0]
+    return str(val).strip() == "1"
+
+
+def _run_notify_sweep() -> None:
+    """Mail and in-app rows are decided in PHP so the checkboxes stay the one source."""
+    php = os.environ.get("BACKAISLE_PHP", r"C:\PHP\php.exe")
+    script = str(ROOT / "collector" / "notify_sweep.php")
+    ini = str(ROOT / "php.ini")
+    if not os.path.isfile(php) or not os.path.isfile(script):
+        log("notify sweep skipped; php or script missing")
+        return
+    try:
+        subprocess.run(
+            [php, "-c", ini, script],
+            cwd=str(ROOT),
+            timeout=60,
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception as e:
+        log(f"notify sweep failed: {e}")
+
+
+def _housekeep(con, secrets, mail: bool = True) -> None:
     con.execute("DELETE FROM samples WHERE ts < datetime('now','-90 days')")
     if is_sqlsrv():
         con.execute("DELETE FROM samples_hourly WHERE hour_ts >= DATEADD(hour, -3, SYSUTCDATETIME())")
@@ -618,7 +655,8 @@ def _housekeep(con, secrets) -> None:
                GROUP BY device_id, strftime('%Y-%m-%d %H:00:00', ts)"""
         )
         con.execute("DELETE FROM samples_hourly WHERE hour_ts < datetime('now','-370 days')")
-    process_group_alerts(con, secrets)
+    if mail:
+        process_group_alerts(con, secrets)
     con.commit()
 
 
@@ -714,10 +752,14 @@ def _poll_sims(secrets, sims, last_done: dict[int, float], t0: float, force: boo
 
 def _housekeep_unlocked(secrets) -> None:
     con = connect()
+    ready = False
     try:
-        _housekeep(con, secrets)
+        ready = _notify_ready(con)
+        _housekeep(con, secrets, mail=not ready)
     finally:
         con.close()
+    if ready:
+        _run_notify_sweep()
 
 
 class WorkerPool:
