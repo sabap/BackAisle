@@ -226,6 +226,71 @@ function bindLocTree() {
   search.addEventListener('input', apply);
 }
 
+function baToast(title, message, type) {
+  let host = document.getElementById('toast-host');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'toast-host';
+    host.setAttribute('aria-live', 'polite');
+    document.body.appendChild(host);
+  }
+  const el = document.createElement('div');
+  el.className = 'ba-toast ba-toast-' + (type || 'info');
+  el.setAttribute('role', 'status');
+  const mark = document.createElement('span');
+  mark.className = 'ba-toast-mark';
+  mark.setAttribute('aria-hidden', 'true');
+  const body = document.createElement('div');
+  const heading = document.createElement('p');
+  heading.className = 'ba-toast-title';
+  heading.textContent = title || 'BackAisle';
+  const msg = document.createElement('p');
+  msg.className = 'ba-toast-msg';
+  msg.textContent = message || '';
+  body.appendChild(heading);
+  if (message) body.appendChild(msg);
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'ba-toast-close';
+  close.setAttribute('aria-label', 'Dismiss');
+  close.textContent = '×';
+  const dismiss = () => {
+    el.classList.add('ba-toast-out');
+    setTimeout(() => el.remove(), 350);
+  };
+  close.addEventListener('click', dismiss);
+  el.append(mark, body, close);
+  host.appendChild(el);
+  setTimeout(dismiss, 5000);
+}
+
+async function pollNotify() {
+  let since = 0;
+  try { since = Number(sessionStorage.getItem('ba-notify-since') || 0); } catch (e) { since = 0; }
+  const url = '/api_notify.php' + (since > 0 ? '?since_id=' + encodeURIComponent(since) : '');
+  let data;
+  try {
+    const r = await fetch(url, { headers: { 'Accept': 'application/json' } });
+    if (!r.ok) return;
+    data = await r.json();
+  } catch (e) {
+    return;
+  }
+  if (!data || !Array.isArray(data.items)) return;
+  let max = since;
+  for (const item of data.items) {
+    baToast(item.title, item.message, item.toast_type);
+    if (item.id > max) max = item.id;
+    const body = new URLSearchParams();
+    body.set('action', 'mark_read');
+    body.set('id', String(item.id));
+    fetch('/api_notify.php', { method: 'POST', body }).catch(() => {});
+  }
+  if (max > since) {
+    try { sessionStorage.setItem('ba-notify-since', String(max)); } catch (e) { /* private mode */ }
+  }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('device-charts');
   if (el) loadSeries(el.dataset.id);
@@ -233,4 +298,8 @@ document.addEventListener('DOMContentLoaded', () => {
   bindIdfPan();
   bindTemplateFill();
   bindLocTree();
+  if (!document.body.classList.contains('login-page')) {
+    pollNotify();
+    setInterval(pollNotify, 15000);
+  }
 });

@@ -25,7 +25,7 @@ function ba_layout_start(string $title, string $nav = 'fleet'): void {
   <link rel="icon" href="/assets/logo.svg?v=aisle1" type="image/svg+xml">
   <link rel="icon" href="/assets/favicon-32.png?v=aisle1" type="image/png" sizes="32x32">
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=aisle1">
-  <link rel="stylesheet" href="/assets/app.css?v=layout6">
+  <link rel="stylesheet" href="/assets/app.css?v=layout7">
 </head>
 <body<?= ba_tech_mode() ? ' class="tech"' : '' ?>>
 <header class="top">
@@ -63,7 +63,7 @@ function ba_layout_start(string $title, string $nav = 'fleet'): void {
       </span>
     <?php endif; ?>
   </nav>
-  <div class="who"><?php if (ba_tech_mode() && $nav !== 'dash') { ba_tech_toggle(true); } ?><?= h($u['username'] ?? '') ?> · <?= h($roleLabel) ?> · <a href="/logout.php">out</a></div>
+  <div class="who"><?php if (ba_tech_mode() && $nav !== 'dash') { ba_tech_toggle(true); } ?><?= h($u['username'] ?? '') ?> · <?= h($roleLabel) ?> · <a class="<?= $nav==='account'?'on':'' ?>" href="/account.php">settings</a> · <a href="/logout.php">out</a></div>
 </header>
 <main>
 <?php
@@ -146,7 +146,7 @@ JS;
 
 function ba_layout_end(): void {
     echo '</main><footer class="site-foot">BackAisle v'.h(ba_version()).' · <a href="https://github.com/sabap/BackAisle" target="_blank" rel="noopener">GitHub</a></footer>';
-    echo '<script src="/assets/app.js?v=layout1"></script>';
+    echo '<script src="/assets/app.js?v=notify1"></script>';
     if (function_exists('ba_users_modal_script')) {
         ba_users_modal_script();
     }

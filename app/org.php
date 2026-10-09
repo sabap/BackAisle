@@ -224,6 +224,8 @@ function page_org(PDO $db, array $user): void {
                 }
                 ba_audit($db, 'ldap_save', 'ldap', null);
                 $msg = 'LDAPS settings saved';
+            } elseif ($act === 'save_smtp' || $act === 'smtp_test') {
+                $msg = ba_notify_org_post($db, $act, $_POST);
             } elseif ($act === 'ldap_hold') {
                 ba_set_setting($db, 'alert_hold_sec', (string)(int)($_POST['alert_hold_sec'] ?? 180));
                 ba_audit($db, 'ldap_hold', 'settings', null);
@@ -309,7 +311,7 @@ PY);
     ba_layout_start('Organization', 'org');
     if ($msg) echo '<div class="flash">'.h($msg).'</div>';
     echo '<h1>Organization</h1>';
-    $tabs = ['groups'=>'Groups','snmp'=>'SNMPv3 credentials','configs'=>'Config profiles','import'=>'PowerPanel import','certs'=>'SSL/TLS certs'];
+    $tabs = ['groups'=>'Groups','snmp'=>'SNMPv3 credentials','configs'=>'Config profiles','import'=>'PowerPanel import','certs'=>'SSL/TLS certs','mail'=>'Mail'];
     echo '<nav class="page-tabs">';
     foreach ($tabs as $k=>$lab) {
         echo '<a class="'.($tab===$k?'on':'').'" href="'.h(ba_href('/org?tab='.$k)).'">'.h($lab).'</a>';
@@ -576,6 +578,10 @@ JS;
         echo '<label><input type="checkbox" name="simulate" checked> simulate</label>';
         echo '<input type="hidden" name="act" value="push_cert"><button>Queue cert job</button></form>';
         ba_users_modal_close();
+    }
+
+    if ($tab === 'mail') {
+        ba_notify_org_mail($db);
     }
 
     ba_layout_end();

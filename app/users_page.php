@@ -816,6 +816,7 @@ function ba_users_people_card(PDO $db, array $users, array $roles, array $depts,
     echo '<div class="ucard-head"><h3>Users</h3>';
     echo '<button type="button" class="btn" data-open-modal="modal-add-user">Add user</button></div>';
     echo '<div class="ucard-body">';
+    echo '<p class="muted">After a person is in a department, they turn department notifications on from Settings. That adds their email to the department recipient list.</p>';
     echo '<form method="get" action="' . h(ba_href('/users')) . '" class="filters">';
     echo '<input name="q" value="' . h($q) . '" placeholder="Search name, email, department">';
     echo '<button>Search</button>';

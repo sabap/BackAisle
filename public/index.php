@@ -19,6 +19,7 @@ require __DIR__ . '/../app/backup.php';
 require __DIR__ . '/../app/update.php';
 require __DIR__ . '/../app/users_page.php';
 require __DIR__ . '/../app/model_profile.php';
+require __DIR__ . '/../app/notify.php';
 
 try {
 $path = function_exists('ba_request_path') ? ba_request_path() : (rtrim((string)parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH), '/') ?: '/');
@@ -101,6 +102,9 @@ switch ($path) {
     case '/users':
         page_users($db, $user);
         break;
+    case '/account':
+        page_account($db, $user);
+        break;
     case '/admin/backup-download':
         ba_require_admin();
         $path = BackAisleBackup::safeFile((string)($_GET['file'] ?? ''));
@@ -140,6 +144,9 @@ switch ($path) {
         break;
     case '/api/dashboard':
         page_api_dashboard($db);
+        break;
+    case '/api/notify':
+        page_api_notify($db, $user);
         break;
     default:
         http_response_code(404);
