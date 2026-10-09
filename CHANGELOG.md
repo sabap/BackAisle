@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.68] - 2026-10-09
+
+- The dashboard lists the IDFs on the first page after sign-in. That page opens the same dashboard as the Dashboard link.
+
 ## [0.5.67] - 2026-10-09
 
 - The mark is a gold arch, the entrance to the aisle. Sign-in is a centered card with that mark, the name, IDFM, and "The aisle behind the racks."
