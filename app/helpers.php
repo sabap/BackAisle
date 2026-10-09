@@ -47,7 +47,8 @@ function ba_request_path(): string {
         }
         $p = parse_url((string)$_SERVER[$k], PHP_URL_PATH);
         if (is_string($p) && $p !== '' && !preg_match('/\.php$/i', $p)) {
-            return rtrim($p, '/') ?: '/';
+            $p = rtrim($p, '/') ?: '/';
+            return $p === '/home' ? '/' : $p;
         }
     }
     $script = str_replace('\\', '/', (string)($_SERVER['SCRIPT_NAME'] ?? ''));
@@ -67,6 +68,7 @@ function ba_request_path(): string {
     }
     $map = [
         'index.php' => '/',
+        'home.php' => '/',
         'login.php' => '/login',
         'logout.php' => '/logout',
         'fleet.php' => '/fleet',
@@ -98,7 +100,7 @@ function ba_request_path(): string {
     if ($uri === '/login.php') {
         return '/login';
     }
-    if ($uri === '/index.php' || $uri === '/index') {
+    if ($uri === '/index.php' || $uri === '/index' || $uri === '/home.php' || $uri === '/home') {
         return '/';
     }
     $ubase = strtolower(basename($uri));

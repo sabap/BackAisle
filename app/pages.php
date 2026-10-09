@@ -150,6 +150,7 @@ function page_dashboard(PDO $db): void {
     try {
         $idfs = ba_idf_summaries($db);
     } catch (Throwable $e) {
+        @file_put_contents(BA_ROOT . '\\logs\\php-error.log', date('c') . ' dashboard idfs ' . $e->getMessage() . ' @ ' . $e->getFile() . ':' . $e->getLine() . "\n", FILE_APPEND);
         $idfs = [];
     }
     if ($q !== '') {
