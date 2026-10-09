@@ -84,6 +84,7 @@ function ba_request_path(): string {
         'templates.php' => '/templates',
         'admin.php' => '/admin',
         'users.php' => '/users',
+        'account.php' => '/account',
         'writes.php' => '/writes',
         'org.php' => '/org',
         'snmp.php' => '/snmp',
@@ -91,6 +92,7 @@ function ba_request_path(): string {
         'api_health.php' => '/api/health',
         'api_series.php' => '/api/series',
         'api_dashboard.php' => '/api/dashboard',
+        'api_notify.php' => '/api/notify',
     ];
     if (isset($map[$base]) && $base !== 'index.php') {
         return $map[$base];
