@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.72] - 2026-10-12
+
+- The bronze lockup is removed. Sign-in, the header, and setup use the previous mark again.
+
 ## [0.5.71] - 2026-10-12
 
 - The logo is the bronze rack tile, the name BackAisle, and the line IDF MANAGEMENT PLATFORM. Sign-in and setup show that full lockup. The header shows a larger tile beside the name. The white page background is transparent, and the white rack stays solid.
