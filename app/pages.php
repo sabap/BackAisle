@@ -44,14 +44,17 @@ function page_login(PDO $db): void {
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Sign in · BackAisle</title>
-<link rel="icon" href="/assets/favicon-32.png?v=bronze1" type="image/png" sizes="32x32">
-<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=bronze1">
-<link rel="stylesheet" href="/assets/app.css?v=layout8"></head>
+<link rel="icon" href="/assets/logo.svg?v=aisle1" type="image/svg+xml">
+<link rel="icon" href="/assets/favicon-32.png?v=aisle1" type="image/png" sizes="32x32">
+<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=aisle1">
+<link rel="stylesheet" href="/assets/app.css?v=layout6"></head>
 <body class="login-page">
 <div class="login-card">
   <div class="login-brand">
-    <img src="/assets/logo-lockup.png?v=bronze1" width="892" height="905" alt="BackAisle — IDF Management Platform">
+    <img src="/assets/logo.svg?v=aisle1" width="64" height="64" alt="">
+    <h1>BackAisle <small title="IDF Management">IDFM</small></h1>
   </div>
+  <p class="subtitle">The aisle behind the racks.</p>
   <?php if ($err): ?><div class="flash err"><?= h($err) ?></div><?php endif; ?>
   <form method="post" class="stack" autocomplete="on">
     <label for="username">Username</label>
