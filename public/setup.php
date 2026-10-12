@@ -17,7 +17,7 @@ require __DIR__ . '/../app/helpers.php';
 require __DIR__ . '/../app/ldap.php';
 require __DIR__ . '/../app/backup.php';
 require __DIR__ . '/../app/import_pp.php';
-require_once __DIR__ . '/../app/access.php';
+require __DIR__ . '/../app/access.php';
 
 if (ba_is_installed() && !isset($_GET['force'])) {
     header('Location: /login.php');
@@ -267,14 +267,15 @@ $steps = [1 => 'Welcome', 2 => 'Database', 3 => 'Site data', 4 => 'Done'];
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Setup · BackAisle</title>
-  <link rel="icon" href="/assets/favicon-32.png?v=bronze1" type="image/png" sizes="32x32">
-  <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=bronze1">
-  <link rel="stylesheet" href="/assets/app.css?v=layout8">
-  <link rel="stylesheet" href="/assets/setup.css?v=setup2">
+  <link rel="icon" href="/assets/logo.svg?v=aisle1" type="image/svg+xml">
+  <link rel="icon" href="/assets/favicon-32.png?v=aisle1" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=aisle1">
+  <link rel="stylesheet" href="/assets/app.css?v=layout4">
+  <link rel="stylesheet" href="/assets/setup.css?v=setup1">
 </head>
 <body class="setup-body">
 <div class="setup-wrap">
-  <div class="setup-brand"><img src="/assets/logo-lockup.png?v=bronze1" width="892" height="905" alt="BackAisle — IDF Management Platform"></div>
+  <div class="brand"><img class="brand-mark" src="/assets/logo.svg?v=aisle1" width="32" height="32" alt=""><span class="brand-text"><span class="brand-name">BackAisle</span><small title="IDF Management">IDFM</small></span></div>
   <ol class="setup-steps">
     <?php foreach ($steps as $n => $lab): ?>
       <li class="<?= $step === $n ? 'on' : ($step > $n ? 'done' : '') ?>"><?= $n ?>. <?= h($lab) ?></li>
