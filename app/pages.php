@@ -770,6 +770,57 @@ function page_devices(PDO $db, array $user): void {
             header('Location: ' . ba_href('/devices?msg=' . rawurlencode($n > 0 ? 'Assigned '.$n.' devices' : 'Select at least one device')));
             exit;
         }
+        if ($act === 'apply_template') {
+            if (!$canAssign) {
+                http_response_code(403);
+                echo 'Not allowed';
+                return;
+            }
+            $ids = $_POST['device_ids'] ?? [];
+            if (!is_array($ids)) {
+                $ids = [];
+            }
+            $picked = [];
+            foreach ($ids as $rawId) {
+                $did = (int)$rawId;
+                if ($did > 0) {
+                    $picked[$did] = $did;
+                }
+            }
+            $tid = (int)($_POST['template_id'] ?? 0);
+            if (!$picked) {
+                header('Location: ' . ba_href('/devices?msg=' . rawurlencode('Select at least one device')));
+                exit;
+            }
+            if ($tid < 1) {
+                header('Location: ' . ba_href('/devices?msg=' . rawurlencode('Choose a template')));
+                exit;
+            }
+            $ok = 0;
+            $failed = [];
+            foreach ($picked as $did) {
+                try {
+                    ba_apply_template($db, $did, $tid);
+                    $ok++;
+                } catch (Throwable $e) {
+                    $failed[] = $e->getMessage();
+                }
+            }
+            ba_audit($db, 'apply_template', 'device', (string)$tid, 'n='.$ok.' fail='.count($failed));
+            if ($ok > 0) {
+                $msg = 'Applied the template to '.$ok.($ok === 1 ? ' device' : ' devices');
+            } else {
+                $msg = 'The template was not applied';
+            }
+            if ($failed) {
+                $msg .= '. '.$failed[0];
+                if (count($failed) > 1) {
+                    $msg .= ' ('.count($failed).' devices could not be updated)';
+                }
+            }
+            header('Location: ' . ba_href('/devices?msg=' . rawurlencode($msg)));
+            exit;
+        }
         if ($canEditDevices && $act === 'add') {
             $ip = trim($_POST['ip'] ?? '');
             if (filter_var($ip, FILTER_VALIDATE_IP)) {
@@ -853,12 +904,15 @@ function page_devices(PDO $db, array $user): void {
     echo '</form>';
     if ($canAssign) {
         echo '<form method="post">';
-        echo '<input type="hidden" name="act" value="assign_department">';
-        echo '<div class="filters"><select name="department_id"><option value="">(no department)</option>';
+        echo '<div class="filters"><select name="department_id" aria-label="Department"><option value="">(no department)</option>';
         foreach ($db->query('SELECT id, name FROM departments WHERE is_active=1 ORDER BY name') as $dep) {
             echo '<option value="'.(int)ba_col($dep, 'id').'">'.h((string)ba_col($dep, 'name')).'</option>';
         }
-        echo '</select><label><input type="checkbox" data-device-select-all aria-label="Select all"> Select all</label><button>Assign department</button></div>';
+        echo '</select><label><input type="checkbox" data-device-select-all aria-label="Select all"> Select all</label>';
+        echo '<button name="act" value="assign_department">Assign department</button>';
+        echo '<select name="template_id" aria-label="Template">'.ba_template_options($db).'</select>';
+        echo '<button name="act" value="apply_template">Apply template</button>';
+        echo '<p class="owner-hint muted">Apply template sets the model, height, outlets, credentials, and model profile on the checked devices. When the template has no credentials or model profile, those stay as they are on each device.</p></div>';
     }
     echo '<table><thead><tr>';
     if ($canAssign) {

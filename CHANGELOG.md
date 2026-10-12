@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.70] - 2026-10-12
+
+- Inventory applies a template to the devices that are checked, on the same row as Assign department. It sets the model, height, outlets, credentials, and model profile. When the template has no credentials or model profile, those stay as they are on each device.
+
 ## [0.5.69] - 2026-10-09
 
 - Settings is in the header. A person enrolls there for department notices. A Global Admin chooses system problems and device alerts for the whole site. A Department Admin chooses device alerts for that department's devices. Each alert can send email, show an in-app pop-up, and be kept for the future NOC view.
