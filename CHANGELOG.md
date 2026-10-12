@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.5.71] - 2026-10-12
+
+- The logo is the bronze rack tile, the name BackAisle, and the line IDF MANAGEMENT PLATFORM. Sign-in and setup show that full lockup. The header shows a larger tile beside the name. The white page background is transparent, and the white rack stays solid.
+- The setup wizard loads its shared code once, so the welcome page opens instead of stopping before the logo.
+
 ## [0.5.70] - 2026-10-12
 
 - Inventory applies a template to the devices that are checked, on the same row as Assign department. It sets the model, height, outlets, credentials, and model profile. When the template has no credentials or model profile, those stay as they are on each device.
