@@ -9,7 +9,9 @@
     - PHP NTS x64 (if missing) plus a *site-local* php.ini (does not overwrite another site's php.ini)
     - ODBC Driver 18 for SQL Server (setup wizard)
     - IIS URL Rewrite
-    - Python 3.12+ and pip packages (pysnmp, cryptography, paramiko, pyodbc)
+    - Python 3.12+ and pip packages (pysnmp, cryptography, paramiko, pyodbc).
+      Card settings use that same Python to open SSH to CyberPower cards.
+      A site copy under runtime\Python312 is preferred, then an all-users install.
     - IIS **Default Web Site** on port 80 (and 443 with a self-signed cert if HTTPS is available)
     - Inbound UDP 162 so the collector can receive SNMPv3 traps
     - Dedicated app pool **BackAisle** (no .NET runtime)
@@ -434,24 +436,39 @@ function Test-RealPythonExe([string]$Path) {
 }
 
 function Find-RealPython {
+    # The writer runs as SYSTEM. Prefer a Python that account can read:
+    # the site runtime copy, then an all-users install. A per-user install is last.
     $candidates = New-Object System.Collections.Generic.List[string]
     foreach ($c in @(
+        (Join-Path $SiteRoot 'runtime\Python312\python.exe'),
+        (Join-Path $SiteRoot 'runtime\Python313\python.exe'),
         "$env:ProgramFiles\Python312\python.exe",
         "$env:ProgramFiles\Python313\python.exe",
+        'C:\Python312\python.exe'
+    )) {
+        if (Test-Path -LiteralPath $c) { [void]$candidates.Add($c) }
+    }
+    if (Test-Path "$env:ProgramFiles") {
+        Get-ChildItem -Path "$env:ProgramFiles" -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^Python3\d' } |
+            ForEach-Object {
+                $p = Join-Path $_.FullName 'python.exe'
+                if (Test-Path -LiteralPath $p) { [void]$candidates.Add($p) }
+            }
+    }
+    foreach ($c in @(
         "$env:LocalAppData\Programs\Python\Python312\python.exe",
         "$env:LocalAppData\Programs\Python\Python313\python.exe"
     )) {
         if (Test-Path -LiteralPath $c) { [void]$candidates.Add($c) }
     }
-    foreach ($root in @("$env:ProgramFiles", "$env:LocalAppData\Programs\Python")) {
-        if (Test-Path $root) {
-            Get-ChildItem -Path $root -Directory -ErrorAction SilentlyContinue |
-                Where-Object { $_.Name -match '^Python3\d' } |
-                ForEach-Object {
-                    $p = Join-Path $_.FullName 'python.exe'
-                    if (Test-Path -LiteralPath $p) { [void]$candidates.Add($p) }
-                }
-        }
+    if (Test-Path "$env:LocalAppData\Programs\Python") {
+        Get-ChildItem -Path "$env:LocalAppData\Programs\Python" -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^Python3\d' } |
+            ForEach-Object {
+                $p = Join-Path $_.FullName 'python.exe'
+                if (Test-Path -LiteralPath $p) { [void]$candidates.Add($p) }
+            }
     }
     $pyLauncher = Get-Command py.exe -ErrorAction SilentlyContinue
     if ($pyLauncher -and $pyLauncher.Source -notmatch '(?i)\\WindowsApps\\') {
@@ -462,7 +479,7 @@ function Find-RealPython {
                 $loc = & py.exe $tag -c "import sys; print(sys.executable)" 2>$null
                 if ($LASTEXITCODE -eq 0 -and $loc) {
                     $t = ([string]$loc).Trim()
-                    if ($t) { $candidates.Insert(0, $t) }
+                    if ($t) { [void]$candidates.Add($t) }
                 }
             }
         } catch { }
@@ -518,6 +535,7 @@ function Install-Python {
         $ErrorActionPreference = $old
     }
     if ($code -ne 0) { throw "pip install failed (exit $code) using $py" }
+    $script:BaPython = $py
     Write-Ok "Python packages installed (pysnmp, cryptography, paramiko, pyodbc) via $py"
 }
 
@@ -768,7 +786,13 @@ Install-BackAisleSite -IniPath $ini
 if ($RegisterCollectorTask) {
     $reg = Join-Path $SiteRoot 'scripts\Register-BackAisle-CollectorTask.ps1'
     if (Test-Path $reg) {
-        try { & $reg -SiteRoot $SiteRoot }
+        try {
+            if ($script:BaPython) {
+                & $reg -SiteRoot $SiteRoot -PythonExe $script:BaPython
+            } else {
+                & $reg -SiteRoot $SiteRoot
+            }
+        }
         catch { Write-Warn "Collector task registration: $($_.Exception.Message)" }
     }
 }
@@ -783,6 +807,7 @@ Write-Host @"
   Files:    $SiteRoot
   IIS:      $SiteName   HTTP :$HttpPort   HTTPS :$HttpsPort
   Traps:    UDP 162 inbound (while the collector task is running)
+  Cards:    the writer opens SSH (TCP 22) to CyberPower cards. Outbound TCP 22 must be allowed.
   Pool:     $PoolName
   PHP:      $PhpInstallPath  (ini $ini)
   Next:     $setupUrl

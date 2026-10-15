@@ -56,7 +56,7 @@ function Invoke-BaGet([string]$Uri, [string]$OutFile, [int]$MinBytes = 200) {
         } catch { }
     }
     if (-not $ok) {
-        throw "Download failed or was HTML (OpenDNS/proxy): $Uri. Copy collector\writer.py, rmcard_http.py, rmcard_scp.py, config_file.py, and watchdog.ps1 onto $SiteRoot\collector instead, then re-run this script."
+        throw "Download failed or was HTML (OpenDNS/proxy): $Uri. Copy collector\writer.py, card_commands.py, rmcard_cli.py, rmcard_http.py, rmcard_scp.py, config_file.py, and watchdog.ps1 onto $SiteRoot\collector instead, then re-run this script."
     }
 }
 
@@ -83,6 +83,25 @@ try {
         $text = [IO.File]::ReadAllText($out)
         if ($text -notmatch [regex]::Escape($f.Marker)) {
             throw "$($f.Name) missing marker $($f.Marker) (wrong file or HTML). Copy that file from a machine that can reach jsDelivr onto $destDir and re-run."
+        }
+    }
+
+    $writerText = [IO.File]::ReadAllText((Join-Path $tmp 'writer.py'))
+    if ($writerText -match 'build_card_commands') {
+        $cardFiles = @(
+            @{ Name = 'card_commands.py'; Marker = 'def build_card_commands' },
+            @{ Name = 'rmcard_cli.py'; Marker = 'class RmcardCli' }
+        )
+        foreach ($f in $cardFiles) {
+            $js = "https://cdn.jsdelivr.net/gh/$Owner/${Repo}@v$Version/collector/$($f.Name)"
+            $out = Join-Path $tmp $f.Name
+            Write-Host "GET $js"
+            Invoke-BaGet -Uri $js -OutFile $out -MinBytes 200
+            $text = [IO.File]::ReadAllText($out)
+            if ($text -notmatch [regex]::Escape($f.Marker)) {
+                throw "$($f.Name) missing marker $($f.Marker) (wrong file or HTML). Copy that file from a machine that can reach jsDelivr onto $destDir and re-run."
+            }
+            $files += $f
         }
     }
 

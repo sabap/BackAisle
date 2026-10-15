@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.75] - 2026-10-15
+
+- Inventory and a CyberPower device page can send one named card setting over SSH. The choices are identity, utility limits, restore timing, and the closet sensor. Blank boxes stay as they are. The card is not rebooted.
+- The button is shown only when you can edit at least one CyberPower card. Other brands in a selection are skipped. Simulate stays on until it is cleared. A real change asks for APPLY CARD.
+- A fresh install installs the SSH packages into the Python that the scheduled writer and the watchdog both start. A writer hotfix also copies the two new command files when that writer needs them. Outbound TCP 22 to the cards must be allowed.
+- Restart the writer if it is already running, so it loads this job. The collector does not need a restart.
+
 ## [0.5.74] - 2026-10-15
 
 - Power → SNMP can enable SNMPv3 traps on CyberPower cards. It uses the same configuration write as an SNMPv3 user. One trap receiver is pointed at this server. Other receivers and SNMPv3 users stay as they are.

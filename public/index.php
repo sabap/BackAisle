@@ -9,6 +9,7 @@ require __DIR__ . '/../app/auth.php';
 require __DIR__ . '/../app/layout.php';
 require __DIR__ . '/../app/pages.php';
 require __DIR__ . '/../app/writes.php';
+require __DIR__ . '/../app/card_settings.php';
 require __DIR__ . '/../app/ldap.php';
 require __DIR__ . '/../app/import_pp.php';
 require __DIR__ . '/../app/org.php';

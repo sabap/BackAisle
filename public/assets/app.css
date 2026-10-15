@@ -683,6 +683,25 @@ form.ucard.stack select, form.ucard.stack textarea { width:100%; max-width:100%;
 .ldaps-modal-panel.ldaps-pending { border-color: var(--acc); }
 .ldaps-modal-head { display: flex; justify-content: space-between; align-items: center; gap: .5rem; margin-bottom: .6rem; }
 .ldaps-modal-head h3 { margin: 0; }
+.card-setting { position: relative; }
+.card-setting > input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
+.card-recipe-bar { display: flex; flex-wrap: wrap; gap: .4rem; margin: 0 0 .85rem; }
+.card-recipe-bar label {
+  border: 1px solid var(--line); border-radius: 999px; padding: .35rem .8rem; cursor: pointer; color: var(--muted);
+}
+.card-pane { display: none; }
+.card-setting > #recipe-identity:checked ~ .card-recipe-bar label[for="recipe-identity"],
+.card-setting > #recipe-utility:checked ~ .card-recipe-bar label[for="recipe-utility"],
+.card-setting > #recipe-restore:checked ~ .card-recipe-bar label[for="recipe-restore"],
+.card-setting > #recipe-sensor:checked ~ .card-recipe-bar label[for="recipe-sensor"] {
+  background: var(--acc); color: #061018; border-color: transparent;
+}
+.card-setting > #recipe-identity:checked ~ .card-panes .pane-identity,
+.card-setting > #recipe-utility:checked ~ .card-panes .pane-utility,
+.card-setting > #recipe-restore:checked ~ .card-panes .pane-restore,
+.card-setting > #recipe-sensor:checked ~ .card-panes .pane-sensor { display: block; }
+.card-pair { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
+@media (max-width: 700px) { .card-pair { grid-template-columns: 1fr; } }
 .ldaps-summary { margin: 0 0 .6rem; font-weight: 600; }
 .ldaps-step { padding: .45rem 0; border-top: 1px solid var(--line); }
 .ldaps-step b { display: block; }

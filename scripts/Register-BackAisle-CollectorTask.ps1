@@ -19,8 +19,11 @@ function Test-BaPython([string]$Path) {
 if ($PythonExe -and -not (Test-BaPython $PythonExe)) { $PythonExe = '' }
 if (-not $PythonExe) {
     foreach ($c in @(
+        (Join-Path $SiteRoot 'runtime\Python312\python.exe'),
+        (Join-Path $SiteRoot 'runtime\Python313\python.exe'),
         "$env:ProgramFiles\Python312\python.exe",
         "$env:ProgramFiles\Python313\python.exe",
+        'C:\Python312\python.exe',
         "$env:LocalAppData\Programs\Python\Python312\python.exe",
         "$env:LocalAppData\Programs\Python\Python313\python.exe"
     )) {
