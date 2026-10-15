@@ -97,7 +97,8 @@ The installer (written for a **fresh IIS** server):
 1. Enables IIS FastCGI role services
 2. Installs VC++ Redistributable, PHP NTS, ODBC Driver 18, URL Rewrite, Python 3.12+ and pip packages
 3. Points **Default Web Site** at `C:\inetpub\BackAisle\public`, pool **BackAisle**, HTTP **:80** and HTTPS **:443** (self-signed cert if none exists)
-4. Opens **http://localhost/setup.php**
+4. Allows inbound UDP **162** so the collector can receive SNMPv3 traps. The scheduled collector task listens while it is running. The rule is not limited to the Windows SNMP Trap service or to the local subnet.
+5. Opens **http://localhost/setup.php**
 
 This does not assume another product is already using port 80. Files stay under `C:\inetpub\BackAisle` (not `wwwroot`). To skip TLS: `.\Install-BackAisle.ps1 -SkipHttps`.
 

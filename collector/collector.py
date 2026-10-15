@@ -7,7 +7,6 @@ import json
 import os
 import random
 import smtplib
-import socket
 import subprocess
 import sys
 import threading
@@ -229,19 +228,20 @@ def set_alert(con, device_id, code, severity, message) -> bool:
     return True
 
 
-def clear_alert(con, device_id, code):
+def clear_alert(con, device_id, code) -> bool:
     open_row = con.execute(
         "SELECT id FROM alerts WHERE device_id=? AND code=? AND status='open'",
         (device_id, code),
     ).fetchone()
     if not open_row:
-        return
+        return False
     con.execute(
         "UPDATE alerts SET status='cleared', cleared_at=? WHERE id=?",
         (now(), open_row["id"]),
     )
     con.execute("DELETE FROM pending_alerts WHERE device_id=? AND code=?", (device_id, code))
     emit_event(con, device_id, "info", code + ".cleared", f"{code} cleared")
+    return True
 
 
 def _row_get(row, name, default=None):
@@ -613,7 +613,7 @@ def _notify_ready(con) -> bool:
     return str(val).strip() == "1"
 
 
-def _run_notify_sweep() -> None:
+def _run_notify_sweep(force: bool = False) -> None:
     """Mail and in-app rows are decided in PHP so the checkboxes stay the one source."""
     php = os.environ.get("BACKAISLE_PHP", r"C:\PHP\php.exe")
     script = str(ROOT / "collector" / "notify_sweep.php")
@@ -621,9 +621,12 @@ def _run_notify_sweep() -> None:
     if not os.path.isfile(php) or not os.path.isfile(script):
         log("notify sweep skipped; php or script missing")
         return
+    cmd = [php, "-c", ini, script]
+    if force:
+        cmd.append("--now")
     try:
         subprocess.run(
-            [php, "-c", ini, script],
+            cmd,
             cwd=str(ROOT),
             timeout=60,
             check=False,
@@ -1099,57 +1102,157 @@ async def qc_poll(secrets, n=10):
     con.close()
 
 
-def trap_loop(secrets):
+def _trap_users() -> dict:
+    """Username to (auth, priv) for SHA/AES profiles. Passphrases stay in this dict only."""
+    con = connect()
+    found: dict[str, tuple[str, str]] = {}
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.bind(("0.0.0.0", TRAP_PORT))
-        sock.settimeout(1.0)
-        log(f"trap listener on UDP {TRAP_PORT}")
-    except OSError as e:
-        log(f"trap listener not bound ({e}); polling remains source of truth")
+        rows = con.execute("SELECT id, username FROM snmp_profiles").fetchall()
+    except Exception:
+        con.close()
+        return {}
+    con.close()
+    shared: dict[str, int] = {}
+    noted = getattr(_trap_users, "shared_noted", None)
+    if noted is None:
+        noted = set()
+        _trap_users.shared_noted = noted
+    for row in rows:
+        profile_id = _db_int(_row_get(row, "id"))
+        if profile_id < 1:
+            continue
+        cred = get_secret(profile_id)
+        username = str(_row_get(row, "username") or cred.get("user") or "").strip()
+        auth_proto = str(cred.get("auth_proto") or "SHA").upper()
+        priv_proto = str(cred.get("priv_proto") or "AES").upper()
+        if auth_proto not in ("SHA", "SHA1") or priv_proto not in ("AES", "AES128"):
+            continue
+        auth_pass = str(cred.get("auth_pass") or "")
+        priv_pass = str(cred.get("priv_pass") or "")
+        if not username or not auth_pass or not priv_pass:
+            continue
+        shared[username] = shared.get(username, 0) + 1
+        found[username] = (auth_pass, priv_pass)
+    for username, count in shared.items():
+        if count > 1 and username not in noted:
+            noted.add(username)
+            log(f"trap user {username} is on more than one credential profile; one set of keys is used")
+    return found
+
+
+_trap_notify_lock = threading.Lock()
+_trap_notify_timer: threading.Timer | None = None
+_trap_notify_first = 0.0
+
+
+def _request_trap_notify() -> None:
+    """One sweep about a second after the latest trap, so a burst is a single notice."""
+    global _trap_notify_timer, _trap_notify_first
+
+    def fire() -> None:
+        global _trap_notify_timer, _trap_notify_first
+        with _trap_notify_lock:
+            # A trap that arrived while this timer was firing owns the next sweep.
+            if _trap_notify_timer is not timer:
+                return
+            _trap_notify_timer = None
+            _trap_notify_first = 0.0
+        _run_notify_sweep(force=True)
+
+    with _trap_notify_lock:
+        now_ts = time.time()
+        if _trap_notify_first <= 0:
+            _trap_notify_first = now_ts
+        if _trap_notify_timer is not None:
+            _trap_notify_timer.cancel()
+        delay = 0.0 if now_ts - _trap_notify_first >= 5 else 1.0
+        timer = threading.Timer(delay, fire)
+        timer.daemon = True
+        _trap_notify_timer = timer
+        timer.start()
+
+
+def _touch_last_trap(con, device_id: int) -> None:
+    ts = now()
+    existing = con.execute("SELECT device_id FROM poll_state WHERE device_id=?", (device_id,)).fetchone()
+    if existing:
+        con.execute("UPDATE poll_state SET last_trap=? WHERE device_id=?", (ts, device_id))
         return
-    while True:
+    con.execute(
+        "INSERT INTO poll_state (device_id, last_trap, consecutive_failures, comm_state) VALUES (?,?,0,'unknown')",
+        (device_id, ts),
+    )
+
+
+def _device_for_trap(con, ip: str):
+    rows = con.execute(
+        "SELECT id, enabled FROM devices WHERE ip=?",
+        (ip,),
+    ).fetchall()
+    chosen = None
+    for row in rows:
+        if chosen is None:
+            chosen = row
+        if _db_int(_row_get(row, "enabled"), 0) == 1:
+            return row
+    return chosen
+
+
+def _apply_trap(ip: str, trap_oid: str, info: str) -> None:
+    from traps import classify
+
+    action = classify(trap_oid)
+    summary = action["message"] if action else f"SNMPv3 trap {trap_oid}"
+    if info:
+        summary = f"{summary} ({info})"
+    severity = action["severity"] if action else "info"
+    notify = False
+    con = connect()
+    try:
+        row = _device_for_trap(con, ip) if ip else None
+        device_id = _db_int(_row_get(row, "id")) if row else 0
+        enabled = _db_int(_row_get(row, "enabled"), 0) == 1 if row else False
+        if device_id > 0:
+            _touch_last_trap(con, device_id)
+        if device_id > 0 and enabled and action:
+            if action["clear"]:
+                cleared = clear_alert(con, device_id, action["code"])
+                for extra in action["extra"]:
+                    if clear_alert(con, device_id, extra):
+                        cleared = True
+                emit_event(con, device_id, "info", "snmp_trap", summary)
+                notify = cleared
+            elif set_alert(con, device_id, action["code"], severity, summary):
+                insert_pending_alert(con, device_id, action["code"], now())
+                notify = True
+            else:
+                emit_event(con, device_id, severity, "snmp_trap", summary)
+        else:
+            emit_event(con, device_id or None, severity, "snmp_trap", summary if device_id else f"{summary} from {ip}")
+        con.commit()
+    finally:
+        con.close()
+    if notify:
         try:
-            data, addr = sock.recvfrom(8192)
-        except socket.timeout:
-            continue
-        except Exception as e:
-            log(f"trap sock: {e}")
-            continue
-        try:
-            con = connect()
-            ip = addr[0]
-            dev = con.execute("SELECT id FROM devices WHERE ip=?", (ip,)).fetchone()
-            did = dev["id"] if dev else None
-            con.execute(
-                "INSERT INTO events (device_id, ts, severity, code, message, details) VALUES (?,?,?,?,?,?)",
-                (did, now(), "info", "snmp_trap", f"trap from {ip}", json.dumps({"bytes": len(data), "src": ip})),
-            )
-            if did:
-                ts = now()
-                if is_sqlsrv():
-                    con.execute(
-                        "UPDATE poll_state SET last_trap=?, last_attempt=? WHERE device_id=?",
-                        (ts, ts, did),
-                    )
-                    try:
-                        con.execute(
-                            "INSERT INTO poll_state (device_id, last_trap, last_attempt, consecutive_failures, comm_state) VALUES (?,?,?,0,'ok')",
-                            (did, ts, ts),
-                        )
-                    except Exception:
-                        pass
-                else:
-                    con.execute(
-                        """INSERT INTO poll_state (device_id, last_trap, last_attempt, consecutive_failures, comm_state)
-                           VALUES (?,?,?,0,'ok')
-                           ON CONFLICT(device_id) DO UPDATE SET last_trap=excluded.last_trap""",
-                        (did, ts, ts),
-                    )
-            con.commit()
-            con.close()
-        except Exception as e:
-            log(f"trap store: {e}")
+            ready_con = connect()
+            try:
+                ready = _notify_ready(ready_con)
+            finally:
+                ready_con.close()
+        except Exception:
+            ready = False
+        if ready:
+            _request_trap_notify()
+
+
+def trap_loop(secrets):
+    del secrets  # credentials come from the SNMPv3 profiles, not the poll secret bag
+    from traps import serve
+
+    try:
+        serve(TRAP_PORT, log, _apply_trap, _trap_users)
+    except Exception as exc:
+        log(f"trap listener stopped ({exc}); polling remains source of truth")
 
 
 
@@ -1175,6 +1278,7 @@ def main():
     parser.add_argument("--init", action="store_true")
     parser.add_argument("--ids", default="", help="Comma-separated device ids for a one-shot poll")
     parser.add_argument("--id", type=int, default=0, help="Single device id for a one-shot poll")
+    parser.add_argument("--traps", action="store_true", help="Listen for SNMPv3 traps and do not poll")
     args = parser.parse_args()
     only_ids: list[int] = []
     if args.ids:
@@ -1189,6 +1293,12 @@ def main():
         _bind_stdio_to_log()
     secrets = load_secrets()
     init_db()
+    if args.traps and not (args.once or args.qc or args.init or only_ids):
+        _bind_stdio_to_log()
+        seed_from_env()
+        log("trap listener only")
+        trap_loop(secrets)
+        return
     global snmp_get, new_engine, close_engine
     from snmp_client import close_engine, new_engine, snmp_get  # noqa: E402
     seed_from_env()

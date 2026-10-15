@@ -11,6 +11,7 @@
     - IIS URL Rewrite
     - Python 3.12+ and pip packages (pysnmp, cryptography, paramiko, pyodbc)
     - IIS **Default Web Site** on port 80 (and 443 with a self-signed cert if HTTPS is available)
+    - Inbound UDP 162 so the collector can receive SNMPv3 traps
     - Dedicated app pool **BackAisle** (no .NET runtime)
     - NTFS grants for that app pool
 
@@ -612,13 +613,31 @@ function Ensure-HttpsBinding {
     }
 }
 
-function Ensure-FirewallPort([int]$Port, [string]$DisplayName) {
+function Ensure-FirewallPort {
+    param(
+        [int]$Port,
+        [string]$DisplayName,
+        [ValidateSet('TCP', 'UDP')]
+        [string]$Protocol = 'TCP'
+    )
     try {
-        if (-not (Get-NetFirewallRule -DisplayName $DisplayName -ErrorAction SilentlyContinue)) {
-            New-NetFirewallRule -DisplayName $DisplayName -Direction Inbound -Protocol TCP -LocalPort $Port -Action Allow | Out-Null
-            Write-Ok "Firewall allow TCP $Port"
+        $existing = @(Get-NetFirewallRule -DisplayName $DisplayName -ErrorAction SilentlyContinue)
+        if ($existing.Count -gt 0) {
+            foreach ($rule in $existing) {
+                if ([string]$rule.Enabled -ne 'True') {
+                    Enable-NetFirewallRule -Name $rule.Name | Out-Null
+                    Write-Ok "Firewall enabled $DisplayName"
+                }
+            }
+            return
         }
-    } catch { }
+        # Any program, any remote address. The Windows SNMP Trap rule only
+        # allows snmptrap.exe from the local subnet, which misses the collector.
+        New-NetFirewallRule -DisplayName $DisplayName -Direction Inbound -Protocol $Protocol -LocalPort $Port -Action Allow -Profile Any | Out-Null
+        Write-Ok "Firewall allow $Protocol $Port"
+    } catch {
+        Write-Warn "Firewall $Protocol ${Port}: $($_.Exception.Message)"
+    }
 }
 
 function Install-BackAisleSite([string]$IniPath) {
@@ -698,6 +717,7 @@ function Install-BackAisleSite([string]$IniPath) {
     Ensure-HttpsBinding -Name $SiteName -Port $HttpsPort
     Ensure-FirewallPort -Port $HttpPort -DisplayName 'BackAisle HTTP'
     if (-not $SkipHttps) { Ensure-FirewallPort -Port $HttpsPort -DisplayName 'BackAisle HTTPS' }
+    Ensure-FirewallPort -Port 162 -DisplayName 'BackAisle SNMPv3 traps' -Protocol UDP
 
     Write-SiteWebConfig
     $sitePath = "IIS:\Sites\$SiteName"
@@ -762,6 +782,7 @@ Write-Host @"
 
   Files:    $SiteRoot
   IIS:      $SiteName   HTTP :$HttpPort   HTTPS :$HttpsPort
+  Traps:    UDP 162 inbound (while the collector task is running)
   Pool:     $PoolName
   PHP:      $PhpInstallPath  (ini $ini)
   Next:     $setupUrl

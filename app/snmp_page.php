@@ -397,7 +397,7 @@ function page_snmp_body(PDO $db, array $user): void
         echo '</div>';
     }
     echo '<h1>SNMP polling</h1>';
-    echo '<p class="muted">SNMPv3 authPriv collector. Scheduled devices have <code>enabled=1</code>. Manual poll talks to the unit now, even if it is not on the schedule.</p>';
+    echo '<p class="muted">SNMPv3 authPriv collector. Scheduled devices have <code>enabled=1</code>. Manual poll talks to the unit now, even if it is not on the schedule. While the collector is running it also listens for SNMPv3 traps on UDP 162. Point the trap receiver on each card at this server and use the same credentials. A trap opens the same alert a poll would, and the notice goes out without waiting for the next poll. Polling still confirms the condition.</p>';
 
     if ($admin) {
         $profiles = [];

@@ -17,8 +17,9 @@ function ba_notify_catalog(): array
         ['code' => 'system_sql', 'group' => 'system', 'label' => 'Database', 'detail' => 'The application cannot query its database.', 'codes' => [], 'kinds' => []],
         ['code' => 'system_services', 'group' => 'system', 'label' => 'Services', 'detail' => 'The collector heartbeat is older than 3 minutes, or a write is queued while the writer log has been quiet for 10 minutes.', 'codes' => [], 'kinds' => []],
         ['code' => 'system_updates', 'group' => 'system', 'label' => 'Updates', 'detail' => 'The last update check found a newer BackAisle release. This does not contact the network by itself.', 'codes' => [], 'kinds' => []],
-        ['code' => 'device_comm', 'group' => 'device', 'label' => 'Communication', 'detail' => 'The device does not answer. Applies to a UPS, PDU, switch, or any other unit.', 'codes' => ['poll_fail'], 'kinds' => []],
+        ['code' => 'device_comm', 'group' => 'device', 'label' => 'Communication', 'detail' => 'The device does not answer, or its management card reports that it lost the UPS. Applies to a UPS, PDU, switch, or any other unit.', 'codes' => ['poll_fail', 'ups_link'], 'kinds' => []],
         ['code' => 'device_ups_power_loss', 'group' => 'device', 'label' => 'UPS power loss', 'detail' => 'Utility power is out and the UPS is on battery.', 'codes' => ['on_battery'], 'kinds' => ['ups']],
+        ['code' => 'device_ups_overload', 'group' => 'device', 'label' => 'UPS overload', 'detail' => 'The UPS reports an overload. A trap opens this. The next trap clears it.', 'codes' => ['overload'], 'kinds' => ['ups']],
         ['code' => 'device_ups_on_battery', 'group' => 'device', 'label' => 'UPS on battery', 'detail' => 'The UPS has been on battery longer than its limit.', 'codes' => ['on_battery_long'], 'kinds' => ['ups']],
         ['code' => 'device_ups_battery_low', 'group' => 'device', 'label' => 'UPS battery low', 'detail' => 'Runtime or capacity is low, or the card is asking for a battery replacement.', 'codes' => ['capacity_low', 'runtime_low', 'replace_battery'], 'kinds' => ['ups']],
         ['code' => 'device_ups_temp', 'group' => 'device', 'label' => 'UPS environmental temperature', 'detail' => 'The closet sensor is above or below its temperature limit.', 'codes' => ['temp_high', 'temp_low'], 'kinds' => ['ups']],
@@ -1038,7 +1039,7 @@ function ba_notify_sweep_system(PDO $db): void
     }
 }
 
-function ba_notify_sweep(PDO $db): void
+function ba_notify_sweep(PDO $db, bool $force = false): void
 {
     ba_notify_ensure($db);
     $lockPath = BA_ROOT . DIRECTORY_SEPARATOR . 'logs' . DIRECTORY_SEPARATOR . 'notify.lock';
@@ -1055,7 +1056,7 @@ function ba_notify_sweep(PDO $db): void
     }
     try {
         $last = (int)ba_setting($db, 'notify_sweep_at', '0');
-        if ($last > 0 && (time() - $last) < 20) {
+        if (!$force && $last > 0 && (time() - $last) < 20) {
             return;
         }
         ba_set_setting($db, 'notify_sweep_at', (string)time());

@@ -20,6 +20,7 @@
            - Install Python 3.12+ and pip packages
            - Point IIS Default Web Site at C:\inetpub\BackAisle\public
            - Bind HTTP :80 and HTTPS :443 (self-signed cert if needed)
+           - Allow inbound UDP 162 for SNMPv3 traps (collector task)
       5. Optionally register collector/writer scheduled tasks
       6. Opens the web setup wizard (http://localhost/setup.php)
 

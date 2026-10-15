@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.73] - 2026-10-15
+
+- While the collector is running it listens for SNMPv3 traps on UDP 162. Point each card's trap receiver at this server and use the same credentials. A trap opens or clears the same alert a poll would, and the notice goes out without waiting for the next poll. Polling still confirms the condition.
+- Communication also covers the management card losing the UPS. UPS overload is a new checkbox and stays off until it is saved. A successful poll does not clear those two. The matching return trap does.
+- A fresh install allows inbound UDP 162 for any program, not only the Windows SNMP Trap service, and not only the local subnet. An existing server needs that allow if it is not already there.
+- Restart the collector if it is already running, so it loads the listener.
+
 ## [0.5.72] - 2026-10-12
 
 - The bronze lockup is removed. Sign-in, the header, and setup use the previous mark again.
