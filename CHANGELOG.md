@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.5.74] - 2026-10-15
+
+- Power → SNMP can enable SNMPv3 traps on CyberPower cards. It uses the same configuration write as an SNMPv3 user. One trap receiver is pointed at this server. Other receivers and SNMPv3 users stay as they are.
+- The user must already be on the card with SHA and AES. A card that already sends those traps is left alone and is not rebooted. A real change reboots the management card. The UPS stays powered.
+- Simulate stays on until it is cleared. A real write asks for ENABLE TRAPS. Restart the writer if it is already running, so it loads this job.
+
 ## [0.5.73] - 2026-10-15
 
 - While the collector is running it listens for SNMPv3 traps on UDP 162. Point each card's trap receiver at this server and use the same credentials. A trap opens or clears the same alert a poll would, and the notice goes out without waiting for the next poll. Polling still confirms the condition.

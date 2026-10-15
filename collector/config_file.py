@@ -260,6 +260,215 @@ def snmpv3_overlays_for_slot(
     return out
 
 
+def canonical_ipv4(value: str) -> str:
+    text = (value or "").strip()
+    parts = text.split(".")
+    if len(parts) != 4:
+        raise RuntimeError("Trap destination must be an IPv4 address")
+    nums = []
+    for part in parts:
+        if not part.isdigit():
+            raise RuntimeError("Trap destination must be an IPv4 address")
+        num = int(part)
+        if num > 255:
+            raise RuntimeError("Trap destination must be an IPv4 address")
+        nums.append(str(num))
+    return ".".join(nums)
+
+
+def clean_trap_receiver_name(value: str) -> str:
+    name = re.sub(r"\s+", " ", (value or "").strip())
+    if not name or len(name) > 15 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 ._-]{0,14}", name):
+        raise RuntimeError("Trap receiver name must be 1-15 letters, digits, spaces, or . _ -")
+    return name
+
+
+def _config_pair_map(doc: ConfigDoc) -> dict[str, tuple[str, str]]:
+    found: dict[str, tuple[str, str]] = {}
+    for _i, _orig, key, val in doc.pairs:
+        found[key.strip().lower()] = (key, (val or "").strip())
+    return found
+
+
+def _require_pair(found: dict[str, tuple[str, str]], name: str) -> tuple[str, str]:
+    row = found.get(name.lower())
+    if row is None:
+        raise RuntimeError("This card config has no 10-receiver trap table (" + name + ")")
+    return row
+
+
+def _ten_digits(value: str, label: str) -> str:
+    text = (value or "").strip()
+    if not re.fullmatch(r"[0-9]{10}", text):
+        raise RuntimeError(label + " must be 10 digits")
+    return text
+
+
+def _replace_digit(value: str, index0: int, digit: str, label: str) -> str:
+    text = _ten_digits(value, label)
+    if index0 < 0 or index0 > 9 or digit not in "0123456789":
+        raise RuntimeError(label + " index is out of range")
+    chars = list(text)
+    chars[index0] = digit
+    return "".join(chars)
+
+
+def _blank_trap_ip(ip: str) -> bool:
+    text = (ip or "").strip()
+    if text == "":
+        return True
+    try:
+        return canonical_ipv4(text) == "0.0.0.0"
+    except RuntimeError:
+        return False
+
+
+def parse_trap_receivers(doc: ConfigDoc) -> dict:
+    """Ten RMCARD trap receivers.
+
+    TRAP_ENABLE_TYPE is one digit per receiver: 3 is SNMPv3, 1 is SNMPv1, 0 is unused.
+    TRAP_V3_USER_INDEX is one digit per receiver and is 0-based, so user slot 1 is the character 0.
+    """
+    found = _config_pair_map(doc)
+    type_key, type_val = _require_pair(found, "TRAP_ENABLE_TYPE")
+    user_key, user_val = _require_pair(found, "TRAP_V3_USER_INDEX")
+    enable_key, enable_val = _require_pair(found, "SNMP_TRAP_ENABLE")
+    type_val = _ten_digits(type_val, "TRAP_ENABLE_TYPE")
+    user_val = _ten_digits(user_val, "TRAP_V3_USER_INDEX")
+    receivers = []
+    enabled_word = "Enabled"
+    for n in range(1, 11):
+        name_key, name_val = _require_pair(found, f"TRAP_NAME{n}")
+        ip_key, ip_val = _require_pair(found, f"TRAP_IP_ADDRESS{n}")
+        access_key, access_val = _require_pair(found, f"TRAP_ENABLE_ACCESS{n}")
+        if access_val.lower().startswith("enable"):
+            enabled_word = access_val
+        version = type_val[n - 1]
+        user_digit = user_val[n - 1]
+        user_slot = int(user_digit) + 1 if version == "3" and user_digit in "0123" else None
+        receivers.append({
+            "index": n,
+            "name": name_val,
+            "name_key": name_key,
+            "ip": ip_val,
+            "ip_key": ip_key,
+            "access": access_val,
+            "access_key": access_key,
+            "version": version,
+            "user_slot": user_slot,
+        })
+    return {
+        "enable_key": enable_key,
+        "enable": enable_val,
+        "type_key": type_key,
+        "type_value": type_val,
+        "user_key": user_key,
+        "user_value": user_val,
+        "enabled_word": enabled_word,
+        "receivers": receivers,
+    }
+
+
+def _trap_slot_for_user(slots: list[dict], username: str) -> dict:
+    want = (username or "").strip()
+    if not want or is_placeholder_snmpv3_user(want):
+        raise RuntimeError("SNMPv3 user is not on this card. Write the SNMPv3 slot first.")
+    matches = [s for s in slots if (s.get("username") or "").strip().lower() == want.lower()]
+    if not matches:
+        raise RuntimeError(
+            "SNMPv3 user " + want + " is not on this card. Write the SNMPv3 slot first."
+        )
+    slot = matches[0]
+    status = (slot.get("status") or "").strip().lower()
+    if status in ("0", "disable", "disabled", "forbidden"):
+        raise RuntimeError("SNMPv3 user " + want + " is disabled on the card.")
+    auth = (slot.get("auth_proto") or "").strip().lower()
+    priv = (slot.get("priv_proto") or "").strip().lower()
+    if auth not in ("2", "sha", "sha1") or priv not in ("2", "aes", "aes128", "aes-128"):
+        raise RuntimeError(
+            "SNMPv3 user " + want + " is not SHA and AES. The trap listener only accepts those."
+        )
+    return slot
+
+
+def trap_receiver_overlays(
+    doc: ConfigDoc,
+    slots: list[dict],
+    username: str,
+    dest_ip: str,
+    receiver_name: str,
+) -> tuple[dict[str, str], str]:
+    """Overlay one SNMPv3 trap receiver. Empty overlays means the card already sends it."""
+    name = clean_trap_receiver_name(receiver_name)
+    ip = canonical_ipv4(dest_ip)
+    if ip == "0.0.0.0":
+        raise RuntimeError("Trap destination must be an IPv4 address")
+    slot = _trap_slot_for_user(slots, username)
+    slot_index = int(slot["index"])
+    table = parse_trap_receivers(doc)
+    receivers = table["receivers"]
+
+    def same_ip(receiver: dict) -> bool:
+        if _blank_trap_ip(receiver["ip"]):
+            return False
+        try:
+            return canonical_ipv4(receiver["ip"]) == ip
+        except RuntimeError:
+            return False
+
+    matches = [r for r in receivers if same_ip(r)]
+    if matches:
+        target = matches[0]
+        action = "update"
+    else:
+        empties = [r for r in receivers if _blank_trap_ip(r["ip"]) and r["version"] == "0"]
+        if not empties:
+            raise RuntimeError(
+                "All 10 trap receivers are in use. Refusing to overwrite another destination."
+            )
+        target = empties[0]
+        action = "add"
+    if target["name"].strip() != name:
+        for other in receivers:
+            if other["index"] == target["index"]:
+                continue
+            if other["name"].strip().lower() == name.lower() and not _blank_trap_ip(other["ip"]):
+                raise RuntimeError("Trap name " + name + " is already used for " + other["ip"])
+    already = (
+        action == "update"
+        and target["version"] == "3"
+        and target["user_slot"] == slot_index
+        and target["access"].lower().startswith("enable")
+        and target["name"].strip() == name
+        and table["enable"].strip() == "1"
+    )
+    if already:
+        return {}, (
+            "already sending SNMPv3 traps to " + ip + " as " + username.strip()
+            + " (receiver " + str(target["index"]) + ")"
+        )
+    access_word = table["enabled_word"]
+    if not access_word.lower().startswith("enable"):
+        access_word = "Enabled"
+    overlays = {
+        target["name_key"]: name,
+        target["ip_key"]: ip,
+        target["access_key"]: access_word,
+        table["type_key"]: _replace_digit(table["type_value"], target["index"] - 1, "3", "TRAP_ENABLE_TYPE"),
+        table["user_key"]: _replace_digit(
+            table["user_value"], target["index"] - 1, str(slot_index - 1), "TRAP_V3_USER_INDEX"
+        ),
+    }
+    if table["enable"].strip() != "1":
+        overlays[table["enable_key"]] = "1"
+    summary = (
+        action + " receiver " + str(target["index"])
+        + " name=" + name + " ip=" + ip
+        + " user=" + username.strip() + " slot=" + str(slot_index) + " version=v3"
+    )
+    return overlays, summary
+
+
 def looks_like_rmcard_config(text: str) -> bool:
     if not text or len(text) < 40:
         return False

@@ -60,7 +60,7 @@ function ba_create_job(PDO $db, string $kind, array $deviceIds, array $extra, st
     if (!$targets) {
         throw new RuntimeException('No targets');
     }
-    $stop = ($kind === 'push_snmpv3') ? 0 : 1;
+    $stop = ($kind === 'push_snmpv3' || $kind === 'push_traps') ? 0 : 1;
     $db->prepare("INSERT INTO write_jobs (kind, status, simulate, stop_on_error, created_by, payload_json, template_id, firmware_id) VALUES (?,?,?,?,?,?,?,?)")
         ->execute([
             $kind, 'queued', $simulate ? 1 : 0, $stop, $user,
