@@ -33,6 +33,7 @@ from config_file import (  # noqa: E402
     parse_snmpv3_slots,
     pick_snmpv3_slot,
     snmpv3_overlays_for_slot,
+    trap_receiver_overlays,
 )
 from profiles import get_secret  # noqa: E402
 from db import connect, init_db  # noqa: E402
@@ -108,6 +109,16 @@ def is_retryable(exc: BaseException) -> bool:
         "could not find snmpv3 username",
         "template missing",
         "firmware",
+        "all 10 trap",
+        "is not on this card",
+        "is disabled on the card",
+        "not sha and aes",
+        "trap receiver name",
+        "trap destination",
+        "no 10-receiver",
+        "must be 10 digits",
+        "already used for",
+        "could not choose a trap destination",
     )
     if any(h in msg for h in hard):
         return False
@@ -266,6 +277,24 @@ def step(con, target_id: int, seq: int, name: str, status: str, detail: str = ""
     )
     con.execute("UPDATE write_job_targets SET step=? WHERE id=?", (name, target_id))
     con.commit()
+
+
+def local_ip_toward(host: str) -> str:
+    """Source IPv4 this server would use to reach the card. No packet is sent."""
+    import socket
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        try:
+            sock.connect((host, 162))
+            ip = sock.getsockname()[0]
+        except OSError as exc:
+            raise RuntimeError("could not choose a trap destination (" + str(exc) + ")") from exc
+    finally:
+        sock.close()
+    if not ip or ip.startswith("127."):
+        raise RuntimeError("could not choose a trap destination for " + host)
+    return ip
 
 
 def web_creds(secrets: dict) -> tuple[str, str]:
@@ -730,6 +759,117 @@ def run_push_snmpv3(con, job: dict, secrets: dict) -> None:
     run_targets_parallel(job, secrets, targets, one)
 
 
+def run_push_traps(con, job: dict, secrets: dict) -> None:
+    """Point one SNMPv3 trap receiver at this server. Does not change SNMPv3 users."""
+    payload = json.loads(job["payload_json"] or "{}")
+    profile_id = int(payload.get("snmp_profile_id") or 0)
+    if profile_id < 1:
+        raise RuntimeError("snmp_profile_id required")
+    prof = con.execute("SELECT * FROM snmp_profiles WHERE id=?", (profile_id,)).fetchone()
+    if not prof:
+        raise RuntimeError("SNMPv3 credentials missing")
+    sec = get_secret(profile_id)
+    username = (prof["username"] or sec.get("user") or "").strip()
+    if not username:
+        raise RuntimeError("profile has no SNMPv3 username")
+    receiver_name = (payload.get("receiver_name") or "BackAisle").strip() or "BackAisle"
+    dest_arg = (payload.get("dest_ip") or "").strip()
+    simulate = job_is_simulate(job)
+    du, dp = web_creds(secrets)
+    wu = (str(prof["web_user"] or "").strip() or sec.get("web_user") or du)
+    wp = sec.get("web_pass") or dp
+    targets = con.execute("SELECT * FROM write_job_targets WHERE job_id=? ORDER BY id", (job["id"],)).fetchall()
+
+    def one(con, t) -> None:
+        tid = t["id"]
+        sess = None
+        try:
+            dest = dest_arg or local_ip_toward(t["ip"])
+            step(con, tid, 1, "pull_config", "running", f"{t['ip']} writer={writer_version()}")
+            sess = RmcardSession(t["ip"], wu, wp)
+            try:
+                sess.login()
+                data, name = sess.download_config()
+            except Exception:
+                if sess is not None:
+                    try:
+                        sess.logout()
+                    except Exception:
+                        pass
+                    sess = None
+                data, name = pull_config_bytes(t["ip"], secrets, wu, wp)
+            text = data.decode("latin1", "replace")
+            if not looks_like_rmcard_config(text):
+                raise RuntimeError("pulled file is not an RMCARD text config")
+            doc = parse_config(text)
+            slots = parse_snmpv3_slots(doc)
+            overlays, summary = trap_receiver_overlays(doc, slots, username, dest, receiver_name)
+            step(con, tid, 1, "pull_config", "ok", name)
+            step(con, tid, 2, "trap_receiver", "ok", summary)
+            if not overlays:
+                step(con, tid, 3, "restore", "ok", summary + " (no restore)")
+            elif simulate:
+                step(con, tid, 3, "restore", "ok", "SIMULATE " + summary + " (card not restored)")
+            else:
+                rewritten = doc.rewrite(overlays, strip_identity=True, identity_map={})
+                fname = datetime.now().strftime("%Y_%m_%d_%H%M.txt")
+                tmp = CONFIG_DIR / f"traps_{t['ip'].replace('.', '_')}_{fname}"
+                CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+                tmp.write_text(rewritten, encoding="latin1")
+                step(con, tid, 3, "restore", "running", fname)
+                content = tmp.read_bytes()
+                errors: list[str] = []
+                detail = None
+                if sess is not None:
+                    try:
+                        detail = sess.restore_config_http(content, fname)
+                    except Exception as e:
+                        errors.append(f"http: {e}")
+                        log(f"http restore failed {t['ip']}: {e}")
+                if detail is None:
+                    try:
+                        detail = scp_put_config(t["ip"], wu, wp, tmp, fname, simulate=False)
+                    except Exception as e:
+                        errors.append(f"scp: {e}")
+                        log(f"scp failed {t['ip']}: {e}; trying FTP restore")
+                        step(con, tid, 3, "restore", "running", f"scp failed; trying FTP: {e}"[:2000])
+                        try:
+                            detail = ftp_put_config(t["ip"], wu, wp, fname, content, simulate=False)
+                        except Exception as e2:
+                            errors.append(f"ftp: {e2}")
+                            log(f"ftp restore failed {t['ip']}: {e2}")
+                            if sess is None:
+                                sess = RmcardSession(t["ip"], wu, wp)
+                                sess.login()
+                            detail = sess.restore_config_http(content, fname)
+                if errors:
+                    detail = f"{detail} (after {'; '.join(errors)})"
+                step(con, tid, 3, "restore", "ok", detail)
+                step(con, tid, 4, "wait_reboot", "running", "")
+                time.sleep(20)
+                http_ok = wait_http_alive(t["ip"], timeout_s=360)
+                ftp_note = ""
+                try:
+                    wait_ftp_alive(t["ip"], wu, wp, timeout_s=45, simulate=False)
+                    ftp_note = "; FTP ok"
+                except Exception:
+                    ftp_note = "; FTP still down (ignored if HTTP is up)"
+                step(con, tid, 4, "wait_reboot", "ok", http_ok + ftp_note)
+            con.execute(
+                "UPDATE write_job_targets SET status='ok', ended_at=? WHERE id=?",
+                (now(), tid),
+            )
+            con.commit()
+        finally:
+            if sess is not None:
+                try:
+                    sess.logout()
+                except Exception:
+                    pass
+
+    run_targets_parallel(job, secrets, targets, one)
+
+
 def process_job(job_id: int) -> None:
     secrets = load_secrets()
     con = init_db()
@@ -757,6 +897,8 @@ def process_job(job_id: int) -> None:
             run_push_cert(con, job, secrets)
         elif kind == "push_snmpv3":
             run_push_snmpv3(con, job, secrets)
+        elif kind == "push_traps":
+            run_push_traps(con, job, secrets)
         else:
             raise RuntimeError(f"unknown job kind {kind}")
         fails = 0

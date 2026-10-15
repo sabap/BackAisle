@@ -320,6 +320,43 @@ function page_snmp_body(PDO $db, array $user): void
                 ], (string)$user['username'], $simulate, false);
                 $msg = ($simulate ? 'Simulate' : 'Push') . " SNMPv3 job #$jid queued (" . count($ids) . ' UPS).';
                 $_SESSION['ba_flash_job'] = $jid;
+            } elseif ($act === 'push_traps') {
+                if (!function_exists('ba_create_job')) {
+                    throw new RuntimeException('Writer helpers missing');
+                }
+                $simulate = (string)($_POST['simulate'] ?? '0') === '1';
+                if (!$simulate && trim((string)($_POST['confirm'] ?? '')) !== 'ENABLE TRAPS') {
+                    throw new RuntimeException('Type ENABLE TRAPS to write the RMCARD, or tick Simulate to preview only.');
+                }
+                $sid = (int)($_POST['snmp_profile_id'] ?? 0);
+                if ($sid < 1) {
+                    throw new RuntimeException('Choose SNMPv3 credentials');
+                }
+                $name = trim((string)($_POST['receiver_name'] ?? ''));
+                if ($name === '') {
+                    $name = 'BackAisle';
+                }
+                if (strlen($name) > 15 || !preg_match('/^[A-Za-z0-9][A-Za-z0-9 ._-]{0,14}$/', $name)) {
+                    throw new RuntimeException('Trap receiver name must be 1-15 letters, digits, spaces, or . _ -');
+                }
+                $dest = trim((string)($_POST['dest_ip'] ?? ''));
+                if ($dest !== '' && !preg_match('/^(\d{1,3}\.){3}\d{1,3}$/', $dest)) {
+                    throw new RuntimeException('Trap destination must be an IPv4 address');
+                }
+                $scope = (string)($_POST['scope'] ?? 'selected');
+                $gid = ($_POST['group_id'] ?? '') === '' ? null : (int)$_POST['group_id'];
+                $ids = $_POST['ids'] ?? [];
+                if (!is_array($ids)) {
+                    $ids = [];
+                }
+                $ids = ba_ups_ids_for_scope($db, $scope, $ids, $gid);
+                $jid = ba_create_job($db, 'push_traps', $ids, [
+                    'snmp_profile_id' => $sid,
+                    'dest_ip' => $dest,
+                    'receiver_name' => $name,
+                ], (string)$user['username'], $simulate, false);
+                $msg = ($simulate ? 'Simulate' : 'Enable') . " SNMPv3 traps job #$jid queued (" . count($ids) . ' UPS).';
+                $_SESSION['ba_flash_job'] = $jid;
             }
             $_SESSION['ba_flash'] = $msg;
             header('Location: /snmp.php');
@@ -397,7 +434,7 @@ function page_snmp_body(PDO $db, array $user): void
         echo '</div>';
     }
     echo '<h1>SNMP polling</h1>';
-    echo '<p class="muted">SNMPv3 authPriv collector. Scheduled devices have <code>enabled=1</code>. Manual poll talks to the unit now, even if it is not on the schedule. While the collector is running it also listens for SNMPv3 traps on UDP 162. Point the trap receiver on each card at this server and use the same credentials. A trap opens the same alert a poll would, and the notice goes out without waiting for the next poll. Polling still confirms the condition.</p>';
+    echo '<p class="muted">SNMPv3 authPriv collector. Scheduled devices have <code>enabled=1</code>. Manual poll talks to the unit now, even if it is not on the schedule. While the collector is running it also listens for SNMPv3 traps on UDP 162. Enable SNMPv3 traps here so each card sends them to this server. A trap opens the same alert a poll would, and the notice goes out without waiting for the next poll. Polling still confirms the condition.</p>';
 
     if ($admin) {
         $profiles = [];
@@ -453,13 +490,39 @@ function page_snmp_body(PDO $db, array $user): void
         echo '<input name="confirm" autocomplete="off">';
         echo '<button>Queue SNMPv3 write</button></form>';
         ba_users_modal_close();
-        echo '<script>(function(){function wire(id){var f=document.getElementById(id);if(!f)return;f.addEventListener("submit",function(){document.querySelectorAll(".snmp-id:checked,.snmp-unsched:checked").forEach(function(c){var i=document.createElement("input");i.type="hidden";i.name="ids[]";i.value=c.value;f.appendChild(i);});});}wire("snmp-bulk");wire("snmp-pushv3");})();</script>';
+        ba_users_modal_open('modal-snmp-traps', 'Enable SNMPv3 traps', false, '', true);
+        echo '<form method="post" action="/snmp.php" class="stack" id="snmp-traps">';
+        echo '<input type="hidden" name="act" value="push_traps">';
+        echo '<p class="muted">Pulls the live card configuration and sets one SNMPv3 trap receiver to this server. Other receivers, SNMPv3 users, and the card address stay as they are. The user must already exist on the card with SHA and AES. A real write reboots the management card. The UPS stays powered. A card that already sends these traps is skipped and is not rebooted. Simulate only shows the plan. Leave the server address blank to use the address this server would use to reach that card.</p>';
+        echo '<label>Credentials (the user already on the card)</label><select name="snmp_profile_id" required><option value="">choose</option>';
+        foreach ($profiles as $p) {
+            echo '<option value="'.(int)$p['id'].'">'.h((string)$p['name']).'</option>';
+        }
+        echo '</select>';
+        echo '<label>Apply to</label><select name="scope">';
+        echo '<option value="selected">Selected UPS</option>';
+        echo '<option value="scheduled">On poll schedule</option>';
+        echo '<option value="all">All UPS</option>';
+        echo '<option value="group">IDF group</option>';
+        echo '</select>';
+        echo '<label>IDF group</label><select name="group_id"><option value="">(for IDF group)</option>'.$groupOpts.'</select>';
+        echo '<label>Receiver name</label><input name="receiver_name" value="BackAisle" maxlength="15">';
+        echo '<label>Server address that should receive traps</label>';
+        echo '<input name="dest_ip" placeholder="blank = address toward each card">';
+        echo '<input type="hidden" name="simulate" value="0">';
+        echo '<label><input type="checkbox" name="simulate" value="1" checked> Simulate (pull and plan, do not restore)</label>';
+        echo '<label>Type ENABLE TRAPS to write (leave blank if simulating)</label>';
+        echo '<input name="confirm" autocomplete="off">';
+        echo '<button>Queue trap receivers</button></form>';
+        ba_users_modal_close();
+        echo '<script>(function(){function wire(id){var f=document.getElementById(id);if(!f)return;f.addEventListener("submit",function(){document.querySelectorAll(".snmp-id:checked,.snmp-unsched:checked").forEach(function(c){var i=document.createElement("input");i.type="hidden";i.name="ids[]";i.value=c.value;f.appendChild(i);});});}wire("snmp-bulk");wire("snmp-pushv3");wire("snmp-traps");})();</script>';
     }
 
     $pollerActions = '';
     if ($admin) {
         $pollerActions = '<button type="button" class="btn" data-open-modal="modal-snmp-bulk">Bulk assign</button>';
         $pollerActions .= '<button type="button" class="btn" data-open-modal="modal-snmp-push">Write SNMPv3 slot</button>';
+        $pollerActions .= '<button type="button" class="btn" data-open-modal="modal-snmp-traps">Enable SNMPv3 traps</button>';
     }
     echo '<div class="card-board">';
     echo '<section class="ucard"><div class="ucard-head"><h3>Poller</h3>';
