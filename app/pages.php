@@ -740,6 +740,15 @@ function page_devices(PDO $db, array $user): void {
     $canAssign = ba_can($user, 'edit_devices_all');
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $act = (string)($_POST['act'] ?? 'add');
+        if ($act === 'card_settings') {
+            try {
+                $queued = ba_queue_card_settings($db, $user);
+                header('Location: ' . ba_href('/devices?job=' . (int)$queued['job_id'] . '&msg=' . rawurlencode($queued['message'])));
+            } catch (Throwable $e) {
+                header('Location: ' . ba_href('/devices?msg=' . rawurlencode($e->getMessage())));
+            }
+            exit;
+        }
         if ($act === 'assign_department') {
             if (!$canAssign) {
                 http_response_code(403);
@@ -868,20 +877,27 @@ function page_devices(PDO $db, array $user): void {
     }
     $showRetired = isset($_GET['retired']);
     $filterDept = (int)($_GET['dept'] ?? 0);
-    $listSql = 'SELECT * FROM devices WHERE 1=1';
+    $listSql = 'SELECT d.*, t.manufacturer AS template_manufacturer FROM devices d LEFT JOIN device_templates t ON t.id=d.template_id WHERE 1=1';
     $listParams = [];
     if (!$showRetired) {
-        $listSql .= ' AND decommissioned_at IS NULL';
+        $listSql .= ' AND d.decommissioned_at IS NULL';
     }
     if ($filterDept > 0) {
-        $listSql .= ' AND department_id=?';
+        $listSql .= ' AND d.department_id=?';
         $listParams[] = $filterDept;
     }
-    $listSql .= ' ORDER BY is_simulated, building, idf_closet';
+    $listSql .= ' ORDER BY d.is_simulated, d.building, d.idf_closet';
     $rows = ba_pp_exec($db, $listSql, $listParams)->fetchAll();
     ba_layout_start('Inventory', 'devices');
     echo '<h1>Inventory</h1>';
-    if (!empty($_GET['msg'])) {
+    if (!empty($_GET['job'])) {
+        $jobId = (int)$_GET['job'];
+        echo '<div class="flash ok"><a href="'.h(ba_href('/writes/job?id='.$jobId)).'">Card settings job '.$jobId.'</a>';
+        if (!empty($_GET['msg'])) {
+            echo ' · '.h((string)$_GET['msg']);
+        }
+        echo '</div>';
+    } elseif (!empty($_GET['msg'])) {
         echo '<div class="flash ok">'.h((string)$_GET['msg']).'</div>';
     }
     echo '<p class="muted">The owning department is responsible for a device. Department Admins in that department can edit it, add devices for it, and decommission it. Alerts for it go to that department.</p>';
@@ -889,6 +905,8 @@ function page_devices(PDO $db, array $user): void {
     foreach ($db->query('SELECT id, name, is_active FROM departments ORDER BY name') as $dep) {
         $deptNames[(int)ba_col($dep, 'id')] = (string)ba_col($dep, 'name');
     }
+    $canCard = ba_card_settings_available($db, $user);
+    $showPick = $canAssign || $canCard;
     ba_card_open('Devices', $canEditDevices ? '<button type="button" class="btn" data-open-modal="modal-add-device">Add device</button>' : '');
     echo '<form method="get" action="'.h(ba_href('/devices')).'" class="filters">';
     echo '<select name="dept"><option value="">All departments</option>';
@@ -902,8 +920,10 @@ function page_devices(PDO $db, array $user): void {
         echo '<a href="'.h(ba_href('/devices?retired=1'.($filterDept > 0 ? '&dept='.$filterDept : ''))).'">Show decommissioned</a>';
     }
     echo '</form>';
-    if ($canAssign) {
+    if ($showPick) {
         echo '<form method="post">';
+    }
+    if ($canAssign) {
         echo '<div class="filters"><select name="department_id" aria-label="Department"><option value="">(no department)</option>';
         foreach ($db->query('SELECT id, name FROM departments WHERE is_active=1 ORDER BY name') as $dep) {
             echo '<option value="'.(int)ba_col($dep, 'id').'">'.h((string)ba_col($dep, 'name')).'</option>';
@@ -912,10 +932,16 @@ function page_devices(PDO $db, array $user): void {
         echo '<button name="act" value="assign_department">Assign department</button>';
         echo '<select name="template_id" aria-label="Template">'.ba_template_options($db).'</select>';
         echo '<button name="act" value="apply_template">Apply template</button>';
+        if ($canCard) {
+            echo '<button type="button" class="btn" data-open-modal="modal-card-settings">Card settings</button>';
+        }
         echo '<p class="owner-hint muted">Apply template sets the model, height, outlets, credentials, and model profile on the checked devices. When the template has no credentials or model profile, those stay as they are on each device.</p></div>';
+    } elseif ($canCard) {
+        echo '<div class="filters"><button type="button" class="btn" data-open-modal="modal-card-settings">Card settings</button>';
+        echo '<p class="owner-hint muted">Card settings sends one named change to the checked CyberPower cards. Other devices in the list are left out.</p></div>';
     }
     echo '<table><thead><tr>';
-    if ($canAssign) {
+    if ($showPick) {
         echo '<th><input type="checkbox" data-device-select-all aria-label="Select all" title="Select all"></th>';
     }
     echo '<th>Kind</th><th>IP</th><th>Host</th><th>Model</th><th>Template</th><th>Serial</th><th>Department</th><th>Closet</th><th>Rack / U</th></tr></thead><tbody>';
@@ -927,8 +953,13 @@ function page_devices(PDO $db, array $user): void {
         $u = $r['position_u'] ? ('U'.(int)$r['position_u']) : '';
         $retired = trim((string)ba_col($r, 'decommissioned_at', '')) !== '';
         echo '<tr>';
-        if ($canAssign) {
-            echo '<td><input type="checkbox" name="device_ids[]" value="'.(int)$r['id'].'"></td>';
+        if ($showPick) {
+            $pickThis = $canAssign || ($canCard && ba_device_is_cyberpower($r) && ba_can_edit_device($user, $r));
+            echo '<td>';
+            if ($pickThis) {
+                echo '<input type="checkbox" name="device_ids[]" value="'.(int)$r['id'].'">';
+            }
+            echo '</td>';
         }
         echo '<td>'.h(ba_kind_label($r['kind'] ?? 'ups')).($retired ? ' <span class="muted">decommissioned</span>' : '').'</td>';
         echo '<td><a href="/device.php?id='.(int)$r['id'].'">'.h($r['ip'] ?: '—').'</a></td><td>'.h($r['hostname']).'</td><td>'.h($r['model']).'</td>';
@@ -943,11 +974,16 @@ function page_devices(PDO $db, array $user): void {
         echo '</td></tr>';
     }
     if (!$rows) {
-        echo '<tr><td colspan="'.($canAssign ? 10 : 9).'" class="muted">No devices in this list.</td></tr>';
+        echo '<tr><td colspan="'.($showPick ? 10 : 9).'" class="muted">No devices in this list.</td></tr>';
     }
     echo '</tbody></table>';
-    if ($canAssign) {
+    if ($showPick) {
         echo '</form>';
+    }
+    if ($canCard) {
+        ba_card_settings_modal(true);
+    }
+    if ($showPick) {
         echo <<<'JS'
 <script>
 (function () {
@@ -1015,7 +1051,21 @@ function page_device(PDO $db, array $user): void {
     $st->execute([$id]);
     $r = $st->fetch();
     if (!$r) { http_response_code(404); echo 'not found'; return; }
+    $r = ba_card_attach_template_mfr($db, $r);
     $canEditThis = ba_can_edit_device($user, $r);
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && (string)($_POST['act'] ?? '') === 'card_settings') {
+        try {
+            if (!$canEditThis || !ba_device_is_cyberpower($r)) {
+                throw new RuntimeException('Card settings are only for a CyberPower card you can edit');
+            }
+            $_POST['device_ids'] = [$id];
+            $queued = ba_queue_card_settings($db, $user);
+            header('Location: ' . ba_href('/device?id='.$id.'&job='.(int)$queued['job_id']));
+        } catch (Throwable $e) {
+            header('Location: ' . ba_href('/device?id='.$id.'&err='.rawurlencode($e->getMessage())));
+        }
+        exit;
+    }
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($canEditThis || (isset($_POST['save_owner']) && ba_can($user, 'edit_devices_all')))) {
         if (isset($_POST['decommission']) && $canEditThis) {
             ba_pp_exec($db, 'UPDATE devices SET enabled=0, decommissioned_at=? WHERE id=?', [gmdate('Y-m-d H:i:s'), $id]);
@@ -1146,6 +1196,10 @@ function page_device(PDO $db, array $user): void {
     $thr = $th->fetch() ?: [];
     ba_layout_start($r['hostname'] ?: $r['ip'], 'devices');
     if (!empty($_GET['err'])) echo '<div class="flash">'.h((string)$_GET['err']).'</div>';
+    if (!empty($_GET['job'])) {
+        $jobId = (int)$_GET['job'];
+        echo '<div class="flash ok"><a href="'.h(ba_href('/writes/job?id='.$jobId)).'">Card settings job '.$jobId.'</a> is queued.</div>';
+    }
     if (!empty($_GET['saved'])) {
         $savedText = 'Template saved. The next unit of this hardware can use it.';
         if ((string)$_GET['saved'] === 'model') {
@@ -1179,6 +1233,9 @@ function page_device(PDO $db, array $user): void {
       <?php endif; ?>
       · <?= h(ba_kind_label($r['kind'] ?? 'ups')) ?>
       · comm <?= h($r['comm_state'] ?: 'unknown') ?> · last ok <?= h($r['last_success'] ?: 'never') ?> · SNMP name <?= h($r['snmp_name']) ?> · fw <?= h($r['firmware']) ?></p>
+    <?php if ($canEditThis && ba_device_is_cyberpower($r)): ?>
+      <p><button type="button" class="btn" data-open-modal="modal-card-settings">Card settings</button></p>
+    <?php endif; ?>
     <?php
     $canMakeProfile = $canEditThis && ba_editor($user, 'edit_snmp');
     $profileAction = '';
@@ -1329,6 +1386,9 @@ function page_device(PDO $db, array $user): void {
         echo '<p class="muted">This device is assigned to the new profile. Other units use it when their model name contains the match text. Use the full model name. A short match such as PR also selects other units of that family. Adding a profile means a UPS with a blank model no longer uses the only profile on the site. Summary readings stay on the device page. The next page is where you add OIDs.</p>';
         echo '<button>Create model profile</button></form>';
         ba_users_modal_close();
+    }
+    if ($canEditThis && ba_device_is_cyberpower($r)) {
+        ba_card_settings_modal(false, $id);
     }
     ba_layout_end();
 }

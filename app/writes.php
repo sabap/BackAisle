@@ -288,7 +288,7 @@ function page_fleet_writes(PDO $db, array $user): void {
       <?php foreach ($jobs as $j): ?>
         <tr>
           <td><a href="<?= h(ba_href('/writes/job?id='.(int)$j['id'])) ?>"><?= (int)$j['id'] ?></a></td>
-          <td><?= h($j['kind']) ?></td>
+          <td><?= h(function_exists('ba_write_kind_label') ? ba_write_kind_label((string)$j['kind']) : (string)$j['kind']) ?></td>
           <td><?= h($j['status']) ?></td>
           <td><?= $j['simulate'] ? 'yes' : 'no' ?></td>
           <td><?= h($j['created_by']) ?></td>
@@ -319,8 +319,19 @@ function page_template_view(PDO $db): void {
 }
 
 function page_job_view(PDO $db): void {
-    $user = ba_require_perm('edit_writes');
+    $user = ba_require_login();
     $id = (int)($_GET['id'] ?? $_POST['id'] ?? 0);
+    $j = $db->prepare('SELECT * FROM write_jobs WHERE id=?');
+    $j->execute([$id]);
+    $job = $j->fetch() ?: null;
+    $allowed = ba_can($user, 'edit_writes');
+    if (!$allowed && $job && function_exists('ba_card_job_visible') && ba_card_job_visible($db, $user, $job)) {
+        $allowed = true;
+    }
+    if (!$allowed) {
+        ba_require_perm('edit_writes');
+    }
+    if (!$job) { http_response_code(404); echo 'not found'; return; }
     $cancelMsg = '';
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && (string)($_POST['act'] ?? '') === 'cancel') {
         if (trim((string)($_POST['confirm'] ?? '')) !== 'STOP JOB') {
@@ -331,20 +342,25 @@ function page_job_view(PDO $db): void {
             exit;
         }
     }
-    $j = $db->prepare('SELECT * FROM write_jobs WHERE id=?');
-    $j->execute([$id]);
-    $job = $j->fetch();
-    if (!$job) { http_response_code(404); echo 'not found'; return; }
     $tg = $db->prepare('SELECT * FROM write_job_targets WHERE job_id=? ORDER BY id');
     $tg->execute([$id]);
     $targets = $tg->fetchAll();
-    ba_layout_start('Job '.$id, 'writes');
+    $canWrites = ba_can($user, 'edit_writes');
+    $kindLabel = function_exists('ba_write_kind_label') ? ba_write_kind_label((string)$job['kind']) : (string)$job['kind'];
+    $isCard = (string)$job['kind'] === 'card_settings';
+    ba_layout_start('Job '.$id, $canWrites ? 'writes' : 'devices');
     $live = in_array((string)$job['status'], ['queued', 'running'], true);
     if ($live) {
         echo '<script>setTimeout(function(){ location.reload(); }, 4000);</script>';
     }
-    echo '<p><a href="'.h(ba_href('/writes')).'">All jobs</a> · <a href="'.h(ba_href('/snmp')).'">SNMP page</a></p>';
-    echo '<h1>Job '.$id.' · '.h($job['kind']).' · '.h($job['status']).($job['simulate']?' · simulate':'').'</h1>';
+    echo '<p>';
+    if ($canWrites) {
+        echo '<a href="'.h(ba_href('/writes')).'">All jobs</a> · <a href="'.h(ba_href('/snmp')).'">SNMP page</a>';
+    } else {
+        echo '<a href="'.h(ba_href('/devices')).'">Inventory</a>';
+    }
+    echo '</p>';
+    echo '<h1>Job '.$id.' · '.h($kindLabel).' · '.h($job['status']).($job['simulate']?' · simulate':'').'</h1>';
     if (!empty($_GET['note'])) {
         echo '<div class="flash">'.h((string)$_GET['note']).'</div>';
     }
@@ -352,14 +368,24 @@ function page_job_view(PDO $db): void {
         echo '<div class="flash">'.h($cancelMsg).'</div>';
     }
     if ($live) {
-        echo '<p class="muted">Writer is still working. This page reloads every 4 seconds. There is no extra toast when it finishes — status here is the result (ok / fail per UPS, slot choice in the step detail).</p>';
+        if ($isCard) {
+            echo '<p class="muted">Writer is still working. This page reloads every 4 seconds. Card settings go over SSH and the card stays up. Status here is the result.</p>';
+        } else {
+            echo '<p class="muted">Writer is still working. This page reloads every 4 seconds. There is no extra toast when it finishes — status here is the result (ok / fail per UPS, slot choice in the step detail).</p>';
+        }
         echo '<section class="ucard"><div class="ucard-head"><h3>Stop job</h3></div><div class="ucard-body">';
         echo '<form method="post" action="'.h(ba_href('/writes/job?id='.$id)).'">';
         echo '<input type="hidden" name="act" value="cancel"><input type="hidden" name="id" value="'.$id.'">';
         echo '<label>Stop remaining units</label> <input name="confirm" placeholder="STOP JOB" autocomplete="off"> ';
         echo '<button type="submit">Stop job</button>';
-        echo '<p class="muted">Units already ok or fail stay that way. Queued units are cancelled. A card already restoring is left to finish on writer 0.5.36+. An older writer keeps going until the BackAisleWriter task is stopped.</p>';
+        if ($isCard) {
+            echo '<p class="muted">Units already ok or fail stay that way. Queued cards are cancelled. A card already in this SSH session is left to finish.</p>';
+        } else {
+            echo '<p class="muted">Units already ok or fail stay that way. Queued units are cancelled. A card already restoring is left to finish on writer 0.5.36+. An older writer keeps going until the BackAisleWriter task is stopped.</p>';
+        }
         echo '</form></div></section>';
+    } elseif ($isCard) {
+        echo '<p class="muted">Job finished. Each card and the commands sent are in the tables below.</p>';
     } else {
         echo '<p class="muted">Job finished. Per-UPS result and SNMPv3 slot notes are in the tables below.</p>';
     }
@@ -368,7 +394,9 @@ function page_job_view(PDO $db): void {
         echo '<section class="ucard"><div class="ucard-head"><h3>'.h($t['hostname'].' '.$t['ip']).' · '.h($t['status']).' · '.h($t['step']).'</h3></div><div class="ucard-body">';
         echo '<p class="muted">start '.h($t['started_at']).' end '.h($t['ended_at']).'</p>';
         if ($t['error']) echo '<p class="pill batt">'.h($t['error']).'</p>';
-        echo '<p>post poll: model '.h($t['post_model']).' fw '.h($t['post_firmware']).' name '.h($t['post_name']).' loc '.h($t['post_location']).'</p>';
+        if (!$isCard) {
+            echo '<p>post poll: model '.h($t['post_model']).' fw '.h($t['post_firmware']).' name '.h($t['post_name']).' loc '.h($t['post_location']).'</p>';
+        }
         $st = $db->prepare('SELECT * FROM write_job_steps WHERE target_id=? ORDER BY id');
         $st->execute([$t['id']]);
         echo '<table><thead><tr><th>#</th><th>Step</th><th>Status</th><th>Time</th><th>Detail</th></tr></thead><tbody>';

@@ -17,7 +17,7 @@
            - Write a site-local php.ini (does not overwrite another site's php.ini)
            - Install ODBC Driver 18 for SQL Server
            - Install URL Rewrite
-           - Install Python 3.12+ and pip packages
+           - Install Python 3.12+ and pip packages (paramiko, used for card settings SSH)
            - Point IIS Default Web Site at C:\inetpub\BackAisle\public
            - Bind HTTP :80 and HTTPS :443 (self-signed cert if needed)
            - Allow inbound UDP 162 for SNMPv3 traps (collector task)

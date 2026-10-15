@@ -42,6 +42,7 @@ from rmcard_http import RmcardSession, _looks_like_rmcard_config, wait_http_aliv
 from rmcard_scp import scp_put_config  # noqa: E402
 from secrets import load_secrets  # noqa: E402
 from snmp_client import SET_OIDS, snmp_get, snmp_get_one, snmp_set  # noqa: E402
+from card_commands import build_card_commands  # noqa: E402
 
 
 def now() -> str:
@@ -119,6 +120,12 @@ def is_retryable(exc: BaseException) -> bool:
         "must be 10 digits",
         "already used for",
         "could not choose a trap destination",
+        "parameter error",
+        "command not found",
+        "refusing command",
+        "authentication failed",
+        "unknown card setting",
+        "enter at least one",
     )
     if any(h in msg for h in hard):
         return False
@@ -870,6 +877,72 @@ def run_push_traps(con, job: dict, secrets: dict) -> None:
     run_targets_parallel(job, secrets, targets, one)
 
 
+def _card_detail(command: str, text: str, password: str) -> str:
+    if password:
+        text = text.replace(password, "********")
+    if not command.endswith(" show"):
+        return command[:500]
+    kept = []
+    for raw in text.splitlines():
+        part = " ".join(raw.split())
+        if not part or part.startswith("CyberPower >") or part == command:
+            continue
+        kept.append(part)
+    body = " | ".join(kept)
+    if not body:
+        return command[:500]
+    return (command + " | " + body)[:1500]
+
+
+def run_card_settings(con, job: dict, secrets: dict) -> None:
+    """SSH ready-made commands. Does not restore a config file and does not reboot the card."""
+    payload = json.loads(job.get("payload_json") or "{}")
+    if not isinstance(payload, dict):
+        raise RuntimeError("unknown card setting")
+    try:
+        commands = build_card_commands(str(payload.get("recipe") or ""), payload.get("fields") or {})
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+    user, password = web_creds(secrets)
+    simulate = job_is_simulate(job)
+    preview = " | ".join(commands)
+    targets = con.execute(
+        "SELECT * FROM write_job_targets WHERE job_id=? ORDER BY id",
+        (job["id"],),
+    ).fetchall()
+
+    def one(con, t: dict) -> None:
+        tid = int(t["id"])
+        if simulate:
+            step(con, tid, 1, "cli", "ok", "SIMULATE " + preview[:1800])
+            con.execute(
+                "UPDATE write_job_targets SET status='ok', ended_at=? WHERE id=?",
+                (now(), tid),
+            )
+            con.commit()
+            return
+        from rmcard_cli import RmcardCli
+
+        try:
+            with RmcardCli(str(t["ip"]), user, password) as cli:
+                step(con, tid, 1, "ssh", "ok", str(t.get("ip") or ""))
+                for seq, command in enumerate(commands, start=2):
+                    text = cli.run(command)
+                    step(con, tid, seq, "cli", "ok", _card_detail(command, text, password))
+        except Exception as exc:
+            text = str(exc)
+            if password:
+                text = text.replace(password, "********")
+            raise RuntimeError(text) from None
+        con.execute(
+            "UPDATE write_job_targets SET status='ok', ended_at=? WHERE id=?",
+            (now(), tid),
+        )
+        con.commit()
+
+    run_targets_parallel(job, secrets, targets, one)
+
+
 def process_job(job_id: int) -> None:
     secrets = load_secrets()
     con = init_db()
@@ -899,6 +972,8 @@ def process_job(job_id: int) -> None:
             run_push_snmpv3(con, job, secrets)
         elif kind == "push_traps":
             run_push_traps(con, job, secrets)
+        elif kind == "card_settings":
+            run_card_settings(con, job, secrets)
         else:
             raise RuntimeError(f"unknown job kind {kind}")
         fails = 0

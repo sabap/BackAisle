@@ -18,10 +18,12 @@ $py = $env:BACKAISLE_PYTHON
 if (-not (Test-BaPython $py)) { $py = $null }
 if (-not $py) {
     foreach ($c in @(
+        (Join-Path $SiteRoot 'runtime\Python312\python.exe'),
+        (Join-Path $SiteRoot 'runtime\Python313\python.exe'),
         "$env:ProgramFiles\Python312\python.exe",
         "$env:ProgramFiles\Python313\python.exe",
-        "$env:LocalAppData\Programs\Python\Python312\python.exe",
-        'C:\Python312\python.exe'
+        'C:\Python312\python.exe',
+        "$env:LocalAppData\Programs\Python\Python312\python.exe"
     )) {
         if (Test-BaPython $c) { $py = $c; break }
     }
