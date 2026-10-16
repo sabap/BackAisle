@@ -743,9 +743,22 @@ function page_devices(PDO $db, array $user): void {
         if ($act === 'card_settings') {
             try {
                 $queued = ba_queue_card_settings($db, $user);
+                if (ba_card_settings_wants_json()) {
+                    $jobId = (int)$queued['job_id'];
+                    ba_card_settings_json([
+                        'ok' => true,
+                        'job_id' => $jobId,
+                        'message' => (string)$queued['message'],
+                        'job_url' => ba_href('/writes/job?id=' . $jobId),
+                    ]);
+                }
                 header('Location: ' . ba_href('/devices?job=' . (int)$queued['job_id'] . '&msg=' . rawurlencode($queued['message'])));
             } catch (Throwable $e) {
-                header('Location: ' . ba_href('/devices?msg=' . rawurlencode($e->getMessage())));
+                ba_audit($db, 'card_settings_rejected', 'write_job', null, $e->getMessage());
+                if (ba_card_settings_wants_json()) {
+                    ba_card_settings_json(['ok' => false, 'message' => $e->getMessage()], 400);
+                }
+                header('Location: ' . ba_href('/devices?bad=1&msg=' . rawurlencode($e->getMessage())));
             }
             exit;
         }
@@ -905,7 +918,8 @@ function page_devices(PDO $db, array $user): void {
         }
         echo '</div>';
     } elseif (!empty($_GET['msg'])) {
-        echo '<div class="flash ok">'.h((string)$_GET['msg']).'</div>';
+        $msgClass = !empty($_GET['bad']) ? 'err' : 'ok';
+        echo '<div class="flash '.$msgClass.'">'.h((string)$_GET['msg']).'</div>';
     }
     echo '<p class="muted">The owning department is responsible for a device. Department Admins in that department can edit it, add devices for it, and decommission it. Alerts for it go to that department.</p>';
     $deptNames = [];
@@ -1069,8 +1083,21 @@ function page_device(PDO $db, array $user): void {
             }
             $_POST['device_ids'] = [$id];
             $queued = ba_queue_card_settings($db, $user);
-            header('Location: ' . ba_href('/device?id='.$id.'&job='.(int)$queued['job_id']));
+            if (ba_card_settings_wants_json()) {
+                $jobId = (int)$queued['job_id'];
+                ba_card_settings_json([
+                    'ok' => true,
+                    'job_id' => $jobId,
+                    'message' => (string)$queued['message'],
+                    'job_url' => ba_href('/writes/job?id=' . $jobId),
+                ]);
+            }
+            header('Location: ' . ba_href('/device?id='.$id.'&job='.(int)$queued['job_id'].'&msg='.rawurlencode((string)$queued['message'])));
         } catch (Throwable $e) {
+            ba_audit($db, 'card_settings_rejected', 'write_job', (string)$id, $e->getMessage());
+            if (ba_card_settings_wants_json()) {
+                ba_card_settings_json(['ok' => false, 'message' => $e->getMessage()], 400);
+            }
             header('Location: ' . ba_href('/device?id='.$id.'&err='.rawurlencode($e->getMessage())));
         }
         exit;
@@ -1205,10 +1232,14 @@ function page_device(PDO $db, array $user): void {
     $th->execute([$id]);
     $thr = $th->fetch() ?: [];
     ba_layout_start($r['hostname'] ?: $r['ip'], 'devices');
-    if (!empty($_GET['err'])) echo '<div class="flash">'.h((string)$_GET['err']).'</div>';
+    if (!empty($_GET['err'])) echo '<div class="flash err">'.h((string)$_GET['err']).'</div>';
     if (!empty($_GET['job'])) {
         $jobId = (int)$_GET['job'];
-        echo '<div class="flash ok"><a href="'.h(ba_href('/writes/job?id='.$jobId)).'">Card settings job '.$jobId.'</a> is queued.</div>';
+        echo '<div class="flash ok"><a href="'.h(ba_href('/writes/job?id='.$jobId)).'">Card settings job '.$jobId.'</a> is queued.';
+        if (!empty($_GET['msg'])) {
+            echo ' '.h((string)$_GET['msg']);
+        }
+        echo ' Writes shows Success or Fail when it finishes.</div>';
     }
     if (!empty($_GET['saved'])) {
         $savedText = 'Template saved. The next unit of this hardware can use it.';

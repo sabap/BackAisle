@@ -55,6 +55,40 @@ function ba_write_kind_label(string $kind): string
     return $kind;
 }
 
+function ba_job_status_label(string $status): string
+{
+    $key = strtolower(trim($status));
+    if ($key === 'ok') {
+        return 'Success';
+    }
+    if ($key === 'fail') {
+        return 'Fail';
+    }
+    if ($key === 'queued') {
+        return 'Queued';
+    }
+    if ($key === 'running') {
+        return 'Running';
+    }
+    if ($key === 'cancelled' || $key === 'canceled') {
+        return 'Cancelled';
+    }
+    return $status;
+}
+
+function ba_card_settings_wants_json(): bool
+{
+    return (string)($_SERVER['HTTP_X_BACKAISLE_FEEDBACK'] ?? '') === '1';
+}
+
+function ba_card_settings_json(array $payload, int $status = 200): void
+{
+    http_response_code($status);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode($payload, JSON_UNESCAPED_SLASHES);
+    exit;
+}
+
 function ba_card_attach_template_mfr(PDO $db, array $row): array
 {
     if (trim((string)($row['template_manufacturer'] ?? '')) !== '') {
@@ -178,7 +212,7 @@ function ba_queue_card_settings(PDO $db, array $user): array
 function ba_card_settings_modal(bool $bulk, int $deviceId = 0): void
 {
     ba_users_modal_open('modal-card-settings', 'Card settings', false, '', false);
-    echo '<form method="post" class="stack" id="card-settings-form"' . ($bulk ? ' data-bulk="1"' : '') . '>';
+    echo '<form method="post" class="stack" id="card-settings-form" novalidate' . ($bulk ? ' data-bulk="1"' : '') . '>';
     echo '<input type="hidden" name="act" value="card_settings">';
     if (!$bulk && $deviceId > 0) {
         echo '<input type="hidden" name="device_ids[]" value="' . $deviceId . '">';
@@ -203,7 +237,7 @@ function ba_card_settings_modal(bool $bulk, int $deviceId = 0): void
     echo '<label for="id-name">Name</label><input id="id-name" name="id_name" maxlength="63" autocomplete="off">';
     echo '<label for="id-location">Location</label><input id="id-location" name="id_location" maxlength="127" autocomplete="off">';
     echo '<label for="id-contact">Contact</label><input id="id-contact" name="id_contact" maxlength="63" autocomplete="off">';
-    echo '<p class="muted">Name and contact can be 63 characters. Location can be 127 on firmware 1.4.3 and newer.</p>';
+    echo '<p class="muted">Name and contact can be 63 characters. Location can be 127 on firmware 1.4.3 and newer. A box left blank is left as it is. The word null is not written. The card keeps that name, location, or contact.</p>';
     echo '</div>';
     echo '<div class="card-pane pane-utility">';
     echo '<label for="card-sens">Sensitivity</label><select id="card-sens" name="sensitivity">';
@@ -270,14 +304,47 @@ function ba_card_settings_modal(bool $bulk, int $deviceId = 0): void
     echo '<p class="muted">Leave Simulate checked for a dry run. Uncheck it and type APPLY CARD to change the cards.</p>';
     echo '<label for="card-confirm">Type APPLY CARD to change the cards</label>';
     echo '<input id="card-confirm" name="confirm" autocomplete="off">';
-    echo '<button>Queue this setting</button>';
+    echo '<div id="card-settings-result" class="flash info" hidden role="status"></div>';
+    echo '<button type="submit" id="card-settings-go">Queue this setting</button>';
     echo '</form>';
     echo <<<'JS'
 <script>
 (function () {
   var form = document.getElementById("card-settings-form");
   if (!form) return;
+  var result = document.getElementById("card-settings-result");
+  var button = document.getElementById("card-settings-go");
+  function showResult(kind, text) {
+    if (!result) return;
+    result.hidden = false;
+    result.className = "flash " + (kind === "err" ? "err" : (kind === "ok" ? "ok" : "info"));
+    result.textContent = text;
+    if (result.scrollIntoView) result.scrollIntoView({ block: "nearest" });
+  }
+  function watchJob(jobId, jobUrl) {
+    var tries = 0;
+    function tick() {
+      tries += 1;
+      fetch(jobUrl, {
+        headers: { "X-BackAisle-Feedback": "1", "Accept": "application/json" },
+        credentials: "same-origin"
+      }).then(function (r) { return r.json(); }).then(function (data) {
+        var label = (data && data.label) ? data.label : "Queued";
+        var done = label === "Success" || label === "Fail" || label === "Cancelled";
+        var text = "Job " + jobId + ": " + label + ".";
+        if (label === "Fail" && data && data.error) text += " " + data.error;
+        if (!done) text += " Waiting for the writer.";
+        showResult(label === "Fail" ? "err" : (label === "Success" ? "ok" : "info"), text);
+        if (!done && tries < 60) setTimeout(tick, 2000);
+      }).catch(function () {
+        if (tries < 60) setTimeout(tick, 2000);
+      });
+    }
+    setTimeout(tick, 1200);
+  }
   form.addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    var need = document.getElementById("card-settings-need");
     if (form.getAttribute("data-bulk") === "1") {
       form.querySelectorAll('input[data-card-target="1"]').forEach(function (node) { node.remove(); });
       var count = 0;
@@ -290,14 +357,47 @@ function ba_card_settings_modal(bool $bulk, int $deviceId = 0): void
         form.appendChild(hidden);
         count++;
       });
-      var need = document.getElementById("card-settings-need");
       if (!count) {
-        ev.preventDefault();
         if (need) need.hidden = false;
-      } else if (need) {
-        need.hidden = true;
+        showResult("err", "Select at least one CyberPower card in the list.");
+        return;
       }
+      if (need) need.hidden = true;
     }
+    if (button) {
+      button.disabled = true;
+      button.textContent = "Queuing…";
+    }
+    showResult("info", "Queuing this setting…");
+    fetch(window.location.pathname + window.location.search, {
+      method: "POST",
+      body: new FormData(form),
+      headers: { "X-BackAisle-Feedback": "1", "Accept": "application/json" },
+      credentials: "same-origin",
+      redirect: "manual"
+    }).then(function (r) {
+      if (r.type === "opaqueredirect" || r.status === 0) {
+        return { ok: false, message: "Queued, but this page could not read the result. Check Writes." };
+      }
+      return r.json().then(function (data) { return data; }, function () { return null; });
+    }).then(function (data) {
+      if (button) {
+        button.disabled = false;
+        button.textContent = "Queue this setting";
+      }
+      if (!data || !data.ok) {
+        showResult("err", (data && data.message) ? data.message : "Could not queue this setting.");
+        return;
+      }
+      showResult("info", data.message + " Job " + data.job_id + " is in Writes.");
+      if (data.job_url) watchJob(data.job_id, data.job_url);
+    }).catch(function () {
+      if (button) {
+        button.disabled = false;
+        button.textContent = "Queue this setting";
+      }
+      showResult("err", "Could not queue this setting. The page did not answer.");
+    });
   });
   function acctLimits() {
     var viewer = document.getElementById("acct-viewer");
@@ -359,7 +459,7 @@ function ba_card_fields(string $recipe): array
     if ($recipe === 'identity') {
         foreach (['id_name' => ['name', 63, 'Name'], 'id_location' => ['location', 127, 'Location'], 'id_contact' => ['contact', 63, 'Contact']] as $post => $spec) {
             $raw = trim((string)($_POST[$post] ?? ''));
-            if ($raw !== '') {
+            if ($raw !== '' && strcasecmp($raw, 'null') !== 0) {
                 $out[$spec[0]] = ba_card_text($raw, $spec[1], $spec[2]);
             }
         }

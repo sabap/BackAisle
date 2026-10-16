@@ -289,7 +289,7 @@ function page_fleet_writes(PDO $db, array $user): void {
         <tr>
           <td><a href="<?= h(ba_href('/writes/job?id='.(int)$j['id'])) ?>"><?= (int)$j['id'] ?></a></td>
           <td><?= h(function_exists('ba_write_kind_label') ? ba_write_kind_label((string)$j['kind']) : (string)$j['kind']) ?></td>
-          <td><?= h($j['status']) ?></td>
+          <td><?= h(function_exists('ba_job_status_label') ? ba_job_status_label((string)$j['status']) : (string)$j['status']) ?></td>
           <td><?= $j['simulate'] ? 'yes' : 'no' ?></td>
           <td><?= h($j['created_by']) ?></td>
           <td><?= h($j['started_at']) ?></td>
@@ -331,7 +331,34 @@ function page_job_view(PDO $db): void {
     if (!$allowed) {
         ba_require_perm('edit_writes');
     }
-    if (!$job) { http_response_code(404); echo 'not found'; return; }
+    if (!$job) {
+        if (function_exists('ba_card_settings_wants_json') && ba_card_settings_wants_json()) {
+            ba_card_settings_json(['ok' => false, 'message' => 'Job not found'], 404);
+        }
+        http_response_code(404);
+        echo 'not found';
+        return;
+    }
+    if (function_exists('ba_card_settings_wants_json') && ba_card_settings_wants_json()) {
+        $jobStatus = (string)$job['status'];
+        $jobError = trim((string)($job['error'] ?? ''));
+        if ($jobError === '') {
+            $errSt = $db->prepare('SELECT error FROM write_job_targets WHERE job_id=? AND error IS NOT NULL ORDER BY id');
+            $errSt->execute([$id]);
+            foreach ($errSt as $errRow) {
+                $jobError = trim((string)($errRow['error'] ?? ''));
+                if ($jobError !== '') {
+                    break;
+                }
+            }
+        }
+        ba_card_settings_json([
+            'ok' => true,
+            'status' => $jobStatus,
+            'label' => function_exists('ba_job_status_label') ? ba_job_status_label($jobStatus) : $jobStatus,
+            'error' => $jobError,
+        ]);
+    }
     $cancelMsg = '';
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && (string)($_POST['act'] ?? '') === 'cancel') {
         if (trim((string)($_POST['confirm'] ?? '')) !== 'STOP JOB') {
@@ -367,7 +394,12 @@ function page_job_view(PDO $db): void {
         echo '<a href="'.h(ba_href('/devices')).'">Inventory</a>';
     }
     echo '</p>';
-    echo '<h1>Job '.$id.' · '.h($kindLabel).' · '.h($job['status']).($job['simulate']?' · simulate':'').'</h1>';
+    $statusLabel = function_exists('ba_job_status_label') ? ba_job_status_label((string)$job['status']) : (string)$job['status'];
+    echo '<h1>Job '.$id.' · '.h($kindLabel).' · '.h($statusLabel).($job['simulate']?' · simulate':'').'</h1>';
+    if (!$live && $isCard && in_array((string)$job['status'], ['ok', 'fail'], true)) {
+        $doneClass = (string)$job['status'] === 'ok' ? 'ok' : 'err';
+        echo '<div class="flash '.$doneClass.'">'.h($statusLabel).'</div>';
+    }
     if (!empty($_GET['note'])) {
         echo '<div class="flash">'.h((string)$_GET['note']).'</div>';
     }
@@ -404,7 +436,8 @@ function page_job_view(PDO $db): void {
     }
     if ($job['error']) echo '<div class="flash">'.h($job['error']).'</div>';
     foreach ($targets as $t) {
-        echo '<section class="ucard"><div class="ucard-head"><h3>'.h($t['hostname'].' '.$t['ip']).' · '.h($t['status']).' · '.h($t['step']).'</h3></div><div class="ucard-body">';
+        $targetLabel = function_exists('ba_job_status_label') ? ba_job_status_label((string)$t['status']) : (string)$t['status'];
+        echo '<section class="ucard"><div class="ucard-head"><h3>'.h($t['hostname'].' '.$t['ip']).' · '.h($targetLabel).' · '.h($t['step']).'</h3></div><div class="ucard-body">';
         echo '<p class="muted">start '.h($t['started_at']).' end '.h($t['ended_at']).'</p>';
         if ($t['error']) echo '<p class="pill batt">'.h($t['error']).'</p>';
         if (!$isCard) {
@@ -414,7 +447,8 @@ function page_job_view(PDO $db): void {
         $st->execute([$t['id']]);
         echo '<table><thead><tr><th>#</th><th>Step</th><th>Status</th><th>Time</th><th>Detail</th></tr></thead><tbody>';
         foreach ($st as $s) {
-            echo '<tr><td>'.(int)$s['seq'].'</td><td>'.h($s['name']).'</td><td>'.h($s['status']).'</td><td>'.h($s['ts']).'</td><td>'.h($s['detail']).'</td></tr>';
+            $stepLabel = function_exists('ba_job_status_label') ? ba_job_status_label((string)$s['status']) : (string)$s['status'];
+            echo '<tr><td>'.(int)$s['seq'].'</td><td>'.h($s['name']).'</td><td>'.h($stepLabel).'</td><td>'.h($s['ts']).'</td><td>'.h($s['detail']).'</td></tr>';
         }
         echo '</tbody></table></div></section>';
     }

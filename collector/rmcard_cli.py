@@ -7,7 +7,7 @@ import time
 
 import paramiko
 
-from card_commands import _LINE
+from card_commands import IDENTITY_SHOW_LIMIT, _LINE
 
 _PROMPT = re.compile(r"(?m)^CyberPower >\s*$")
 _USER = re.compile(r"user\s*name\s*:", re.I)
@@ -180,7 +180,7 @@ class RmcardCli:
         for secret in self._secrets:
             if secret:
                 text = text.replace(secret, "********")
-        return text[:400]
+        return text[:IDENTITY_SHOW_LIMIT]
 
     @staticmethod
     def _prompt_count(buf: str) -> int:
