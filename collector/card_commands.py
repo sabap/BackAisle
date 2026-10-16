@@ -6,6 +6,8 @@ import re
 RECIPES = ("identity", "utility", "restore", "sensor", "account")
 
 _TEXT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 .,_/#()+\-]*$")
+# A sys show reply is kept this long so Name, Location, and Contact are not cut off.
+IDENTITY_SHOW_LIMIT = 1200
 _DELAYS = (0, 60, 120, 180, 300, 600, 1200, 1800, 3600)
 _CAPS = (0, 15, 30, 45, 60, 75, 90)
 _SENS = ("low", "medium", "high")
@@ -104,8 +106,11 @@ def build_card_commands(recipe: str, fields: dict) -> list[str]:
     for key, value in fields.items():
         if value is None:
             continue
-        if isinstance(value, str) and value.strip() == "":
-            continue
+        if isinstance(value, str):
+            stripped = value.strip()
+            # An empty box, or the word null, is not a value to send.
+            if stripped == "" or (recipe == "identity" and stripped.lower() == "null"):
+                continue
         clean[key] = value
     if recipe == "sensor":
         clean.pop("index", None)
@@ -206,3 +211,142 @@ def build_card_commands(recipe: str, fields: dict) -> list[str]:
         if not _LINE.match(line):
             raise ValueError("refusing command")
     return lines
+
+
+_SHOW_LABELS = (
+    "Firmware Update Date",
+    "Hardware Version",
+    "Firmware Version",
+    "Serial Number",
+    "MAC Address",
+    "Name",
+    "Location",
+    "Contact",
+    "Model",
+)
+_IDENTITY_LIMIT = {"name": 63, "location": 127, "contact": 63}
+
+
+def _blankish(value) -> bool:
+    text = str(value or "").strip().lower()
+    return text == "" or text == "null"
+
+
+def _entered(fields, key: str) -> bool:
+    if not isinstance(fields, dict):
+        return False
+    value = fields.get(key)
+    if value is None:
+        return False
+    return not _blankish(value)
+
+
+def parse_identity_show(text: str) -> dict:
+    """Read Name, Location, and Contact from `sys show`.
+
+    A missing label is None. A label with nothing after it is an empty string.
+    The word null is kept as text so the caller can refuse to write it back.
+    """
+    raw = str(text or "").replace("\r", " ").replace("\n", " ")
+    raw = re.sub(r"CyberPower\s*>", " ", raw)
+    flat = " ".join(raw.split())
+    hits = []
+    for label in _SHOW_LABELS:
+        pattern = r"(?<![A-Za-z])" + re.escape(label) + r"\s*:"
+        for match in re.finditer(pattern, flat):
+            hits.append((match.start(), match.end(), label.lower()))
+    hits.sort()
+    out = {"name": None, "location": None, "contact": None}
+    for index, (_start, end, label) in enumerate(hits):
+        stop = hits[index + 1][0] if index + 1 < len(hits) else len(flat)
+        if label in out:
+            out[label] = flat[end:stop].strip()
+    return out
+
+
+def identity_readable(parsed: dict) -> None:
+    """Fail closed when sys show did not include every identity label."""
+    missing = [key for key in ("name", "location", "contact") if not isinstance(parsed, dict) or parsed.get(key) is None]
+    if missing:
+        raise ValueError("could not read " + ", ".join(missing))
+
+
+def identity_fields_sent(commands) -> set:
+    sent = set()
+    for line in commands or []:
+        if str(line).startswith("sys name "):
+            sent.add("name")
+        elif str(line).startswith("sys location "):
+            sent.add("location")
+        elif str(line).startswith("sys contact "):
+            sent.add("contact")
+    return sent
+
+
+def identity_kept_note(fields: dict) -> str:
+    """Say which identity boxes were left blank."""
+    missing = [key for key in ("name", "location", "contact") if not _entered(fields, key)]
+    if len(missing) == 1:
+        return missing[0] + " left unchanged"
+    if len(missing) == 2:
+        return missing[0] + " and " + missing[1] + " left unchanged"
+    if len(missing) == 3:
+        return "name, location, and contact left unchanged"
+    return ""
+
+
+def identity_keep_detail(before: dict, fields: dict) -> str:
+    parts = []
+    for key in ("name", "location", "contact"):
+        if _entered(fields, key):
+            continue
+        value = (before or {}).get(key) if isinstance(before, dict) else None
+        if value is None:
+            parts.append(key + " was not readable")
+            continue
+        shown = str(value).strip()
+        parts.append(key + " stays " + ("(empty)" if _blankish(shown) else shown))
+    return "; ".join(parts)[:1800]
+
+
+def _identity_pair(before: dict, after: dict, key: str) -> tuple:
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        raise ValueError("could not read " + key)
+    if before.get(key) is None or after.get(key) is None:
+        raise ValueError("could not read " + key)
+    return str(before.get(key) or "").strip(), str(after.get(key) or "").strip()
+
+
+def identity_restore_commands(before: dict, after: dict, sent: set) -> list:
+    """Put back a field the user did not type, when the card changed it.
+
+    A blank or the word null is never sent. If that field was already empty
+    and the card wrote something else, the job fails instead of clearing it.
+    """
+    lines = []
+    for key in ("name", "location", "contact"):
+        if key in (sent or ()):
+            continue
+        old, new = _identity_pair(before, after, key)
+        if old == new or (_blankish(old) and _blankish(new)):
+            continue
+        if _blankish(old):
+            raise ValueError(key + " was empty and the card wrote a value; a blank is not sent back")
+        written = _text(old, _IDENTITY_LIMIT[key], key.title())
+        if _blankish(written):
+            raise ValueError(key + " is not written back as a blank")
+        line = "sys " + key + " " + written
+        if not _LINE.match(line):
+            raise ValueError("refusing command")
+        lines.append(line)
+    return lines
+
+
+def identity_still_kept(before: dict, final: dict, sent: set) -> None:
+    for key in ("name", "location", "contact"):
+        if key in (sent or ()):
+            continue
+        old, now = _identity_pair(before, final, key)
+        if old == now or (_blankish(old) and _blankish(now)):
+            continue
+        raise ValueError(key + " changed and was not kept")

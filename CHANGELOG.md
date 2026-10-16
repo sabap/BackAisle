@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.5.78] - 2026-10-16
+
+- Card settings keeps the dialog open and shows Queued, then Success or Fail. A blank form, no selected card, or a missing APPLY CARD phrase is an error in the dialog and does not create a job. Writes uses those same words.
+- An Identity change sends only the name, location, or contact you fill in. A blank box is left as it is. The word null is not written. If the card clears one of the other fields, the previous value is put back.
+- Restart the writer if it is already running, so it loads this check. The collector does not need a restart.
+
 ## [0.5.77] - 2026-10-16
 
 - Organization has a Web/SSH/FTP login list, separate from SNMPv3 credentials. Assign one to a device and BackAisle uses it for SSH, the web card, and FTP. The password is stored outside the site. A device with no login still uses UPS_WEB_USER, then the factory login.

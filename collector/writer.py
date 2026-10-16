@@ -42,7 +42,18 @@ from rmcard_http import RmcardSession, _looks_like_rmcard_config, wait_http_aliv
 from rmcard_scp import scp_put_config  # noqa: E402
 from secrets import load_secrets  # noqa: E402
 from snmp_client import SET_OIDS, snmp_get, snmp_get_one, snmp_set  # noqa: E402
-from card_commands import build_card_commands, redact_card_text  # noqa: E402
+from card_commands import (  # noqa: E402
+    IDENTITY_SHOW_LIMIT,
+    build_card_commands,
+    identity_fields_sent,
+    identity_keep_detail,
+    identity_kept_note,
+    identity_readable,
+    identity_restore_commands,
+    identity_still_kept,
+    parse_identity_show,
+    redact_card_text,
+)
 from rmcard_defaults import RMCARD_FACTORY_PASS, RMCARD_FACTORY_USER  # noqa: E402
 
 
@@ -278,6 +289,22 @@ def assert_lab_only(ip: str, secrets: dict) -> None:
         return
     if not allow_multi(secrets):
         raise RuntimeError(f"AllowMultiWrite is false; refusing target {ip} (lab only {allowed or 'UPS_HOST'})")
+
+
+def _audit_card_outcome(con, job_id: int, outcome: str, detail: str = "") -> None:
+    """Record Success or Fail for a card-settings job. Never store a password."""
+    text = outcome
+    extra = (detail or "").strip()
+    lowered = extra.lower()
+    if extra and "passwd" not in lowered and "password" not in lowered:
+        text = extra if lowered.startswith(outcome.lower()) else (outcome + ": " + extra)
+    try:
+        con.execute(
+            "INSERT INTO audit_log (username, action, entity, entity_id, details) VALUES (?,?,?,?,?)",
+            (None, "card_settings_result", "write_job", str(job_id), text[:500]),
+        )
+    except Exception:
+        pass
 
 
 def step(con, target_id: int, seq: int, name: str, status: str, detail: str = "") -> None:
@@ -1051,6 +1078,52 @@ def _wipe_account_password(con, job: dict) -> None:
     con.commit()
 
 
+def _read_identity(cli) -> dict:
+    """Read name, location, and contact. Do not guess when the reply is incomplete."""
+    text = cli.run("sys show")
+    if len(text) >= IDENTITY_SHOW_LIMIT:
+        raise RuntimeError("could not read the whole identity")
+    parsed = parse_identity_show(text)
+    try:
+        identity_readable(parsed)
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from None
+    return parsed
+
+
+def _apply_identity(cli, con, tid, commands, fields, hidden) -> None:
+    """Send only the identity fields the user typed.
+
+    The other fields are read first. If the card clears one of them, or writes
+    the word null, the previous value is put back. A blank is never sent.
+    """
+    before = _read_identity(cli)
+    step(con, tid, 2, "read", "ok", identity_keep_detail(before, fields)[:1800])
+    seq = 3
+    for command in commands:
+        if command == "sys show":
+            continue
+        text = cli.run(command)
+        step(con, tid, seq, "cli", "ok", _card_detail(command, text, hidden))
+        seq += 1
+    after = _read_identity(cli)
+    sent = identity_fields_sent(commands)
+    try:
+        restores = identity_restore_commands(before, after, sent)
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from None
+    for command in restores:
+        text = cli.run(command)
+        step(con, tid, seq, "keep", "ok", _card_detail(command, text, hidden))
+        seq += 1
+    final = _read_identity(cli) if restores else after
+    try:
+        identity_still_kept(before, final, sent)
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from None
+    step(con, tid, seq, "check", "ok", identity_kept_note(fields) or "identity checked")
+
+
 def run_card_settings(con, job: dict, secrets: dict) -> None:
     """SSH ready-made commands. Does not restore a config file and does not reboot the card."""
     try:
@@ -1072,8 +1145,13 @@ def run_card_settings(con, job: dict, secrets: dict) -> None:
             user, password = target_card_login(con, t, secrets)
             hidden = _card_secrets(payload, password)
             preview = redact_card_text(" | ".join(commands), hidden)
+            if str(payload.get("recipe") or "") == "identity":
+                kept = identity_kept_note(payload.get("fields") or {})
+                if kept:
+                    preview = preview + " · " + kept
             if simulate:
                 step(con, tid, 1, "cli", "ok", "SIMULATE " + preview[:1800])
+                step(con, tid, 90, "result", "ok", "Success")
                 con.execute(
                     "UPDATE write_job_targets SET status='ok', ended_at=? WHERE id=?",
                     (now(), tid),
@@ -1085,11 +1163,18 @@ def run_card_settings(con, job: dict, secrets: dict) -> None:
             try:
                 with RmcardCli(str(t["ip"]), user, password) as cli:
                     step(con, tid, 1, "ssh", "ok", user + "@" + str(t.get("ip") or ""))
-                    for seq, command in enumerate(commands, start=2):
-                        text = cli.run(command)
-                        step(con, tid, seq, "cli", "ok", _card_detail(command, text, hidden))
+                    if str(payload.get("recipe") or "") == "identity":
+                        _apply_identity(cli, con, tid, commands, payload.get("fields") or {}, hidden)
+                    else:
+                        for seq, command in enumerate(commands, start=2):
+                            text = cli.run(command)
+                            step(con, tid, seq, "cli", "ok", _card_detail(command, text, hidden))
+                step(con, tid, 90, "result", "ok", "Success")
             except Exception as exc:
                 text = redact_card_text(str(exc), hidden)
+                if not text.lower().startswith("fail"):
+                    text = "Fail: " + text
+                step(con, tid, 90, "result", "fail", text[:1800])
                 raise RuntimeError(text) from None
             con.execute(
                 "UPDATE write_job_targets SET status='ok', ended_at=? WHERE id=?",
@@ -1152,14 +1237,23 @@ def process_job(job_id: int) -> None:
                     st = ""
             if st.strip().lower() == "fail":
                 fails += 1
+        outcome = "Fail" if fails else "Success"
         con.execute(
             "UPDATE write_jobs SET status=?, ended_at=? WHERE id=?",
             ("fail" if fails else "ok", now(), job_id),
         )
+        if kind == "card_settings":
+            _audit_card_outcome(con, job_id, outcome)
+            log(f"job {job_id} card_settings {outcome}")
+        else:
+            log(f"job {job_id} {kind} done fails={fails}")
         con.commit()
-        log(f"job {job_id} {kind} done fails={fails}")
     except Exception as e:
-        log(f"job {job_id} failed: {e}")
+        if str(job.get("kind") or "") == "card_settings":
+            log(f"job {job_id} card_settings Fail")
+            _audit_card_outcome(con, job_id, "Fail", str(e))
+        else:
+            log(f"job {job_id} failed: {e}")
         con.execute("UPDATE write_jobs SET status='fail', ended_at=?, error=? WHERE id=?", (now(), str(e)[:500], job_id))
         con.commit()
     finally:
