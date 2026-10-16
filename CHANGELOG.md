@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.5.77] - 2026-10-16
+
+- Organization has a Web/SSH/FTP login list, separate from SNMPv3 credentials. Assign one to a device and BackAisle uses it for SSH, the web card, and FTP. The password is stored outside the site. A device with no login still uses UPS_WEB_USER, then the factory login.
+- Saving or assigning a login does not change the account on the card and does not change SNMPv3 users. Restart the writer if it is already running, so it loads this lookup. The collector does not need a restart.
+
 ## [0.5.76] - 2026-10-16
 
 - Card settings can change the two local logins on a CyberPower card. Administrator is the SSH, web, and FTP login. Viewer is read-only on the web and can be turned on or off. This does not add a third login, and it does not change SNMPv3 users.

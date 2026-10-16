@@ -184,6 +184,73 @@ function page_org(PDO $db, array $user): void {
                 $n = ba_assign_snmp_profile($db, $sid, $scope, [], $gid);
                 ba_audit($db, 'bulk_snmp', 'snmp_profile', (string)$sid, 'devices='.$n);
                 $msg = 'Assigned SNMPv3 credentials to '.(int)$n.' UPS';
+            } elseif ($act === 'add_login') {
+                $name = ba_webcred_text((string)($_POST['name'] ?? ''), 'Name', 128);
+                $username = ba_webcred_text((string)($_POST['username'] ?? ''), 'Username', 128);
+                $password = ba_webcred_password((string)($_POST['password'] ?? ''), true);
+                $notes = trim((string)($_POST['notes'] ?? ''));
+                if (strlen($notes) > 500) {
+                    throw new RuntimeException('Notes are too long');
+                }
+                $dup = $db->prepare('SELECT id FROM web_credentials WHERE name=?');
+                $dup->execute([$name]);
+                if ($dup->fetch()) {
+                    throw new RuntimeException('That name is already used');
+                }
+                $db->prepare('INSERT INTO web_credentials (name, username, notes) VALUES (?,?,?)')
+                    ->execute([$name, $username, $notes]);
+                $id = ba_last_id($db);
+                ba_webcred_store($id, $password);
+                ba_audit($db, 'add_web_credential', 'web_credential', (string)$id, $name);
+                $msg = 'Web/SSH/FTP login saved';
+            } elseif ($act === 'save_login') {
+                $id = (int)($_POST['id'] ?? 0);
+                if ($id < 1) {
+                    throw new RuntimeException('Missing Web/SSH/FTP login');
+                }
+                $name = ba_webcred_text((string)($_POST['name'] ?? ''), 'Name', 128);
+                $username = ba_webcred_text((string)($_POST['username'] ?? ''), 'Username', 128);
+                $password = ba_webcred_password((string)($_POST['password'] ?? ''), false);
+                $notes = trim((string)($_POST['notes'] ?? ''));
+                if (strlen($notes) > 500) {
+                    throw new RuntimeException('Notes are too long');
+                }
+                $dup = $db->prepare('SELECT id FROM web_credentials WHERE name=? AND id<>?');
+                $dup->execute([$name, $id]);
+                if ($dup->fetch()) {
+                    throw new RuntimeException('That name is already used');
+                }
+                $cur = $db->prepare('SELECT id FROM web_credentials WHERE id=?');
+                $cur->execute([$id]);
+                if (!$cur->fetch()) {
+                    throw new RuntimeException('Missing Web/SSH/FTP login');
+                }
+                if ($password === '' && !ba_webcred_has_secret($id)) {
+                    throw new RuntimeException('Password is required');
+                }
+                $db->prepare('UPDATE web_credentials SET name=?, username=?, notes=? WHERE id=?')
+                    ->execute([$name, $username, $notes, $id]);
+                if ($password !== '') {
+                    ba_webcred_store($id, $password);
+                }
+                ba_audit($db, 'edit_web_credential', 'web_credential', (string)$id, $name);
+                $msg = 'Web/SSH/FTP login updated';
+            } elseif ($act === 'del_login') {
+                $id = (int)($_POST['id'] ?? 0);
+                if ($id < 1) {
+                    throw new RuntimeException('Missing Web/SSH/FTP login');
+                }
+                $db->exec('UPDATE devices SET web_credential_id=NULL WHERE web_credential_id=' . $id);
+                $db->prepare('DELETE FROM web_credentials WHERE id=?')->execute([$id]);
+                ba_webcred_forget($id);
+                ba_audit($db, 'del_web_credential', 'web_credential', (string)$id);
+                $msg = 'Web/SSH/FTP login removed';
+            } elseif ($act === 'bulk_login') {
+                $cid = (int)($_POST['web_credential_id'] ?? 0);
+                $gid = ($_POST['group_id'] ?? '') === '' ? null : (int)$_POST['group_id'];
+                $n = ba_assign_web_credential($db, $cid, $gid);
+                ba_audit($db, 'bulk_web_credential', 'web_credential', (string)$cid, 'devices='.$n);
+                $msg = 'Assigned Web/SSH/FTP login to '.(int)$n.' devices';
             } elseif ($act === 'import_pp') {
                 if (empty($_FILES['zip']['tmp_name'])) throw new RuntimeException('Choose a profile.zip');
                 $dest = sys_get_temp_dir().DIRECTORY_SEPARATOR.'pp_'.bin2hex(random_bytes(4)).'.zip';
@@ -209,6 +276,10 @@ function page_org(PDO $db, array $user): void {
                 $did = ba_last_id($db);
                 if ($did > 0) {
                     ba_pp_exec($db, 'UPDATE devices SET department_id=? WHERE id=?', [ba_device_department_choice($user), $did]);
+                    $wid = ba_webcred_posted($db, $_POST['web_credential_id'] ?? '');
+                    if ($wid !== null) {
+                        ba_pp_exec($db, 'UPDATE devices SET web_credential_id=? WHERE id=?', [$wid, $did]);
+                    }
                 }
                 $factory = ba_rmcard_factory_login();
                 $db->prepare("INSERT INTO write_jobs (kind,status,simulate,stop_on_error,created_by,payload_json) VALUES ('provision','queued',0,1,?,?)")
@@ -312,7 +383,7 @@ PY);
     ba_layout_start('Organization', 'org');
     if ($msg) echo '<div class="flash">'.h($msg).'</div>';
     echo '<h1>Organization</h1>';
-    $tabs = ['groups'=>'Groups','snmp'=>'SNMPv3 credentials','configs'=>'Config profiles','import'=>'PowerPanel import','certs'=>'SSL/TLS certs','mail'=>'Mail'];
+    $tabs = ['groups'=>'Groups','snmp'=>'SNMPv3 credentials','login'=>'Web/SSH/FTP','configs'=>'Config profiles','import'=>'PowerPanel import','certs'=>'SSL/TLS certs','mail'=>'Mail'];
     echo '<nav class="page-tabs">';
     foreach ($tabs as $k=>$lab) {
         echo '<a class="'.($tab===$k?'on':'').'" href="'.h(ba_href('/org?tab='.$k)).'">'.h($lab).'</a>';
@@ -509,6 +580,72 @@ JS;
         ba_users_modal_close();
     }
 
+    if ($tab === 'login') {
+        $editId = (int)($_GET['edit'] ?? 0);
+        if (($_POST['act'] ?? '') === 'save_login') {
+            $editId = (int)($_POST['id'] ?? 0);
+        }
+        $edit = null;
+        if ($editId > 0) {
+            $st = $db->prepare('SELECT * FROM web_credentials WHERE id=?');
+            $st->execute([$editId]);
+            $edit = $st->fetch() ?: null;
+        }
+        $loginActions = '<button type="button" class="btn" data-open-modal="modal-web-login">' . ($edit ? 'Edit login' : 'New login') . '</button>';
+        $loginActions .= '<button type="button" class="btn" data-open-modal="modal-web-bulk">Bulk assign</button>';
+        ba_card_open('Web/SSH/FTP logins', $loginActions);
+        echo '<p class="muted">These are the usernames and passwords BackAisle uses to sign in. They are not SNMPv3 users, and saving one does not change the account on the card. Assign a login to a device, or leave the device on the site default.</p>';
+        echo '<table><thead><tr><th>Name</th><th>Username</th><th>Password</th><th>Notes</th><th></th></tr></thead><tbody>';
+        $anyLogin = false;
+        foreach ($db->query('SELECT * FROM web_credentials ORDER BY name') as $p) {
+            $anyLogin = true;
+            $pid = (int)$p['id'];
+            $set = ba_webcred_has_secret($pid) ? 'stored' : 'missing';
+            echo '<tr><td>'.h($p['name']).'</td><td>'.h($p['username']).'</td><td>'.h($set).'</td><td>'.h($p['notes']).'</td>';
+            echo '<td><a href="/org.php?tab=login&edit='.$pid.'">edit</a> ';
+            $confirm = json_encode('Remove '.$p['name'].'? Devices that used it return to the site login.', JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG);
+            echo '<form method="post" action="/org.php?tab=login" style="display:inline" onsubmit="return confirm('.h($confirm).')">';
+            echo '<input type="hidden" name="act" value="del_login"><input type="hidden" name="tab" value="login"><input type="hidden" name="id" value="'.$pid.'">';
+            echo '<button class="btn-quiet">Remove</button></form></td></tr>';
+        }
+        if (!$anyLogin) {
+            echo '<tr><td colspan="5" class="muted">No Web/SSH/FTP logins yet.</td></tr>';
+        }
+        echo '</tbody></table>';
+        ba_card_close();
+        ba_users_modal_open('modal-web-login', $edit ? 'Edit Web/SSH/FTP login' : 'New Web/SSH/FTP login', (bool)$edit, $edit ? ba_href('/org?tab=login') : '');
+        echo '<form method="post" action="/org.php?tab=login" class="stack">';
+        if ($edit) {
+            echo '<input type="hidden" name="act" value="save_login"><input type="hidden" name="id" value="'.(int)$edit['id'].'">';
+        } else {
+            echo '<input type="hidden" name="act" value="add_login">';
+        }
+        echo '<input type="hidden" name="tab" value="login">';
+        echo '<label>Name</label><input name="name" required value="'.h($edit['name'] ?? '').'">';
+        echo '<label>Username</label><input name="username" required maxlength="128" value="'.h($edit['username'] ?? '').'" autocomplete="off">';
+        $passLabel = $edit ? 'Password (blank = keep)' : 'Password';
+        echo '<label>'.h($passLabel).'</label><input type="password" name="password" maxlength="128" autocomplete="new-password">';
+        if ($edit) {
+            $has = ba_webcred_has_secret((int)$edit['id']) ? 'A password is already stored.' : 'No password is stored yet.';
+            echo '<p class="muted">'.h($has).'</p>';
+        }
+        echo '<label>Notes</label><input name="notes" maxlength="500" value="'.h($edit['notes'] ?? '').'">';
+        echo '<button>'.($edit ? 'Save changes' : 'Save login').'</button>';
+        echo '<p class="muted">The password goes to C:\\ProgramData\\BackAisle\\web_credentials.json and is never shown again. CyberPower administrator passwords are 4 to 63 characters. This does not change SNMPv3 users.</p></form>';
+        ba_users_modal_close();
+        ba_users_modal_open('modal-web-bulk', 'Bulk assign Web/SSH/FTP login', false);
+        echo '<form method="post" action="/org.php?tab=login" class="stack">';
+        echo '<input type="hidden" name="act" value="bulk_login"><input type="hidden" name="tab" value="login">';
+        echo '<p class="muted">Sets which login BackAisle uses on those devices. The account on the card stays as it is. Card slots and SNMPv3 users stay as they are.</p>';
+        echo '<label>Login</label><select name="web_credential_id" required><option value="">choose</option>';
+        foreach ($db->query('SELECT id, name, username FROM web_credentials ORDER BY name') as $p) {
+            echo '<option value="'.(int)$p['id'].'">'.h($p['name'].' ('.$p['username'].')').'</option>';
+        }
+        echo '</select><label>Location</label><select name="group_id"><option value="">All devices</option>'.ba_group_options($groups).'</select>';
+        echo '<button>Assign</button></form>';
+        ba_users_modal_close();
+    }
+
     if ($tab === 'configs') {
         ba_card_open('Config profiles', '<button type="button" class="btn" data-open-modal="modal-add-default">Add default UPS</button>');
         echo '<p class="muted">Pulled RMCARD YYYY_MM_DD_HHMM.txt files. Clone more from Fleet writes.</p><table><thead><tr><th>Name</th><th>Source</th><th>When</th><th></th></tr></thead><tbody>';
@@ -520,7 +657,7 @@ JS;
         echo '</tbody></table>';
         ba_card_close();
         ba_users_modal_open('modal-add-default', 'Add default UPS', false, '', true);
-        echo '<p class="muted">Connects with factory <code>cyber</code>/<code>cyber</code>, applies a config profile, then polls with the selected SNMPv3 credentials.</p>';
+        echo '<p class="muted">Connects with factory <code>cyber</code>/<code>cyber</code>, applies a config profile, then polls with the selected SNMPv3 credentials. A Web/SSH/FTP login saved here is for later jobs. The first connection still uses the factory login.</p>';
         echo '<form method="post" class="stack">';
         echo '<input name="ip" placeholder="IP" required>';
         echo '<input name="hostname" placeholder="hostname">';
@@ -529,7 +666,8 @@ JS;
         foreach ($db->query('SELECT id,name,is_default FROM config_templates') as $t) {
             echo '<option value="'.(int)$t['id'].'" '.($t['is_default']?'selected':'').'>'.h($t['name']).'</option>';
         }
-        echo '</select><select name="snmp_profile_id"><option value="">SNMPv3 after apply</option>';
+        echo '</select><label>Web/SSH/FTP login</label><select name="web_credential_id"><option value="">(site default)</option>'.ba_webcred_options($db, null).'</select>';
+        echo '<label>SNMPv3 credentials</label><select name="snmp_profile_id"><option value="">SNMPv3 after apply</option>';
         foreach ($db->query('SELECT id,name FROM snmp_profiles') as $p) {
             echo '<option value="'.(int)$p['id'].'">'.h($p['name']).'</option>';
         }

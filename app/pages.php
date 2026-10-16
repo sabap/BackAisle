@@ -863,6 +863,13 @@ function page_devices(PDO $db, array $user): void {
                             $db->prepare('UPDATE devices SET snmp_profile_id=? WHERE id=?')->execute([(int)$cred, $newId]);
                         }
                     }
+                    $loginRaw = trim((string)($_POST['web_credential_id'] ?? ''));
+                    if ($loginRaw !== '') {
+                        $wid = ba_webcred_posted($db, $loginRaw);
+                        if ($wid !== null) {
+                            ba_pp_exec($db, 'UPDATE devices SET web_credential_id=? WHERE id=?', [$wid, $newId]);
+                        }
+                    }
                 }
                 ba_audit($db, 'add_device', 'device', $ip);
                 if ($newId > 0) {
@@ -1027,6 +1034,8 @@ JS;
             }
             echo '</select>';
         }
+        echo '<label>Web/SSH/FTP login</label><select name="web_credential_id"><option value="">(site default)</option>'.ba_webcred_options($db, null).'</select>';
+        echo '<p class="muted">The username and password BackAisle uses for SSH, the web card, and FTP. SNMPv3 credentials stay separate. Site default uses UPS_WEB_USER when that is set.</p>';
         echo '<label>IP</label><input name="ip" placeholder="IP" required>';
         echo '<label>Hostname</label><input name="hostname" placeholder="hostname">';
         echo '<label>Site</label><input name="site" value="Hospital" placeholder="site">';
@@ -1136,6 +1145,7 @@ function page_device(PDO $db, array $user): void {
                 $curSid = ba_col($r, 'snmp_profile_id');
                 $sid = ($curSid === null || $curSid === '') ? null : (int)$curSid;
             }
+            $wid = ba_webcred_posted($db, $_POST['web_credential_id'] ?? '');
             $kind = $_POST['kind'] ?? ($r['kind'] ?? 'ups');
             if (!in_array($kind, ['ups', 'switch', 'patch_panel', 'other'], true)) $kind = 'ups';
             $rid = ($_POST['rack_id'] ?? '') === '' ? null : (int)$_POST['rack_id'];
@@ -1144,13 +1154,13 @@ function page_device(PDO $db, array $user): void {
             $face = $_POST['face'] ?? 'both';
             if (!in_array($face, ['front', 'rear', 'both'], true)) $face = 'both';
             $tid = ($_POST['template_id'] ?? '') === '' ? null : (int)$_POST['template_id'];
-            $db->prepare("UPDATE devices SET ip=?, hostname=?, site=?, building=?, idf_closet=?, rack=?, circuit=?, load_notes=?, install_date=?, last_battery_replacement=?, warranty_replace_by=?, sensor_expected=?, enabled=?, group_id=?, snmp_profile_id=?, kind=?, rack_id=?, position_u=?, u_height=?, face=?, template_id=? WHERE id=?")
+            $db->prepare("UPDATE devices SET ip=?, hostname=?, site=?, building=?, idf_closet=?, rack=?, circuit=?, load_notes=?, install_date=?, last_battery_replacement=?, warranty_replace_by=?, sensor_expected=?, enabled=?, group_id=?, snmp_profile_id=?, web_credential_id=?, kind=?, rack_id=?, position_u=?, u_height=?, face=?, template_id=? WHERE id=?")
                 ->execute([
                     $newIp, trim($_POST['hostname']??''), trim($_POST['site']??''), trim($_POST['building']??''),
                     trim($_POST['idf_closet']??''), trim($_POST['rack']??''), trim($_POST['circuit']??''),
                     trim($_POST['load_notes']??''), $_POST['install_date']?:null, $_POST['last_battery_replacement']?:null,
                     $_POST['warranty_replace_by']?:null, isset($_POST['sensor_expected'])?1:0, isset($_POST['enabled'])?1:0,
-                    $gid, $sid, $kind, $rid, $pos, $uh, $face, $tid, $id,
+                    $gid, $sid, $wid, $kind, $rid, $pos, $uh, $face, $tid, $id,
                 ]);
             $mpRaw = trim((string)($_POST['model_profile_id'] ?? ''));
             $mpid = $mpRaw === '' ? null : (int)$mpRaw;
@@ -1282,6 +1292,13 @@ function page_device(PDO $db, array $user): void {
               echo '<option value="'.(int)$p['id'].'"'.$sel.'>'.h($p['name']).'</option>';
           }
         ?></select>
+        <label>Web/SSH/FTP login</label>
+        <select name="web_credential_id"><option value="">(site default)</option><?php
+          $curWeb = ba_col($r, 'web_credential_id');
+          $curWebId = ($curWeb === null || $curWeb === '') ? null : (int)$curWeb;
+          echo ba_webcred_options($db, $curWebId);
+        ?></select>
+        <p class="muted">The username and password BackAisle uses for SSH, the web card, and FTP. SNMPv3 credentials stay separate. Site default uses UPS_WEB_USER when that is set.</p>
         <label>Model profile</label>
         <select name="model_profile_id"><option value="">(automatic)</option><?php
           $curMp = (int)ba_col($r, 'model_profile_id', 0);

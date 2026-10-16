@@ -276,6 +276,12 @@ CREATE TABLE IF NOT EXISTS snmp_profiles (
   is_default INTEGER NOT NULL DEFAULT 0,
   notes TEXT
 );
+CREATE TABLE IF NOT EXISTS web_credentials (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  username TEXT NOT NULL,
+  notes TEXT
+);
 CREATE TABLE IF NOT EXISTS settings (
   k TEXT PRIMARY KEY,
   v TEXT
@@ -636,6 +642,8 @@ def init_db(con=None):
         for stmt in (
             "IF COL_LENGTH('samples','power_w') IS NULL ALTER TABLE samples ADD power_w FLOAT NULL",
             "IF COL_LENGTH('samples_hourly','power_avg') IS NULL ALTER TABLE samples_hourly ADD power_avg FLOAT NULL",
+            "IF OBJECT_ID('dbo.web_credentials','U') IS NULL CREATE TABLE web_credentials (id INT IDENTITY(1,1) PRIMARY KEY, name NVARCHAR(128) NOT NULL, username NVARCHAR(128) NOT NULL, notes NVARCHAR(MAX) NULL)",
+            "IF COL_LENGTH('devices','web_credential_id') IS NULL ALTER TABLE devices ADD web_credential_id INT NULL",
         ):
             try:
                 con.execute(stmt)
@@ -647,6 +655,7 @@ def init_db(con=None):
     con.executescript(SCHEMA)
     _add_col(con, "devices", "group_id", "INTEGER")
     _add_col(con, "devices", "snmp_profile_id", "INTEGER")
+    _add_col(con, "devices", "web_credential_id", "INTEGER")
     _add_col(con, "devices", "va_rating", "REAL")
     _add_col(con, "devices", "kind", "TEXT NOT NULL DEFAULT 'ups'")
     _add_col(con, "devices", "rack_id", "INTEGER")

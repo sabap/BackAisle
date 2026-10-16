@@ -49,8 +49,12 @@ CREATE TABLE devices (
   face NVARCHAR(16) NOT NULL DEFAULT 'both',
   port_count INT NULL,
   manufacturer NVARCHAR(128) NULL,
-  template_id INT NULL
+  template_id INT NULL,
+  web_credential_id INT NULL
 );
+GO
+IF COL_LENGTH('devices', 'web_credential_id') IS NULL
+  ALTER TABLE devices ADD web_credential_id INT NULL;
 GO
 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'poll_state')
 CREATE TABLE poll_state (
@@ -216,6 +220,14 @@ CREATE TABLE snmp_profiles (
   priv_proto NVARCHAR(16) NOT NULL DEFAULT 'AES',
   web_user NVARCHAR(128) NULL,
   is_default INT NOT NULL DEFAULT 0,
+  notes NVARCHAR(MAX) NULL
+);
+GO
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'web_credentials')
+CREATE TABLE web_credentials (
+  id INT IDENTITY(1,1) PRIMARY KEY,
+  name NVARCHAR(128) NOT NULL,
+  username NVARCHAR(128) NOT NULL,
   notes NVARCHAR(MAX) NULL
 );
 GO
