@@ -348,6 +348,13 @@ function page_job_view(PDO $db): void {
     $canWrites = ba_can($user, 'edit_writes');
     $kindLabel = function_exists('ba_write_kind_label') ? ba_write_kind_label((string)$job['kind']) : (string)$job['kind'];
     $isCard = (string)$job['kind'] === 'card_settings';
+    $cardRecipe = '';
+    if ($isCard) {
+        $cardPayload = json_decode((string)($job['payload_json'] ?? ''), true);
+        if (is_array($cardPayload)) {
+            $cardRecipe = (string)($cardPayload['recipe'] ?? '');
+        }
+    }
     ba_layout_start('Job '.$id, $canWrites ? 'writes' : 'devices');
     $live = in_array((string)$job['status'], ['queued', 'running'], true);
     if ($live) {
@@ -370,6 +377,9 @@ function page_job_view(PDO $db): void {
     if ($live) {
         if ($isCard) {
             echo '<p class="muted">Writer is still working. This page reloads every 4 seconds. Card settings go over SSH and the card stays up. Status here is the result.</p>';
+            if ($cardRecipe === 'account') {
+                echo '<p class="muted">A login password is not shown here. Changing the administrator means the next card setting needs the new UPS_WEB_USER and UPS_WEB_PASS.</p>';
+            }
         } else {
             echo '<p class="muted">Writer is still working. This page reloads every 4 seconds. There is no extra toast when it finishes — status here is the result (ok / fail per UPS, slot choice in the step detail).</p>';
         }
@@ -386,6 +396,9 @@ function page_job_view(PDO $db): void {
         echo '</form></div></section>';
     } elseif ($isCard) {
         echo '<p class="muted">Job finished. Each card and the commands sent are in the tables below.</p>';
+        if ($cardRecipe === 'account') {
+            echo '<p class="muted">A login password is not shown here. Changing the administrator means the next card setting needs the new UPS_WEB_USER and UPS_WEB_PASS.</p>';
+        }
     } else {
         echo '<p class="muted">Job finished. Per-UPS result and SNMPv3 slot notes are in the tables below.</p>';
     }

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 
-RECIPES = ("identity", "utility", "restore", "sensor")
+RECIPES = ("identity", "utility", "restore", "sensor", "account")
 
 _TEXT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 .,_/#()+\-]*$")
 _DELAYS = (0, 60, 120, 180, 300, 600, 1200, 1800, 3600)
@@ -15,11 +15,14 @@ _FIELDS = {
     "utility": {"sensitivity", "high_volts", "low_volts", "output_volts"},
     "restore": {"recharge_delay", "recharge_capacity", "return_delay"},
     "sensor": {"index", "name", "location", "temp_high", "temp_low", "humid_high", "humid_low"},
+    "account": {"role", "name", "password", "access"},
 }
+_SECRET = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.,_/#()+=!@%-]{3,62}$")
+_PASSWD_LINE = re.compile(r"^((?:admin|device) passwd )\S+$")
 
 _LINE = re.compile(
     r"^(?:"
-    r"sys (?:name|location|contact) \S.*"
+    r"sys (?:name|location|contact) [A-Za-z0-9][A-Za-z0-9 .,_/#()+\-]*"
     r"|sys show"
     r"|upscfg sen (?:high|medium|low)"
     r"|upscfg (?:hvlimit|lvlimit|outpwr) \d+"
@@ -27,9 +30,13 @@ _LINE = re.compile(
     r"|upscfg rechargecap (?:0|15|30|45|60|75|90)"
     r"|upscfg returndelay \d+"
     r"|upscfg show"
-    r"|envcfg index [1-8] (?:name|location) \S.*"
+    r"|envcfg index [1-8] (?:name|location) [A-Za-z0-9][A-Za-z0-9 .,_/#()+\-]*"
     r"|envcfg index [1-8] (?:temphthres|templthres|humhthres|humlthres) -?\d+"
     r"|envcfg show"
+    r"|(?:admin|device) name [A-Za-z0-9][A-Za-z0-9 .,_/#()+\-]*"
+    r"|(?:admin|device) passwd [A-Za-z0-9][A-Za-z0-9.,_/#()+=!@%-]{3,62}"
+    r"|device access (?:enable|disable)"
+    r"|(?:admin|device) show"
     r")$"
 )
 
@@ -51,6 +58,30 @@ def _whole(value, lo: int, hi: int, label: str) -> int:
     if number < lo or number > hi:
         raise ValueError(label + " must be between " + str(lo) + " and " + str(hi))
     return number
+
+
+def _secret(value, limit: int, label: str) -> str:
+    text = str(value if value is not None else "")
+    if text != text.strip() or len(text) < 4 or len(text) > limit or not _SECRET.match(text):
+        raise ValueError(
+            label + " must be 4 to " + str(limit) + " characters: letters, numbers, and . , _ - / # ( ) + = ! @ %"
+        )
+    return text
+
+
+def redact_card_text(text: str, secrets) -> str:
+    """Hide login passwords in anything that is stored or shown."""
+    raw = "" if text is None else str(text)
+    parts = []
+    for part in raw.split(" | "):
+        if _PASSWD_LINE.match(part):
+            part = _PASSWD_LINE.sub(r"\1********", part)
+        parts.append(part)
+    out = " | ".join(parts)
+    for secret in secrets or []:
+        if isinstance(secret, str) and secret:
+            out = out.replace(secret, "********")
+    return out
 
 
 def _choice(value, allowed: tuple, label: str):
@@ -81,6 +112,14 @@ def build_card_commands(recipe: str, fields: dict) -> list[str]:
         if not clean:
             raise ValueError("enter at least one value")
         clean["index"] = fields.get("index", 1)
+    elif recipe == "account":
+        role = str(fields.get("role") or "").strip()
+        if role not in ("admin", "device"):
+            raise ValueError("Choose the administrator or the viewer")
+        clean.pop("role", None)
+        if not clean:
+            raise ValueError("enter at least one value")
+        clean["role"] = role
     elif not clean:
         raise ValueError("enter at least one value")
 
@@ -120,7 +159,7 @@ def build_card_commands(recipe: str, fields: dict) -> list[str]:
                 raise ValueError("Return delay must be a multiple of 5 seconds")
             lines.append("upscfg returndelay " + str(delay))
         lines.append("upscfg show")
-    else:
+    elif recipe == "sensor":
         index = _whole(clean.get("index", 1), 1, 8, "Sensor")
         if "name" in clean:
             lines.append("envcfg index " + str(index) + " name " + _text(clean["name"], 63, "Sensor name"))
@@ -141,10 +180,29 @@ def build_card_commands(recipe: str, fields: dict) -> list[str]:
             if int(str(clean["humid_high"]).strip()) <= int(str(clean["humid_low"]).strip()):
                 raise ValueError("High humidity has to be above the low humidity")
         lines.append("envcfg show")
+    else:
+        role = str(clean["role"])
+        limit = 63 if role == "admin" else 15
+        who = "Administrator" if role == "admin" else "Viewer"
+        if "access" in clean:
+            if role != "device":
+                raise ValueError("Only the viewer account can be enabled or disabled")
+            access = str(clean["access"]).strip().lower()
+            if access not in ("enable", "disable"):
+                raise ValueError("Viewer access must be enable or disable")
+            lines.append("device access " + access)
+        if "name" in clean:
+            lines.append(role + " name " + _text(clean["name"], limit, who + " name"))
+        if "password" in clean:
+            lines.append(role + " passwd " + _secret(clean["password"], limit, who + " password"))
+        lines.append(role + " show")
 
     if len(lines) < 2:
         raise ValueError("enter at least one value")
     for line in lines:
+        # Local shell settings only. SNMPv3 users are written by push_snmpv3, never here.
+        if line.split(" ", 1)[0] not in ("sys", "upscfg", "envcfg", "admin", "device"):
+            raise ValueError("refusing command")
         if not _LINE.match(line):
             raise ValueError("refusing command")
     return lines

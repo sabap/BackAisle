@@ -3,6 +3,17 @@ declare(strict_types=1);
 
 /** CyberPower RMCARD settings sent as ready-made shell commands, not a config restore. */
 
+/** Factory SSH/web login on a new card. Not an SNMPv3 user. */
+function ba_rmcard_factory_login(): array
+{
+    return [
+        'user' => 'cyber',
+        'pass' => 'cyber',
+        'viewer' => 'device',
+        'viewer_pass' => 'cyber',
+    ];
+}
+
 function ba_device_is_cyberpower(array $row): bool
 {
     $kind = strtolower(trim((string)($row['kind'] ?? 'ups')));
@@ -90,7 +101,7 @@ function ba_card_job_visible(PDO $db, array $user, array $job): bool
 function ba_queue_card_settings(PDO $db, array $user): array
 {
     $recipe = (string)($_POST['recipe'] ?? '');
-    if (!in_array($recipe, ['identity', 'utility', 'restore', 'sensor'], true)) {
+    if (!in_array($recipe, ['identity', 'utility', 'restore', 'sensor', 'account'], true)) {
         throw new RuntimeException('Choose a setting');
     }
     $fields = ba_card_fields($recipe);
@@ -179,11 +190,13 @@ function ba_card_settings_modal(bool $bulk, int $deviceId = 0): void
     echo '<input type="radio" name="recipe" id="recipe-utility" value="utility">';
     echo '<input type="radio" name="recipe" id="recipe-restore" value="restore">';
     echo '<input type="radio" name="recipe" id="recipe-sensor" value="sensor">';
+    echo '<input type="radio" name="recipe" id="recipe-account" value="account">';
     echo '<div class="card-recipe-bar">';
     echo '<label for="recipe-identity">Identity</label>';
     echo '<label for="recipe-utility">Utility limits</label>';
     echo '<label for="recipe-restore">Restore timing</label>';
     echo '<label for="recipe-sensor">Closet sensor</label>';
+    echo '<label for="recipe-account">Card logins</label>';
     echo '</div>';
     echo '<div class="card-panes">';
     echo '<div class="card-pane pane-identity">';
@@ -234,6 +247,23 @@ function ba_card_settings_modal(bool $bulk, int $deviceId = 0): void
     echo '</div>';
     echo '<p class="muted">Uses the temperature unit already set on the card. Firmware 1.4.1 or newer.</p>';
     echo '</div>';
+    echo '<div class="card-pane pane-account">';
+    echo '<input type="radio" name="acct_role" id="acct-admin" value="admin" checked>';
+    echo '<input type="radio" name="acct_role" id="acct-viewer" value="device">';
+    echo '<div class="card-recipe-bar">';
+    echo '<label for="acct-admin">Administrator</label>';
+    echo '<label for="acct-viewer">Viewer</label>';
+    echo '</div>';
+    echo '<label for="acct-name">User name</label><input id="acct-name" name="acct_name" maxlength="63" autocomplete="off">';
+    echo '<label for="acct-pass">New password</label><input id="acct-pass" name="acct_pass" type="password" maxlength="63" autocomplete="new-password">';
+    echo '<label for="acct-pass2">Confirm password</label><input id="acct-pass2" name="acct_pass2" type="password" maxlength="63" autocomplete="new-password">';
+    echo '<div class="acct-access">';
+    echo '<label for="acct-access">Viewer access</label><select id="acct-access" name="acct_access">';
+    echo '<option value="">Leave unchanged</option><option value="enable">Allow access</option><option value="disable">Disable access</option>';
+    echo '</select>';
+    echo '</div>';
+    echo '<p class="muted">The card has two local accounts. Administrator is the SSH, web, and FTP login, up to 63 characters. Viewer is read-only on the web, up to 15 characters, and can be turned on or off. This does not add a third login, and it does not change SNMPv3 users. A password is not written to the job log. After you change the administrator, update UPS_WEB_USER and UPS_WEB_PASS. The next card setting uses that login. A config restore uses the web user on the SNMP credential when one is set. The card stays up.</p>';
+    echo '</div>';
     echo '</div></div>';
     echo '<input type="hidden" name="simulate" value="0">';
     echo '<label><input type="checkbox" name="simulate" value="1" checked> Simulate (show the commands, do not change the card)</label>';
@@ -269,6 +299,19 @@ function ba_card_settings_modal(bool $bulk, int $deviceId = 0): void
       }
     }
   });
+  function acctLimits() {
+    var viewer = document.getElementById("acct-viewer");
+    var max = viewer && viewer.checked ? 15 : 63;
+    ["acct-name", "acct-pass", "acct-pass2"].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) el.maxLength = max;
+    });
+  }
+  var adminRole = document.getElementById("acct-admin");
+  var viewerRole = document.getElementById("acct-viewer");
+  if (adminRole) adminRole.addEventListener("change", acctLimits);
+  if (viewerRole) viewerRole.addEventListener("change", acctLimits);
+  acctLimits();
   document.addEventListener("click", function (ev) {
     var opener = ev.target.closest ? ev.target.closest('[data-open-modal="modal-card-settings"]') : null;
     if (!opener) return;
@@ -354,7 +397,7 @@ function ba_card_fields(string $recipe): array
             }
             $out['return_delay'] = $seconds;
         }
-    } else {
+    } elseif ($recipe === 'sensor') {
         $index = ba_card_int(trim((string)($_POST['sensor_index'] ?? '1')), 1, 8, 'Sensor');
         $named = false;
         foreach (['sensor_name' => ['name', 63, 'Sensor name'], 'sensor_location' => ['location', 63, 'Sensor location']] as $post => $spec) {
@@ -388,11 +431,50 @@ function ba_card_fields(string $recipe): array
             throw new RuntimeException('Enter at least one sensor value');
         }
         $out = ['index' => $index] + $out;
+    } elseif ($recipe === 'account') {
+        $role = (string)($_POST['acct_role'] ?? '');
+        if (!in_array($role, ['admin', 'device'], true)) {
+            throw new RuntimeException('Choose the administrator or the viewer');
+        }
+        $out['role'] = $role;
+        $limit = $role === 'admin' ? 63 : 15;
+        $who = $role === 'admin' ? 'Administrator' : 'Viewer';
+        $name = trim((string)($_POST['acct_name'] ?? ''));
+        if ($name !== '') {
+            $out['name'] = ba_card_text($name, $limit, $who . ' name');
+        }
+        $pass = (string)($_POST['acct_pass'] ?? '');
+        $pass2 = (string)($_POST['acct_pass2'] ?? '');
+        if ($pass !== '' || $pass2 !== '') {
+            if ($pass !== $pass2) {
+                throw new RuntimeException('Password and confirmation do not match');
+            }
+            $out['password'] = ba_card_secret($pass, $limit, $who . ' password');
+        }
+        $access = (string)($_POST['acct_access'] ?? '');
+        if ($role === 'device' && $access !== '') {
+            if (!in_array($access, ['enable', 'disable'], true)) {
+                throw new RuntimeException('Viewer access must be enable or disable');
+            }
+            $out['access'] = $access;
+        }
+        if (count($out) < 2) {
+            throw new RuntimeException('Enter a user name, a password, or a viewer access change');
+        }
     }
     if (!$out) {
         throw new RuntimeException('Enter at least one value. Blank fields stay unchanged');
     }
     return $out;
+}
+
+function ba_card_secret(string $raw, int $max, string $label): string
+{
+    $len = strlen($raw);
+    if ($raw !== trim($raw) || $len < 4 || $len > $max || !preg_match('/^[A-Za-z0-9][A-Za-z0-9.,_\/#()+=!@%-]*$/', $raw)) {
+        throw new RuntimeException($label . ' must be 4 to ' . $max . ' characters: letters, numbers, and . , _ - / # ( ) + = ! @ %');
+    }
+    return $raw;
 }
 
 function ba_card_text(string $raw, int $max, string $label): string

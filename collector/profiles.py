@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from rmcard_defaults import RMCARD_FACTORY_PASS
 from secrets import load_secrets
 
 PATH = Path(r"C:\ProgramData\BackAisle\snmp_profiles.json")
@@ -58,5 +59,7 @@ def seed_from_env() -> None:
             "web_pass": secrets.get("UPS_WEB_PASS", ""),
         }
     if "2" not in data:
-        data["2"] = {"auth_pass": "cyber", "priv_pass": "cyber", "web_pass": "cyber"}
+        # auth_pass and priv_pass belong to the factory SNMPv3 profile.
+        # web_pass is the factory SSH/web login, stored on its own key.
+        data["2"] = {"auth_pass": "cyber", "priv_pass": "cyber", "web_pass": RMCARD_FACTORY_PASS}
     _save(data)
