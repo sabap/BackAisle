@@ -6,6 +6,8 @@ import socket
 import time
 
 import paramiko
+from cryptography.hazmat.primitives import hashes
+from paramiko.rsakey import RSAKey
 
 from card_commands import IDENTITY_SHOW_LIMIT, _LINE
 
@@ -15,6 +17,18 @@ _PASS = re.compile(r"password\s*:", re.I)
 _CONFIRM = re.compile(r"(?i)input\s+admin\s+password\s*:")
 _ACCOUNT_FAIL = re.compile(r"(?im)^fail\s*$|password error")
 _ADMIN_PASSWD = re.compile(r"^admin passwd (\S+)$")
+
+
+def _allow_ssh_rsa_host_key(transport: paramiko.Transport) -> None:
+    """RMCARD presents an ssh-rsa host key. Paramiko 3 does not offer that name."""
+    if "ssh-rsa" not in RSAKey.HASHES:
+        RSAKey.HASHES["ssh-rsa"] = hashes.SHA1
+    offered = tuple(transport._preferred_keys)
+    if "ssh-rsa" not in offered:
+        transport._preferred_keys = offered + ("ssh-rsa",)
+    info = dict(transport._key_info)
+    info.setdefault("ssh-rsa", RSAKey)
+    transport._key_info = info
 
 
 class RmcardCli:
@@ -41,6 +55,7 @@ class RmcardCli:
             sock,
             disabled_algorithms={"pubkeys": ["rsa-sha2-512", "rsa-sha2-256"]},
         )
+        _allow_ssh_rsa_host_key(transport)
         self._transport = transport
         try:
             transport.start_client(timeout=self.timeout)

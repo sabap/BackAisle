@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.5.79] - 2026-10-16
+
+- Card settings can sign in to CyberPower cards that present an ssh-rsa host key. A job that failed with "no acceptable host key" did not log in and did not change the cards.
+- Restart the writer if it is already running, so it loads this host key. The collector does not need a restart.
+
 ## [0.5.78] - 2026-10-16
 
 - Card settings keeps the dialog open and shows Queued, then Success or Fail. A blank form, no selected card, or a missing APPLY CARD phrase is an error in the dialog and does not create a job. Writes uses those same words.
