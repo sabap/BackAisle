@@ -110,7 +110,7 @@ class RmcardCli:
         chan.send(command + "\r")
         text = self._read(done, self.timeout)
         if "Parameter Error" in text or "Command not found" in text or "doesn't know this command" in text:
-            raise RuntimeError(self._safe(_one_line(text)))
+            raise RuntimeError(self._safe(_card_reject_message(command, text)))
         if command.startswith(("admin ", "device ")) and _ACCOUNT_FAIL.search(text):
             raise RuntimeError("password error")
         if pending:
@@ -202,7 +202,19 @@ class RmcardCli:
         return len(_PROMPT.findall(buf))
 
 
-def _one_line(text: str) -> str:
-    parts = [part.strip() for part in text.splitlines() if part.strip()]
-    useful = [part for part in parts if not part.startswith("CyberPower >")]
-    return (useful[-1] if useful else "Parameter Error")[:300]
+def _card_reject_message(command: str, text: str) -> str:
+    """Name the command the card refused.
+
+    A bad argument prints the sys help, and that help ends with the reset
+    line. The reset line is not the command that was sent.
+    """
+    if "Parameter Error" in text:
+        reason = "Parameter Error"
+    elif "Command not found" in text:
+        reason = "Command not found"
+    else:
+        reason = "the card does not know this command"
+    shown = " ".join(str(command or "").split())
+    if len(shown) > 180:
+        shown = shown[:180]
+    return shown + " was rejected (" + reason + "). The card was not reset."

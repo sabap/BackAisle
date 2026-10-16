@@ -8,6 +8,7 @@ from card_commands import (
     identity_kept_note,
     identity_readable,
     identity_restore_commands,
+    identity_saved,
     identity_still_kept,
     parse_identity_show,
     redact_card_text,
@@ -34,12 +35,16 @@ expect("identity", {"name": "A"}, [
     "sys show",
 ])
 expect("identity", {"name": "IDF Lab", "contact": "Facilities"}, [
-    "sys name IDF Lab",
+    'sys name "IDF Lab"',
     "sys contact Facilities",
     "sys show",
 ])
 expect("identity", {"location": "Server Room 2"}, [
-    "sys location Server Room 2",
+    'sys location "Server Room 2"',
+    "sys show",
+])
+expect("identity", {"contact": "Facilities Team"}, [
+    'sys contact "Facilities Team"',
     "sys show",
 ])
 expect("utility", {"sensitivity": "low", "high_volts": 140, "low_volts": "100"}, [
@@ -55,7 +60,7 @@ expect("restore", {"recharge_delay": 120, "recharge_capacity": 15, "return_delay
     "upscfg show",
 ])
 expect("sensor", {"index": 2, "temp_high": 90, "name": "Closet probe"}, [
-    "envcfg index 2 name Closet probe",
+    'envcfg index 2 name "Closet probe"',
     "envcfg index 2 temphthres 90",
     "envcfg show",
 ])
@@ -113,6 +118,9 @@ for blocked in (
     "usm user 1 backaisle",
     "trap add 1 10.1.1.1",
     "admin name Ops; snmpv3 show",
+    "sys reset all",
+    "sys reset",
+    'sys contact "Facilities"; sys reset all',
 ):
     if _LINE.match(blocked):
         raise SystemExit("snmp command was allowed: " + blocked)
@@ -190,7 +198,7 @@ if identity_fields_sent(["sys name A", "sys show"]) != {"name"}:
 _before = {"name": "Lab UPS", "location": "Server Room 2", "contact": "Facilities"}
 _cleared = {"name": "Lab UPS", "location": "", "contact": "null"}
 _restored = identity_restore_commands(_before, _cleared, {"name"})
-if _restored != ["sys location Server Room 2", "sys contact Facilities"]:
+if _restored != ['sys location "Server Room 2"', "sys contact Facilities"]:
     raise SystemExit("did not put the cleared fields back: " + repr(_restored))
 for _line in _restored:
     if not _LINE.match(_line) or _line.endswith("null") or _line.endswith(" "):
@@ -284,7 +292,7 @@ def _refuse_blank(commands):
 
 
 _kept = _show("Lab UPS", "Server Room 2", "Facilities")
-_wiped = _show("Lab UPS", "", "null")
+_wiped = _show("Queue", "", "null")
 _sent = _apply(
     [_kept, "Success", _wiped, "Success", "Success", _kept],
     ["sys name Queue", "sys show"],
@@ -292,11 +300,15 @@ _sent = _apply(
 )
 if _sent[0] != "sys show" or "sys name Queue" not in _sent:
     raise SystemExit("typed name was not sent: " + repr(_sent))
-if "sys location Server Room 2" not in _sent or "sys contact Facilities" not in _sent:
+if 'sys location "Server Room 2"' not in _sent or "sys contact Facilities" not in _sent:
     raise SystemExit("cleared fields were not put back: " + repr(_sent))
 _refuse_blank(_sent)
 
-_same = _apply([_kept, "Success", _kept], ["sys name Queue", "sys show"], {"name": "Queue"})
+_same = _apply(
+    [_kept, "Success", _show("Queue", "Server Room 2", "Facilities")],
+    ["sys name Queue", "sys show"],
+    {"name": "Queue"},
+)
 if any(command.startswith("sys location") or command.startswith("sys contact") for command in _same):
     raise SystemExit("unchanged fields were written: " + repr(_same))
 
@@ -324,7 +336,7 @@ if _clip.sent != ["sys show"]:
 
 try:
     _apply(
-        [_show("Lab UPS", "", "Facilities"), "Success", _show("Lab UPS", "Office", "Facilities")],
+        [_show("Lab UPS", "", "Facilities"), "Success", _show("Queue", "Office", "Facilities")],
         ["sys name Queue", "sys show"],
         {"name": "Queue"},
     )
@@ -346,5 +358,17 @@ if "sys contact Facilities" not in _only_contact:
 if any(command.startswith("sys name ") for command in _only_contact) or "sys location Server Room 2" in _only_contact:
     raise SystemExit("a typed or untouched field was rewritten: " + repr(_only_contact))
 _refuse_blank(_only_contact)
+
+identity_saved({"name": "Queue", "location": "Server Room 2", "contact": "Facilities Team"}, [
+    "sys name Queue",
+    'sys contact "Facilities Team"',
+])
+try:
+    identity_saved({"contact": '"Facilities Team"'}, ['sys contact "Facilities Team"'])
+except ValueError as exc:
+    if "not saved as typed" not in str(exc):
+        raise SystemExit("quoted read-back raised the wrong error: " + str(exc))
+else:
+    raise SystemExit("a quoted read-back was accepted")
 
 print("card commands ok")

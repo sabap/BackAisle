@@ -2,7 +2,7 @@
 import paramiko
 from paramiko.rsakey import RSAKey
 
-from rmcard_cli import _allow_ssh_rsa_host_key
+from rmcard_cli import _allow_ssh_rsa_host_key, _card_reject_message
 
 
 class _DeadSock:
@@ -36,5 +36,21 @@ try:
         raise SystemExit("ssh-rsa was offered more than once")
 finally:
     transport.close()
+
+_help = """\
+CyberPower > sys contact Facilities Team
+                         ^
+Parameter Error
+
+sys : Show or configure System
+  contact : Set the person to contact about this equipment
+  reset : Reset or reboot Remote Management Card
+CyberPower >
+"""
+_msg = _card_reject_message('sys contact "Facilities Team"', _help)
+if "Reset or reboot Remote Management Card" in _msg:
+    raise SystemExit("reject message used the reset help line: " + _msg)
+if "Parameter Error" not in _msg or "was not reset" not in _msg or 'sys contact "Facilities Team"' not in _msg:
+    raise SystemExit("reject message drifted: " + _msg)
 
 print("rmcard host key ok")

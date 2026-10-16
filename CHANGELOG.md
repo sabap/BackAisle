@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.5.80] - 2026-10-16
+
+- Card settings sends a name, location, or contact that contains a space as one argument. A job that showed "reset : Reset or reboot Remote Management Card" had signed in and read the card. That line is the card's command help after it rejected the contact. The card was not reset.
+- A rejected command is named in the job. Restart the writer if it is already running, so it loads this command. The collector does not need a restart.
+
 ## [0.5.79] - 2026-10-16
 
 - Card settings can sign in to CyberPower cards that present an ssh-rsa host key. A job that failed with "no acceptable host key" did not log in and did not change the cards.
