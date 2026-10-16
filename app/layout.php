@@ -25,7 +25,7 @@ function ba_layout_start(string $title, string $nav = 'fleet'): void {
   <link rel="icon" href="/assets/logo.svg?v=aisle1" type="image/svg+xml">
   <link rel="icon" href="/assets/favicon-32.png?v=aisle1" type="image/png" sizes="32x32">
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=aisle1">
-  <link rel="stylesheet" href="/assets/app.css?v=layout8">
+  <link rel="stylesheet" href="/assets/app.css?v=layout9">
 </head>
 <body<?= ba_tech_mode() ? ' class="tech"' : '' ?>>
 <header class="top">

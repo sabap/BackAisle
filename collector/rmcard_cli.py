@@ -12,6 +12,9 @@ from card_commands import _LINE
 _PROMPT = re.compile(r"(?m)^CyberPower >\s*$")
 _USER = re.compile(r"user\s*name\s*:", re.I)
 _PASS = re.compile(r"password\s*:", re.I)
+_CONFIRM = re.compile(r"(?i)input\s+admin\s+password\s*:")
+_ACCOUNT_FAIL = re.compile(r"(?im)^fail\s*$|password error")
+_ADMIN_PASSWD = re.compile(r"^admin passwd (\S+)$")
 
 
 class RmcardCli:
@@ -19,6 +22,8 @@ class RmcardCli:
         self.host = host
         self.username = username
         self.password = password
+        self._confirm_password = password
+        self._secrets = [password] if password else []
         self.timeout = timeout
         self._transport: paramiko.Transport | None = None
         self._chan = None
@@ -72,11 +77,30 @@ class RmcardCli:
         if chan is None:
             raise RuntimeError("card session is not open")
         before = self._prompt_count("")
+        pending = None
+        matched = _ADMIN_PASSWD.match(command)
+        if matched:
+            pending = matched.group(1)
+            self._remember(pending)
+        answered = False
+
+        def done(buf: str) -> bool:
+            nonlocal answered
+            if not answered and _CONFIRM.search(buf):
+                chan.send(self._confirm_password + "\r")
+                answered = True
+                return False
+            return self._prompt_count(buf) > before
+
         chan.send(command + "\r")
-        text = self._read(lambda buf: self._prompt_count(buf) > before, self.timeout)
+        text = self._read(done, self.timeout)
         if "Parameter Error" in text or "Command not found" in text or "doesn't know this command" in text:
             raise RuntimeError(self._safe(_one_line(text)))
-        return text
+        if command.startswith(("admin ", "device ")) and _ACCOUNT_FAIL.search(text):
+            raise RuntimeError("password error")
+        if pending:
+            self._confirm_password = pending
+        return self._safe(text)
 
     def _login(self, transport: paramiko.Transport) -> None:
         def handler(title, instructions, prompts):
@@ -148,9 +172,14 @@ class RmcardCli:
             return ""
         return data.decode("utf-8", "replace").replace("\x00", "")
 
+    def _remember(self, secret: str) -> None:
+        if secret and secret not in self._secrets:
+            self._secrets.append(secret)
+
     def _safe(self, text: str) -> str:
-        if self.password:
-            text = text.replace(self.password, "********")
+        for secret in self._secrets:
+            if secret:
+                text = text.replace(secret, "********")
         return text[:400]
 
     @staticmethod

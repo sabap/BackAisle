@@ -210,13 +210,14 @@ function page_org(PDO $db, array $user): void {
                 if ($did > 0) {
                     ba_pp_exec($db, 'UPDATE devices SET department_id=? WHERE id=?', [ba_device_department_choice($user), $did]);
                 }
+                $factory = ba_rmcard_factory_login();
                 $db->prepare("INSERT INTO write_jobs (kind,status,simulate,stop_on_error,created_by,payload_json) VALUES ('provision','queued',0,1,?,?)")
-                    ->execute([$user['username'], json_encode(['device_id'=>$did,'config_id'=>$cfgId,'web_user'=>'cyber','web_pass'=>'cyber'])]);
+                    ->execute([$user['username'], json_encode(['device_id'=>$did,'config_id'=>$cfgId,'web_user'=>$factory['user'],'web_pass'=>$factory['pass']])]);
                 $jid = ba_last_id($db);
                 $db->prepare("INSERT INTO write_job_targets (job_id,device_id,ip,hostname,status) VALUES (?,?,?,?,'queued')")
                     ->execute([$jid, $did, $ip, $_POST['hostname'] ?? $ip]);
                 ba_audit($db, 'add_default_ups', 'device', (string)$did, $ip);
-                $msg = "Default UPS $ip queued (cyber/cyber + config profile). Job #$jid";
+                $msg = 'Default UPS ' . $ip . ' queued (' . $factory['user'] . '/' . $factory['pass'] . ' card login + config profile). Job #' . $jid;
             } elseif ($act === 'ldap_save') {
                 ba_save_ldap_settings($db, $_POST);
                 if (isset($_POST['alert_hold_sec'])) {

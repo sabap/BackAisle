@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.76] - 2026-10-16
+
+- Card settings can change the two local logins on a CyberPower card. Administrator is the SSH, web, and FTP login. Viewer is read-only on the web and can be turned on or off. This does not add a third login, and it does not change SNMPv3 users.
+- A new password is not written to the job log. After the administrator changes, update UPS_WEB_USER and UPS_WEB_PASS before the next card setting. The card stays up.
+- A new unit still signs in with the factory administrator account, cyber / cyber. That pair is separate from the SNMPv3 users. A writer hotfix also copies the factory-login file when the writer needs it.
+- Restart the writer if it is already running, so it loads this login. The collector does not need a restart.
+
 ## [0.5.75] - 2026-10-15
 
 - Inventory and a CyberPower device page can send one named card setting over SSH. The choices are identity, utility limits, restore timing, and the closet sensor. Blank boxes stay as they are. The card is not rebooted.

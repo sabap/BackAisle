@@ -42,7 +42,8 @@ from rmcard_http import RmcardSession, _looks_like_rmcard_config, wait_http_aliv
 from rmcard_scp import scp_put_config  # noqa: E402
 from secrets import load_secrets  # noqa: E402
 from snmp_client import SET_OIDS, snmp_get, snmp_get_one, snmp_set  # noqa: E402
-from card_commands import build_card_commands  # noqa: E402
+from card_commands import build_card_commands, redact_card_text  # noqa: E402
+from rmcard_defaults import RMCARD_FACTORY_PASS, RMCARD_FACTORY_USER  # noqa: E402
 
 
 def now() -> str:
@@ -126,6 +127,7 @@ def is_retryable(exc: BaseException) -> bool:
         "authentication failed",
         "unknown card setting",
         "enter at least one",
+        "password error",
     )
     if any(h in msg for h in hard):
         return False
@@ -305,8 +307,9 @@ def local_ip_toward(host: str) -> str:
 
 
 def web_creds(secrets: dict) -> tuple[str, str]:
-    user = (secrets.get("UPS_WEB_USER") or secrets.get("UPS_WEB_USERNAME") or "cyber").strip() or "cyber"
-    pw = secrets.get("UPS_WEB_PASS") or secrets.get("UPS_WEB_PASSWORD") or "cyber"
+    """Card SSH/web login. Site secrets win. A new card still uses the factory pair."""
+    user = (secrets.get("UPS_WEB_USER") or secrets.get("UPS_WEB_USERNAME") or RMCARD_FACTORY_USER).strip() or RMCARD_FACTORY_USER
+    pw = secrets.get("UPS_WEB_PASS") or secrets.get("UPS_WEB_PASSWORD") or RMCARD_FACTORY_PASS
     return user, pw
 
 
@@ -559,12 +562,12 @@ def run_provision(con, job: dict, secrets: dict) -> None:
     device = con.execute("SELECT * FROM devices WHERE id=?", (payload["device_id"],)).fetchone()
     tgt = con.execute("SELECT id FROM write_job_targets WHERE job_id=?", (job["id"],)).fetchone()
     tid = tgt["id"]
-    web_user = payload.get("web_user") or "cyber"
-    web_pass = payload.get("web_pass") or "cyber"
+    web_user = payload.get("web_user") or RMCARD_FACTORY_USER
+    web_pass = payload.get("web_pass") or RMCARD_FACTORY_PASS
     step(con, tid, 1, "web_login", "running", web_user)
     sess = RmcardSession(device["ip"], web_user, web_pass)
     sess.login()
-    step(con, tid, 1, "web_login", "ok", "factory cyber/cyber")
+    step(con, tid, 1, "web_login", "ok", "factory " + RMCARD_FACTORY_USER + "/" + RMCARD_FACTORY_PASS)
     cfg_id = int(payload.get("config_id") or 0)
     if cfg_id:
         tmpl = con.execute("SELECT * FROM config_templates WHERE id=?", (cfg_id,)).fetchone()
@@ -877,15 +880,31 @@ def run_push_traps(con, job: dict, secrets: dict) -> None:
     run_targets_parallel(job, secrets, targets, one)
 
 
-def _card_detail(command: str, text: str, password: str) -> str:
+def _card_secrets(payload, password: str) -> list[str]:
+    found = []
     if password:
-        text = text.replace(password, "********")
+        found.append(password)
+    fields = payload.get("fields") if isinstance(payload, dict) else None
+    if isinstance(fields, dict):
+        extra = fields.get("password")
+        if isinstance(extra, str) and extra and extra not in found:
+            found.append(extra)
+    return found
+
+
+def _card_detail(command: str, text: str, secrets) -> str:
+    if isinstance(secrets, str):
+        secrets = [secrets]
+    command = redact_card_text(command, secrets)
+    text = redact_card_text(text, secrets)
     if not command.endswith(" show"):
         return command[:500]
     kept = []
     for raw in text.splitlines():
         part = " ".join(raw.split())
         if not part or part.startswith("CyberPower >") or part == command:
+            continue
+        if "password" in part.lower():
             continue
         kept.append(part)
     body = " | ".join(kept)
@@ -894,53 +913,79 @@ def _card_detail(command: str, text: str, password: str) -> str:
     return (command + " | " + body)[:1500]
 
 
+def _wipe_account_password(con, job: dict) -> None:
+    """Drop a new login password from the job row after the writer has used it."""
+    try:
+        payload = json.loads(job.get("payload_json") or "{}")
+    except Exception:
+        return
+    if not isinstance(payload, dict):
+        return
+    fields = payload.get("fields")
+    if not isinstance(fields, dict) or "password" not in fields:
+        return
+    fields = dict(fields)
+    fields.pop("password", None)
+    payload["fields"] = fields
+    con.execute(
+        "UPDATE write_jobs SET payload_json=? WHERE id=?",
+        (json.dumps(payload, separators=(",", ":")), job["id"]),
+    )
+    con.commit()
+
+
 def run_card_settings(con, job: dict, secrets: dict) -> None:
     """SSH ready-made commands. Does not restore a config file and does not reboot the card."""
-    payload = json.loads(job.get("payload_json") or "{}")
-    if not isinstance(payload, dict):
-        raise RuntimeError("unknown card setting")
     try:
-        commands = build_card_commands(str(payload.get("recipe") or ""), payload.get("fields") or {})
-    except ValueError as exc:
-        raise RuntimeError(str(exc)) from exc
-    user, password = web_creds(secrets)
-    simulate = job_is_simulate(job)
-    preview = " | ".join(commands)
-    targets = con.execute(
-        "SELECT * FROM write_job_targets WHERE job_id=? ORDER BY id",
-        (job["id"],),
-    ).fetchall()
+        payload = json.loads(job.get("payload_json") or "{}")
+        if not isinstance(payload, dict):
+            raise RuntimeError("unknown card setting")
+        try:
+            commands = build_card_commands(str(payload.get("recipe") or ""), payload.get("fields") or {})
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
+        user, password = web_creds(secrets)
+        hidden = _card_secrets(payload, password)
+        simulate = job_is_simulate(job)
+        preview = redact_card_text(" | ".join(commands), hidden)
+        targets = con.execute(
+            "SELECT * FROM write_job_targets WHERE job_id=? ORDER BY id",
+            (job["id"],),
+        ).fetchall()
 
-    def one(con, t: dict) -> None:
-        tid = int(t["id"])
-        if simulate:
-            step(con, tid, 1, "cli", "ok", "SIMULATE " + preview[:1800])
+        def one(con, t: dict) -> None:
+            tid = int(t["id"])
+            if simulate:
+                step(con, tid, 1, "cli", "ok", "SIMULATE " + preview[:1800])
+                con.execute(
+                    "UPDATE write_job_targets SET status='ok', ended_at=? WHERE id=?",
+                    (now(), tid),
+                )
+                con.commit()
+                return
+            from rmcard_cli import RmcardCli
+
+            try:
+                with RmcardCli(str(t["ip"]), user, password) as cli:
+                    step(con, tid, 1, "ssh", "ok", str(t.get("ip") or ""))
+                    for seq, command in enumerate(commands, start=2):
+                        text = cli.run(command)
+                        step(con, tid, seq, "cli", "ok", _card_detail(command, text, hidden))
+            except Exception as exc:
+                text = redact_card_text(str(exc), hidden)
+                raise RuntimeError(text) from None
             con.execute(
                 "UPDATE write_job_targets SET status='ok', ended_at=? WHERE id=?",
                 (now(), tid),
             )
             con.commit()
-            return
-        from rmcard_cli import RmcardCli
 
+        run_targets_parallel(job, secrets, targets, one)
+    finally:
         try:
-            with RmcardCli(str(t["ip"]), user, password) as cli:
-                step(con, tid, 1, "ssh", "ok", str(t.get("ip") or ""))
-                for seq, command in enumerate(commands, start=2):
-                    text = cli.run(command)
-                    step(con, tid, seq, "cli", "ok", _card_detail(command, text, password))
-        except Exception as exc:
-            text = str(exc)
-            if password:
-                text = text.replace(password, "********")
-            raise RuntimeError(text) from None
-        con.execute(
-            "UPDATE write_job_targets SET status='ok', ended_at=? WHERE id=?",
-            (now(), tid),
-        )
-        con.commit()
-
-    run_targets_parallel(job, secrets, targets, one)
+            _wipe_account_password(con, job)
+        except Exception:
+            pass
 
 
 def process_job(job_id: int) -> None:

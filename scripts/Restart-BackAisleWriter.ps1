@@ -56,7 +56,7 @@ function Invoke-BaGet([string]$Uri, [string]$OutFile, [int]$MinBytes = 200) {
         } catch { }
     }
     if (-not $ok) {
-        throw "Download failed or was HTML (OpenDNS/proxy): $Uri. Copy collector\writer.py, card_commands.py, rmcard_cli.py, rmcard_http.py, rmcard_scp.py, config_file.py, and watchdog.ps1 onto $SiteRoot\collector instead, then re-run this script."
+        throw "Download failed or was HTML (OpenDNS/proxy): $Uri. Copy collector\writer.py, card_commands.py, rmcard_cli.py, rmcard_defaults.py, rmcard_http.py, rmcard_scp.py, config_file.py, and watchdog.ps1 onto $SiteRoot\collector instead, then re-run this script."
     }
 }
 
@@ -92,6 +92,9 @@ try {
             @{ Name = 'card_commands.py'; Marker = 'def build_card_commands' },
             @{ Name = 'rmcard_cli.py'; Marker = 'class RmcardCli' }
         )
+        if ($writerText -match 'rmcard_defaults') {
+            $cardFiles += @{ Name = 'rmcard_defaults.py'; Marker = 'def factory_admin' }
+        }
         foreach ($f in $cardFiles) {
             $js = "https://cdn.jsdelivr.net/gh/$Owner/${Repo}@v$Version/collector/$($f.Name)"
             $out = Join-Path $tmp $f.Name

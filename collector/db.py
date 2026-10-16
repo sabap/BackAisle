@@ -677,7 +677,7 @@ def init_db(con=None):
         )
         con.execute(
             "INSERT INTO snmp_profiles (name, username, auth_proto, priv_proto, web_user, is_default, notes) "
-            "VALUES ('Factory default','cyber','SHA','AES','cyber',0,'cyber/cyber web + SNMPv3')"
+            "VALUES ('Factory default','cyber','SHA','AES','cyber',0,'SNMPv3 user cyber. Web login is the factory SSH account, stored in web_user.')"
         )
     if con.execute("SELECT COUNT(*) n FROM groups").fetchone()["n"] == 0:
         con.execute("INSERT INTO groups (parent_id, name) VALUES (NULL,'Hospital')")
