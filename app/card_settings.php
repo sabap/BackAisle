@@ -262,7 +262,7 @@ function ba_card_settings_modal(bool $bulk, int $deviceId = 0): void
     echo '<option value="">Leave unchanged</option><option value="enable">Allow access</option><option value="disable">Disable access</option>';
     echo '</select>';
     echo '</div>';
-    echo '<p class="muted">The card has two local accounts. Administrator is the SSH, web, and FTP login, up to 63 characters. Viewer is read-only on the web, up to 15 characters, and can be turned on or off. This does not add a third login, and it does not change SNMPv3 users. A password is not written to the job log. After you change the administrator, update UPS_WEB_USER and UPS_WEB_PASS. The next card setting uses that login. A config restore uses the web user on the SNMP credential when one is set. The card stays up.</p>';
+    echo '<p class="muted">The card has two local accounts. Administrator is the SSH, web, and FTP login, up to 63 characters. Viewer is read-only on the web, up to 15 characters, and can be turned on or off. This does not add a third login, and it does not change SNMPv3 users. A password is not written to the job log. After you change the administrator, save that username and password on Organization, Web/SSH/FTP, and assign it to the device. The next SSH, web, or FTP login uses that assignment. UPS_WEB_USER and UPS_WEB_PASS still apply when the device has no assignment. The card stays up.</p>';
     echo '</div>';
     echo '</div></div>';
     echo '<input type="hidden" name="simulate" value="0">';

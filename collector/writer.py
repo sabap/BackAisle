@@ -128,6 +128,7 @@ def is_retryable(exc: BaseException) -> bool:
         "unknown card setting",
         "enter at least one",
         "password error",
+        "web/ssh/ftp credential",
     )
     if any(h in msg for h in hard):
         return False
@@ -313,6 +314,123 @@ def web_creds(secrets: dict) -> tuple[str, str]:
     return user, pw
 
 
+WEB_CRED_PATH = Path(r"C:\ProgramData\BackAisle\web_credentials.json")
+
+
+def _schema_missing(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return (
+        "no such table" in msg
+        or "no such column" in msg
+        or "invalid column" in msg
+        or "invalid object" in msg
+    )
+
+
+def _target_device_id(target) -> int:
+    try:
+        if isinstance(target, dict):
+            return int(target.get("device_id") or 0)
+        if isinstance(target, int):
+            return target
+        return int(target["device_id"])
+    except Exception:
+        return 0
+
+
+def web_credential_password(credential_id: int) -> str:
+    """Password for one Web/SSH/FTP login. Empty when the file has none."""
+    try:
+        data = json.loads(WEB_CRED_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    rec = data.get(str(int(credential_id)))
+    if not isinstance(rec, dict):
+        return ""
+    pw = rec.get("password") or ""
+    return pw if isinstance(pw, str) else ""
+
+
+def assigned_card_login(con, device_id) -> tuple[str, str] | None:
+    """Device Web/SSH/FTP login, or None when that device has no assignment.
+
+    A missing table falls back so an older database still signs in. An
+    assignment with no password is an error, so the factory login is not
+    used by mistake.
+    """
+    did = device_id if isinstance(device_id, int) else _target_device_id(device_id)
+    if did < 1:
+        return None
+    try:
+        row = con.execute("SELECT web_credential_id FROM devices WHERE id=?", (did,)).fetchone()
+    except Exception as exc:
+        if _schema_missing(exc):
+            return None
+        raise
+    raw = None
+    if isinstance(row, dict):
+        raw = row.get("web_credential_id")
+    elif row is not None:
+        try:
+            raw = row["web_credential_id"]
+        except Exception:
+            raw = None
+    try:
+        cid = int(raw or 0)
+    except (TypeError, ValueError):
+        cid = 0
+    if cid < 1:
+        return None
+    try:
+        cred = con.execute("SELECT username FROM web_credentials WHERE id=?", (cid,)).fetchone()
+    except Exception as exc:
+        if _schema_missing(exc):
+            return None
+        raise
+    user = ""
+    if isinstance(cred, dict):
+        user = str(cred.get("username") or "").strip()
+    elif cred is not None:
+        try:
+            user = str(cred["username"] or "").strip()
+        except Exception:
+            user = ""
+    pw = web_credential_password(cid)
+    if not user or not pw:
+        raise RuntimeError("Web/SSH/FTP credential has no password")
+    return user, pw
+
+
+def target_card_login(con, device_id, secrets: dict, profile=None, profile_secret=None) -> tuple[str, str]:
+    """SSH, web, and FTP login for one device.
+
+    The assigned Web/SSH/FTP credential wins. Otherwise an SNMPv3 profile
+    web login is used the way a config restore already used it, then the
+    site UPS_WEB_* pair, then the factory pair. The SNMPv3 username is
+    not read here.
+    """
+    assigned = assigned_card_login(con, device_id)
+    if assigned:
+        return assigned
+    if profile is not None:
+        du, dp = web_creds(secrets)
+        sec = profile_secret if isinstance(profile_secret, dict) else {}
+        web_user = ""
+        if isinstance(profile, dict):
+            web_user = str(profile.get("web_user") or "")
+        else:
+            try:
+                web_user = str(profile["web_user"] or "")
+            except Exception:
+                web_user = ""
+        wu = web_user.strip() or sec.get("web_user") or du
+        wp = sec.get("web_pass") or dp
+        return str(wu), "" if wp is None else str(wp)
+    return web_creds(secrets)
+
+
 def snmp_creds(secrets: dict) -> tuple[str, str, str]:
     return secrets["SNMPV3_USER"], secrets["SNMPV3_AUTH_PASS"], secrets["SNMPV3_PRIV_PASS"]
 
@@ -386,7 +504,8 @@ def run_pull(con, job: dict, secrets: dict) -> None:
     tgt = con.execute("SELECT id FROM write_job_targets WHERE job_id=?", (job["id"],)).fetchone()
     tid = tgt["id"]
     step(con, tid, 1, "pull_config", "running", f"from {ip}")
-    data, name = pull_config_bytes(ip, secrets)
+    user, pw = target_card_login(con, device_id, secrets)
+    data, name = pull_config_bytes(ip, secrets, user, pw)
     text = data.decode("latin1", "replace")
     if not looks_like_rmcard_config(text):
         raise RuntimeError("file does not look like an RMCARD text config")
@@ -414,10 +533,10 @@ def run_push_config(con, job: dict, secrets: dict) -> None:
     overlays = payload.get("overlays") or {}
     simulate = job_is_simulate(job)
     targets = con.execute("SELECT * FROM write_job_targets WHERE job_id=? ORDER BY id", (job["id"],)).fetchall()
-    user, pw = web_creds(secrets)
 
     def one(con, t) -> None:
         assert_lab_only(t["ip"], secrets)
+        user, pw = target_card_login(con, t, secrets)
         tid = t["id"]
         ident_map = (payload.get("identity_maps") or {}).get(str(t["device_id"])) or {}
         rewritten = doc.rewrite(overlays, strip_identity=True, identity_map=ident_map)
@@ -508,7 +627,6 @@ def run_firmware(con, job: dict, secrets: dict) -> None:
     if not re.match(r"cpsrm2scdata_.*\.bin$", data_path.name, re.I):
         raise RuntimeError(f"data file must be cpsrm2scdata_XXX.bin, got {data_path.name}")
     simulate = job_is_simulate(job)
-    user, pw = web_creds(secrets)
     u, a, p = snmp_creds(secrets)
     targets = con.execute("SELECT * FROM write_job_targets WHERE job_id=? ORDER BY id", (job["id"],)).fetchall()
     for t in targets:
@@ -517,6 +635,7 @@ def run_firmware(con, job: dict, secrets: dict) -> None:
         con.execute("UPDATE write_job_targets SET status='running', started_at=? WHERE id=?", (now(), tid))
         con.commit()
         try:
+            user, pw = target_card_login(con, t, secrets)
             step(con, tid, 1, "read_firmware", "running", "")
             current = asyncio.run(snmp_get_one(t["ip"], u, a, p, (1, 3, 6, 1, 4, 1, 3808, 1, 1, 1, 1, 2, 4, 0)))
             if not current:
@@ -562,6 +681,8 @@ def run_provision(con, job: dict, secrets: dict) -> None:
     device = con.execute("SELECT * FROM devices WHERE id=?", (payload["device_id"],)).fetchone()
     tgt = con.execute("SELECT id FROM write_job_targets WHERE job_id=?", (job["id"],)).fetchone()
     tid = tgt["id"]
+    # A new card is still at the factory login in the payload. The assigned
+    # Web/SSH/FTP credential is for jobs after that first connection.
     web_user = payload.get("web_user") or RMCARD_FACTORY_USER
     web_pass = payload.get("web_pass") or RMCARD_FACTORY_PASS
     step(con, tid, 1, "web_login", "running", web_user)
@@ -597,12 +718,12 @@ def run_push_cert(con, job: dict, secrets: dict) -> None:
         raise RuntimeError("cert missing")
     simulate = job_is_simulate(job)
     targets = con.execute("SELECT * FROM write_job_targets WHERE job_id=? ORDER BY id", (job["id"],)).fetchall()
-    user, pw = web_creds(secrets)
     for t in targets:
         tid = t["id"]
         con.execute("UPDATE write_job_targets SET status='running', started_at=? WHERE id=?", (now(), tid))
         con.commit()
         try:
+            user, pw = target_card_login(con, t, secrets)
             step(con, tid, 1, "push_cert", "running", cert["name"])
             if simulate:
                 step(con, tid, 1, "push_cert", "ok", f"SIMULATE upload {cert['cert_path']} to {t['ip']} RMCARD SSL")
@@ -651,15 +772,13 @@ def run_push_snmpv3(con, job: dict, secrets: dict) -> None:
     acl_mode = (payload.get("acl_mode") or "keep").strip().lower()
     nms_ip = (payload.get("nms_ip") or "").strip()
     simulate = job_is_simulate(job)
-    du, dp = web_creds(secrets)
-    wu = (str(prof["web_user"] or "").strip() or sec.get("web_user") or du)
-    wp = sec.get("web_pass") or dp
     targets = con.execute("SELECT * FROM write_job_targets WHERE job_id=? ORDER BY id", (job["id"],)).fetchall()
 
     def one(con, t) -> None:
         tid = t["id"]
         sess = None
         try:
+            wu, wp = target_card_login(con, t, secrets, prof, sec)
             step(con, tid, 1, "pull_config", "running", f"{t['ip']} writer={writer_version()}")
             sess = RmcardSession(t["ip"], wu, wp)
             try:
@@ -785,15 +904,13 @@ def run_push_traps(con, job: dict, secrets: dict) -> None:
     receiver_name = (payload.get("receiver_name") or "BackAisle").strip() or "BackAisle"
     dest_arg = (payload.get("dest_ip") or "").strip()
     simulate = job_is_simulate(job)
-    du, dp = web_creds(secrets)
-    wu = (str(prof["web_user"] or "").strip() or sec.get("web_user") or du)
-    wp = sec.get("web_pass") or dp
     targets = con.execute("SELECT * FROM write_job_targets WHERE job_id=? ORDER BY id", (job["id"],)).fetchall()
 
     def one(con, t) -> None:
         tid = t["id"]
         sess = None
         try:
+            wu, wp = target_card_login(con, t, secrets, prof, sec)
             dest = dest_arg or local_ip_toward(t["ip"])
             step(con, tid, 1, "pull_config", "running", f"{t['ip']} writer={writer_version()}")
             sess = RmcardSession(t["ip"], wu, wp)
@@ -944,10 +1061,7 @@ def run_card_settings(con, job: dict, secrets: dict) -> None:
             commands = build_card_commands(str(payload.get("recipe") or ""), payload.get("fields") or {})
         except ValueError as exc:
             raise RuntimeError(str(exc)) from exc
-        user, password = web_creds(secrets)
-        hidden = _card_secrets(payload, password)
         simulate = job_is_simulate(job)
-        preview = redact_card_text(" | ".join(commands), hidden)
         targets = con.execute(
             "SELECT * FROM write_job_targets WHERE job_id=? ORDER BY id",
             (job["id"],),
@@ -955,6 +1069,9 @@ def run_card_settings(con, job: dict, secrets: dict) -> None:
 
         def one(con, t: dict) -> None:
             tid = int(t["id"])
+            user, password = target_card_login(con, t, secrets)
+            hidden = _card_secrets(payload, password)
+            preview = redact_card_text(" | ".join(commands), hidden)
             if simulate:
                 step(con, tid, 1, "cli", "ok", "SIMULATE " + preview[:1800])
                 con.execute(
@@ -967,7 +1084,7 @@ def run_card_settings(con, job: dict, secrets: dict) -> None:
 
             try:
                 with RmcardCli(str(t["ip"]), user, password) as cli:
-                    step(con, tid, 1, "ssh", "ok", str(t.get("ip") or ""))
+                    step(con, tid, 1, "ssh", "ok", user + "@" + str(t.get("ip") or ""))
                     for seq, command in enumerate(commands, start=2):
                         text = cli.run(command)
                         step(con, tid, seq, "cli", "ok", _card_detail(command, text, hidden))

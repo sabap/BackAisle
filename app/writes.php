@@ -378,7 +378,7 @@ function page_job_view(PDO $db): void {
         if ($isCard) {
             echo '<p class="muted">Writer is still working. This page reloads every 4 seconds. Card settings go over SSH and the card stays up. Status here is the result.</p>';
             if ($cardRecipe === 'account') {
-                echo '<p class="muted">A login password is not shown here. Changing the administrator means the next card setting needs the new UPS_WEB_USER and UPS_WEB_PASS.</p>';
+                echo '<p class="muted">A login password is not shown here. After an administrator change, assign the new Web/SSH/FTP login to the device. UPS_WEB_USER and UPS_WEB_PASS still apply when the device has no assignment.</p>';
             }
         } else {
             echo '<p class="muted">Writer is still working. This page reloads every 4 seconds. There is no extra toast when it finishes — status here is the result (ok / fail per UPS, slot choice in the step detail).</p>';
@@ -397,7 +397,7 @@ function page_job_view(PDO $db): void {
     } elseif ($isCard) {
         echo '<p class="muted">Job finished. Each card and the commands sent are in the tables below.</p>';
         if ($cardRecipe === 'account') {
-            echo '<p class="muted">A login password is not shown here. Changing the administrator means the next card setting needs the new UPS_WEB_USER and UPS_WEB_PASS.</p>';
+            echo '<p class="muted">A login password is not shown here. After an administrator change, assign the new Web/SSH/FTP login to the device. UPS_WEB_USER and UPS_WEB_PASS still apply when the device has no assignment.</p>';
         }
     } else {
         echo '<p class="muted">Job finished. Per-UPS result and SNMPv3 slot notes are in the tables below.</p>';
