@@ -5,7 +5,10 @@ import re
 
 RECIPES = ("identity", "utility", "restore", "sensor", "account")
 
-_TEXT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 .,_/#()+\-]*$")
+_TEXT_BODY = r"[A-Za-z0-9][A-Za-z0-9 .,_/#()+\-]*"
+_TEXT = re.compile(r"^" + _TEXT_BODY + r"$")
+# A space is a second argument on the card. Quotes keep the text as one argument.
+_ARG = r'(?:"' + _TEXT_BODY + r'"|' + _TEXT_BODY + r")"
 # A sys show reply is kept this long so Name, Location, and Contact are not cut off.
 IDENTITY_SHOW_LIMIT = 1200
 _DELAYS = (0, 60, 120, 180, 300, 600, 1200, 1800, 3600)
@@ -24,7 +27,7 @@ _PASSWD_LINE = re.compile(r"^((?:admin|device) passwd )\S+$")
 
 _LINE = re.compile(
     r"^(?:"
-    r"sys (?:name|location|contact) [A-Za-z0-9][A-Za-z0-9 .,_/#()+\-]*"
+    r"sys (?:name|location|contact) " + _ARG + r""
     r"|sys show"
     r"|upscfg sen (?:high|medium|low)"
     r"|upscfg (?:hvlimit|lvlimit|outpwr) \d+"
@@ -32,10 +35,10 @@ _LINE = re.compile(
     r"|upscfg rechargecap (?:0|15|30|45|60|75|90)"
     r"|upscfg returndelay \d+"
     r"|upscfg show"
-    r"|envcfg index [1-8] (?:name|location) [A-Za-z0-9][A-Za-z0-9 .,_/#()+\-]*"
+    r"|envcfg index [1-8] (?:name|location) " + _ARG + r""
     r"|envcfg index [1-8] (?:temphthres|templthres|humhthres|humlthres) -?\d+"
     r"|envcfg show"
-    r"|(?:admin|device) name [A-Za-z0-9][A-Za-z0-9 .,_/#()+\-]*"
+    r"|(?:admin|device) name " + _ARG + r""
     r"|(?:admin|device) passwd [A-Za-z0-9][A-Za-z0-9.,_/#()+=!@%-]{3,62}"
     r"|device access (?:enable|disable)"
     r"|(?:admin|device) show"
@@ -48,6 +51,21 @@ def _text(value, limit: int, label: str) -> str:
     if not text or len(text) > limit or not _TEXT.match(text):
         raise ValueError(label + " can use letters, numbers, spaces, and . , _ - / # ( ) +")
     return text
+
+
+def _arg(value, limit: int, label: str) -> str:
+    """One command-line argument. A space is quoted so the card does not see a second word."""
+    text = _text(value, limit, label)
+    if " " in text:
+        return '"' + text + '"'
+    return text
+
+
+def _unwrap(value: str) -> str:
+    raw = str(value or "").strip()
+    if len(raw) >= 2 and raw.startswith('"') and raw.endswith('"'):
+        return raw[1:-1]
+    return raw
 
 
 def _whole(value, lo: int, hi: int, label: str) -> int:
@@ -131,11 +149,11 @@ def build_card_commands(recipe: str, fields: dict) -> list[str]:
     lines: list[str] = []
     if recipe == "identity":
         if "name" in clean:
-            lines.append("sys name " + _text(clean["name"], 63, "Name"))
+            lines.append("sys name " + _arg(clean["name"], 63, "Name"))
         if "location" in clean:
-            lines.append("sys location " + _text(clean["location"], 127, "Location"))
+            lines.append("sys location " + _arg(clean["location"], 127, "Location"))
         if "contact" in clean:
-            lines.append("sys contact " + _text(clean["contact"], 63, "Contact"))
+            lines.append("sys contact " + _arg(clean["contact"], 63, "Contact"))
         lines.append("sys show")
     elif recipe == "utility":
         if "sensitivity" in clean:
@@ -167,9 +185,9 @@ def build_card_commands(recipe: str, fields: dict) -> list[str]:
     elif recipe == "sensor":
         index = _whole(clean.get("index", 1), 1, 8, "Sensor")
         if "name" in clean:
-            lines.append("envcfg index " + str(index) + " name " + _text(clean["name"], 63, "Sensor name"))
+            lines.append("envcfg index " + str(index) + " name " + _arg(clean["name"], 63, "Sensor name"))
         if "location" in clean:
-            lines.append("envcfg index " + str(index) + " location " + _text(clean["location"], 63, "Sensor location"))
+            lines.append("envcfg index " + str(index) + " location " + _arg(clean["location"], 63, "Sensor location"))
         if "temp_high" in clean:
             lines.append("envcfg index " + str(index) + " temphthres " + str(_whole(clean["temp_high"], -40, 250, "High temperature")))
         if "temp_low" in clean:
@@ -197,7 +215,7 @@ def build_card_commands(recipe: str, fields: dict) -> list[str]:
                 raise ValueError("Viewer access must be enable or disable")
             lines.append("device access " + access)
         if "name" in clean:
-            lines.append(role + " name " + _text(clean["name"], limit, who + " name"))
+            lines.append(role + " name " + _arg(clean["name"], limit, who + " name"))
         if "password" in clean:
             lines.append(role + " passwd " + _secret(clean["password"], limit, who + " password"))
         lines.append(role + " show")
@@ -332,14 +350,36 @@ def identity_restore_commands(before: dict, after: dict, sent: set) -> list:
             continue
         if _blankish(old):
             raise ValueError(key + " was empty and the card wrote a value; a blank is not sent back")
-        written = _text(old, _IDENTITY_LIMIT[key], key.title())
-        if _blankish(written):
+        written = _arg(old, _IDENTITY_LIMIT[key], key.title())
+        if _blankish(_unwrap(written)):
             raise ValueError(key + " is not written back as a blank")
         line = "sys " + key + " " + written
         if not _LINE.match(line):
             raise ValueError("refusing command")
         lines.append(line)
     return lines
+
+
+def identity_typed_values(commands) -> dict:
+    """The name, location, and contact a command list actually sends."""
+    found = {}
+    for line in commands or []:
+        text = str(line)
+        for key in ("name", "location", "contact"):
+            prefix = "sys " + key + " "
+            if text.startswith(prefix):
+                found[key] = _unwrap(text[len(prefix):])
+    return found
+
+
+def identity_saved(after: dict, commands) -> None:
+    """The read-back has to match the typed text, not a quoted or shortened copy."""
+    for key, want in identity_typed_values(commands).items():
+        got = ""
+        if isinstance(after, dict) and after.get(key) is not None:
+            got = str(after.get(key)).strip()
+        if got != want:
+            raise ValueError(key + " was not saved as typed")
 
 
 def identity_still_kept(before: dict, final: dict, sent: set) -> None:

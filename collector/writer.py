@@ -50,6 +50,7 @@ from card_commands import (  # noqa: E402
     identity_kept_note,
     identity_readable,
     identity_restore_commands,
+    identity_saved,
     identity_still_kept,
     parse_identity_show,
     redact_card_text,
@@ -1107,6 +1108,10 @@ def _apply_identity(cli, con, tid, commands, fields, hidden) -> None:
         step(con, tid, seq, "cli", "ok", _card_detail(command, text, hidden))
         seq += 1
     after = _read_identity(cli)
+    try:
+        identity_saved(after, commands)
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from None
     sent = identity_fields_sent(commands)
     try:
         restores = identity_restore_commands(before, after, sent)
