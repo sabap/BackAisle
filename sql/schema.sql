@@ -112,8 +112,12 @@ CREATE TABLE events (
   severity NVARCHAR(16) NOT NULL,
   code NVARCHAR(64) NOT NULL,
   message NVARCHAR(MAX) NOT NULL,
-  details NVARCHAR(MAX) NULL
+  details NVARCHAR(MAX) NULL,
+  source NVARCHAR(16) NULL
 );
+GO
+IF COL_LENGTH('events', 'source') IS NULL
+ALTER TABLE events ADD source NVARCHAR(16) NULL;
 GO
 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'thresholds')
 CREATE TABLE thresholds (

@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.5.81] - 2026-10-19
+
+- Power events has a Source column. Trap means the card sent an SNMP trap. Poll means the collector read the card. A dash is an older row saved before this column.
+- Restart the collector if it is already running, including a trap-only listener, so new events are labeled. The writer does not need a restart.
+
 ## [0.5.80] - 2026-10-16
 
 - Card settings sends a name, location, or contact that contains a space as one argument. A job that showed "reset : Reset or reboot Remote Management Card" had signed in and read the card. That line is the card's command help after it rejected the contact. The card was not reset.

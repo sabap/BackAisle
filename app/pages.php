@@ -721,14 +721,50 @@ function page_alerts(PDO $db, array $user): void {
     ba_layout_end();
 }
 
+function ba_event_source_label(array $row): string {
+    $source = strtolower(trim((string)($row['source'] ?? '')));
+    if ($source === 'trap') {
+        return 'Trap';
+    }
+    if ($source === 'poll') {
+        return 'Poll';
+    }
+    $code = (string)($row['code'] ?? '');
+    if ($code === 'snmp_trap') {
+        return 'Trap';
+    }
+    if ($code === 'poll_timeout' || $code === 'poll_fail') {
+        return 'Poll';
+    }
+    return '';
+}
+
+function ba_ensure_event_source(PDO $db): void {
+    if (ba_db_driver() === 'sqlsrv') {
+        ba_ensure_column($db, 'events', 'source', 'NVARCHAR(16) NULL');
+    } else {
+        ba_ensure_column($db, 'events', 'source', 'TEXT');
+    }
+}
+
 function page_events(PDO $db): void {
+    ba_ensure_event_source($db);
     $st = $db->query("SELECT e.*, d.hostname, d.idf_closet FROM events e LEFT JOIN devices d ON d.id=e.device_id ORDER BY e.id DESC LIMIT 300");
     ba_layout_start('Power events', 'events');
     echo '<h1>Power events</h1>';
+    echo '<p class="muted">Source is Trap when the card sent a trap, and Poll when the collector read the card. A dash is an older row saved before this column.</p>';
     ba_card_open('Recent events');
-    echo '<table><thead><tr><th>Time</th><th>Closet</th><th>Sev</th><th>Code</th><th>Message</th></tr></thead><tbody>';
+    echo '<table><thead><tr><th>Time</th><th>Closet</th><th>Sev</th><th>Source</th><th>Code</th><th>Message</th></tr></thead><tbody>';
     foreach ($st as $r) {
-        echo '<tr><td>'.h($r['ts']).'</td><td>'.h($r['idf_closet'] ?: '—').'</td><td>'.h($r['severity']).'</td><td>'.h($r['code']).'</td><td>'.h($r['message']).'</td></tr>';
+        $origin = ba_event_source_label($r);
+        $originClass = $origin === 'Trap' ? 'batt' : 'ok';
+        echo '<tr><td>'.h($r['ts']).'</td><td>'.h($r['idf_closet'] ?: '—').'</td><td>'.h($r['severity']).'</td><td>';
+        if ($origin === '') {
+            echo '—';
+        } else {
+            echo '<span class="pill '.$originClass.'">'.h($origin).'</span>';
+        }
+        echo '</td><td>'.h($r['code']).'</td><td>'.h($r['message']).'</td></tr>';
     }
     echo '</tbody></table>';
     ba_card_close();

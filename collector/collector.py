@@ -204,14 +204,18 @@ def thresholds_for(con, device: dict) -> dict:
     return out
 
 
-def emit_event(con, device_id, severity, code, message, details=None):
+def _event_source(source: str) -> str:
+    return "trap" if source == "trap" else "poll"
+
+
+def emit_event(con, device_id, severity, code, message, details=None, source="poll"):
     con.execute(
-        "INSERT INTO events (device_id, ts, severity, code, message, details) VALUES (?,?,?,?,?,?)",
-        (device_id, now(), severity, code, message, details),
+        "INSERT INTO events (device_id, ts, severity, code, message, details, source) VALUES (?,?,?,?,?,?,?)",
+        (device_id, now(), severity, code, message, details, _event_source(source)),
     )
 
 
-def set_alert(con, device_id, code, severity, message) -> bool:
+def set_alert(con, device_id, code, severity, message, source="poll") -> bool:
     open_row = con.execute(
         "SELECT id FROM alerts WHERE device_id=? AND code=? AND status='open'",
         (device_id, code),
@@ -224,11 +228,11 @@ def set_alert(con, device_id, code, severity, message) -> bool:
            VALUES (?,?,?,'open',?,?)""",
         (device_id, code, severity, message, now()),
     )
-    emit_event(con, device_id, severity, code, message)
+    emit_event(con, device_id, severity, code, message, source=source)
     return True
 
 
-def clear_alert(con, device_id, code) -> bool:
+def clear_alert(con, device_id, code, source="poll") -> bool:
     open_row = con.execute(
         "SELECT id FROM alerts WHERE device_id=? AND code=? AND status='open'",
         (device_id, code),
@@ -240,7 +244,7 @@ def clear_alert(con, device_id, code) -> bool:
         (now(), open_row["id"]),
     )
     con.execute("DELETE FROM pending_alerts WHERE device_id=? AND code=?", (device_id, code))
-    emit_event(con, device_id, "info", code + ".cleared", f"{code} cleared")
+    emit_event(con, device_id, "info", code + ".cleared", f"{code} cleared", source=source)
     return True
 
 
@@ -1216,19 +1220,26 @@ def _apply_trap(ip: str, trap_oid: str, info: str) -> None:
             _touch_last_trap(con, device_id)
         if device_id > 0 and enabled and action:
             if action["clear"]:
-                cleared = clear_alert(con, device_id, action["code"])
+                cleared = clear_alert(con, device_id, action["code"], source="trap")
                 for extra in action["extra"]:
-                    if clear_alert(con, device_id, extra):
+                    if clear_alert(con, device_id, extra, source="trap"):
                         cleared = True
-                emit_event(con, device_id, "info", "snmp_trap", summary)
+                emit_event(con, device_id, "info", "snmp_trap", summary, source="trap")
                 notify = cleared
-            elif set_alert(con, device_id, action["code"], severity, summary):
+            elif set_alert(con, device_id, action["code"], severity, summary, source="trap"):
                 insert_pending_alert(con, device_id, action["code"], now())
                 notify = True
             else:
-                emit_event(con, device_id, severity, "snmp_trap", summary)
+                emit_event(con, device_id, severity, "snmp_trap", summary, source="trap")
         else:
-            emit_event(con, device_id or None, severity, "snmp_trap", summary if device_id else f"{summary} from {ip}")
+            emit_event(
+                con,
+                device_id or None,
+                severity,
+                "snmp_trap",
+                summary if device_id else f"{summary} from {ip}",
+                source="trap",
+            )
         con.commit()
     finally:
         con.close()

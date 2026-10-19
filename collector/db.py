@@ -129,7 +129,8 @@ CREATE TABLE IF NOT EXISTS events (
   severity TEXT NOT NULL,
   code TEXT NOT NULL,
   message TEXT NOT NULL,
-  details TEXT
+  details TEXT,
+  source TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_events_ts ON events(ts);
 CREATE TABLE IF NOT EXISTS thresholds (
@@ -644,6 +645,9 @@ def init_db(con=None):
             "IF COL_LENGTH('samples_hourly','power_avg') IS NULL ALTER TABLE samples_hourly ADD power_avg FLOAT NULL",
             "IF OBJECT_ID('dbo.web_credentials','U') IS NULL CREATE TABLE web_credentials (id INT IDENTITY(1,1) PRIMARY KEY, name NVARCHAR(128) NOT NULL, username NVARCHAR(128) NOT NULL, notes NVARCHAR(MAX) NULL)",
             "IF COL_LENGTH('devices','web_credential_id') IS NULL ALTER TABLE devices ADD web_credential_id INT NULL",
+            "IF COL_LENGTH('events','source') IS NULL ALTER TABLE events ADD source NVARCHAR(16) NULL",
+            "UPDATE events SET source='trap' WHERE source IS NULL AND code='snmp_trap'",
+            "UPDATE events SET source='poll' WHERE source IS NULL AND code IN ('poll_timeout','poll_fail')",
         ):
             try:
                 con.execute(stmt)
@@ -667,6 +671,9 @@ def init_db(con=None):
     _add_col(con, "devices", "template_id", "INTEGER")
     _add_col(con, "samples", "power_w", "REAL")
     _add_col(con, "samples_hourly", "power_avg", "REAL")
+    _add_col(con, "events", "source", "TEXT")
+    con.execute("UPDATE events SET source='trap' WHERE source IS NULL AND code='snmp_trap'")
+    con.execute("UPDATE events SET source='poll' WHERE source IS NULL AND code IN ('poll_timeout','poll_fail')")
     _add_col(con, "users", "source", "TEXT NOT NULL DEFAULT 'local'")
     _add_col(con, "users", "display_name", "TEXT")
     _add_col(con, "config_templates", "is_default", "INTEGER NOT NULL DEFAULT 0")
