@@ -112,13 +112,17 @@ function ba_idf_summaries(PDO $db): array {
         }
         $bump($by[$key], $r);
     }
-    foreach ($db->query('SELECT group_id, COUNT(*) n FROM racks GROUP BY group_id') as $rk) {
+    $rackCounts = $db->query(
+        'SELECT r.group_id, COUNT(*) AS n, MAX(g.name) AS name
+         FROM racks r
+         LEFT JOIN groups g ON g.id = r.group_id
+         GROUP BY r.group_id'
+    )->fetchAll();
+    foreach ($rackCounts as $rk) {
         $gid = (int)$rk['group_id'];
         $key = 'g'.$gid;
         if (!isset($by[$key])) {
-            $g = $db->prepare('SELECT name FROM groups WHERE id=?');
-            $g->execute([$gid]);
-            $name = (string)($g->fetchColumn() ?: 'Closet');
+            $name = (string)($rk['name'] ?: 'Closet');
             $by[$key] = $blank($gid, $name, '', $name);
         }
         $by[$key]['racks'] = (int)$rk['n'];
