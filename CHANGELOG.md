@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.5.82] - 2026-10-19
+
+- Adding a rack to a closet with no UPS left the IDFs page showing a SQL Server connection error, and the dashboard stopped listing closets. The closet name is now read with the rack list, instead of in a second query while that list is still open.
+- The collector does not need a restart.
+
 ## [0.5.81] - 2026-10-19
 
 - Power events has a Source column. Trap means the card sent an SNMP trap. Poll means the collector read the card. A dash is an older row saved before this column.
