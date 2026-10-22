@@ -906,6 +906,149 @@ function ba_notify_wmi_numbers(): array
     }
 }
 
+function ba_host_bytes(float $bytes): string
+{
+    if ($bytes >= 1099511627776) {
+        return number_format($bytes / 1099511627776, 1) . ' TB';
+    }
+    if ($bytes >= 1073741824) {
+        return number_format($bytes / 1073741824, 1) . ' GB';
+    }
+    if ($bytes >= 1048576) {
+        return number_format($bytes / 1048576, 0) . ' MB';
+    }
+    return number_format(max(0, $bytes) / 1024, 0) . ' KB';
+}
+
+function ba_host_age(int $seconds): string
+{
+    if ($seconds < 0) {
+        $seconds = 0;
+    }
+    $days = intdiv($seconds, 86400);
+    $hours = intdiv($seconds % 86400, 3600);
+    $mins = intdiv($seconds % 3600, 60);
+    if ($days > 0) {
+        return $days . 'd ' . $hours . 'h';
+    }
+    if ($hours > 0) {
+        return $hours . 'h ' . $mins . 'm';
+    }
+    return $mins . 'm';
+}
+
+function ba_host_boot_age(string $wmiTime): ?int
+{
+    if (!preg_match('/^(\d{14})\.\d+([+-])(\d+)$/', $wmiTime, $m)) {
+        return null;
+    }
+    $boot = DateTime::createFromFormat('YmdHis', $m[1], new DateTimeZone('UTC'));
+    if (!$boot) {
+        return null;
+    }
+    $offsetMin = ($m[2] === '-' ? -1 : 1) * (int)$m[3];
+    $boot->modify((-$offsetMin) . ' minutes');
+    return time() - $boot->getTimestamp();
+}
+
+/** One reading for the Admin page. Not a live chart. */
+function ba_host_snapshot(): array
+{
+    $driver = function_exists('ba_db_driver') ? ba_db_driver() : 'sqlite';
+    $snap = [
+        'php' => PHP_VERSION,
+        'sapi' => PHP_SAPI,
+        'ini' => (string)(php_ini_loaded_file() ?: ''),
+        'php_limit' => (string)ini_get('memory_limit'),
+        'php_used' => memory_get_usage(true),
+        'host' => (string)php_uname('n'),
+        'os' => trim((string)php_uname('s') . ' ' . (string)php_uname('r')),
+        'uptime' => null,
+        'cpu_pct' => null,
+        'cpu_count' => null,
+        'mem_total' => null,
+        'mem_free' => null,
+        'disks' => [],
+        'db' => $driver === 'sqlsrv' ? 'SQL Server' : 'SQLite',
+        'app' => function_exists('ba_version') ? ba_version() : '',
+        'wmi' => false,
+        'site_drive' => '',
+    ];
+    if (defined('BA_ROOT') && preg_match('/^[A-Za-z]:/', (string)BA_ROOT, $drive)) {
+        $snap['site_drive'] = strtoupper($drive[0]);
+    }
+    if (!class_exists('COM')) {
+        ba_host_disk_fallback($snap);
+        return $snap;
+    }
+    try {
+        $wmi = new COM('winmgmts:{impersonationLevel=impersonate}//./root/cimv2');
+        $loads = [];
+        foreach ($wmi->ExecQuery('SELECT LoadPercentage FROM Win32_Processor') as $cpuRow) {
+            $loads[] = (int)$cpuRow->LoadPercentage;
+        }
+        if ($loads) {
+            $snap['cpu_count'] = count($loads);
+            $snap['cpu_pct'] = (int)round(array_sum($loads) / count($loads));
+        }
+        foreach ($wmi->ExecQuery('SELECT Caption, FreePhysicalMemory, TotalVisibleMemorySize, LastBootUpTime FROM Win32_OperatingSystem') as $os) {
+            $caption = trim((string)$os->Caption);
+            if ($caption !== '') {
+                $snap['os'] = $caption;
+            }
+            $totalKb = (float)$os->TotalVisibleMemorySize;
+            $freeKb = (float)$os->FreePhysicalMemory;
+            if ($totalKb > 0) {
+                $snap['mem_total'] = $totalKb * 1024;
+                $snap['mem_free'] = max(0, $freeKb) * 1024;
+            }
+            $snap['uptime'] = ba_host_boot_age((string)$os->LastBootUpTime);
+            break;
+        }
+        foreach ($wmi->ExecQuery('SELECT DeviceID, VolumeName, Size, FreeSpace FROM Win32_LogicalDisk WHERE DriveType=3') as $disk) {
+            $total = (float)$disk->Size;
+            $free = (float)$disk->FreeSpace;
+            if ($total <= 0) {
+                continue;
+            }
+            $snap['disks'][] = [
+                'letter' => strtoupper((string)$disk->DeviceID),
+                'label' => trim((string)$disk->VolumeName),
+                'total' => $total,
+                'free' => max(0, $free),
+            ];
+        }
+        usort($snap['disks'], static function (array $a, array $b): int {
+            return strcmp((string)$a['letter'], (string)$b['letter']);
+        });
+        $snap['wmi'] = true;
+    } catch (Throwable $e) {
+        $snap['wmi'] = false;
+    }
+    if (!$snap['disks']) {
+        ba_host_disk_fallback($snap);
+    }
+    return $snap;
+}
+
+function ba_host_disk_fallback(array &$snap): void
+{
+    if (!defined('BA_ROOT')) {
+        return;
+    }
+    $total = @disk_total_space(BA_ROOT);
+    $free = @disk_free_space(BA_ROOT);
+    if (!$total || $free === false) {
+        return;
+    }
+    $snap['disks'][] = [
+        'letter' => $snap['site_drive'] !== '' ? $snap['site_drive'] : 'Site',
+        'label' => 'Site drive',
+        'total' => (float)$total,
+        'free' => (float)$free,
+    ];
+}
+
 function ba_notify_system_problems(PDO $db): array
 {
     $out = [];

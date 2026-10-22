@@ -1647,6 +1647,61 @@ function page_admin(PDO $db, array $user): void {
     }
     ?>
     <h1>Admin</h1>
+    <?php
+      $hostSnap = ba_host_snapshot();
+      $memPct = null;
+      if ($hostSnap['mem_total']) {
+          $memPct = (1 - ((float)$hostSnap['mem_free'] / (float)$hostSnap['mem_total'])) * 100;
+      }
+      $cpuWarn = $hostSnap['cpu_pct'] !== null && (int)$hostSnap['cpu_pct'] >= 90;
+      $memWarn = $memPct !== null && $memPct >= 90;
+    ?>
+    <section class="ucard" id="server">
+      <div class="ucard-head">
+        <h3>Server</h3>
+        <span class="muted">Read when this page opened</span>
+      </div>
+      <div class="ucard-body">
+        <div class="kpis">
+          <div class="kpi"><span>PHP</span><b><?= h((string)$hostSnap['php']) ?></b></div>
+          <div class="kpi"><span>Operating system</span><b><?= h((string)$hostSnap['os']) ?></b></div>
+          <div class="kpi"><span>Computer</span><b><?= h((string)$hostSnap['host']) ?></b></div>
+          <div class="kpi <?= $cpuWarn ? 'warn' : '' ?>"><span>Processor</span><b><?= $hostSnap['cpu_pct'] === null ? 'n/a' : h((string)$hostSnap['cpu_pct'].'%') ?></b></div>
+          <div class="kpi <?= $memWarn ? 'warn' : '' ?>"><span>Memory in use</span><b><?= $memPct === null ? 'n/a' : h(number_format($memPct, 0).'%') ?></b></div>
+          <div class="kpi"><span>Up since boot</span><b><?= $hostSnap['uptime'] === null ? 'n/a' : h(ba_host_age((int)$hostSnap['uptime'])) ?></b></div>
+          <div class="kpi"><span>BackAisle</span><b><?= h((string)$hostSnap['app']) ?></b></div>
+          <div class="kpi"><span>Database</span><b><?= h((string)$hostSnap['db']) ?></b></div>
+        </div>
+        <?php if ($hostSnap['mem_total']): ?>
+          <p class="muted">Physical memory free <?= h(ba_host_bytes((float)$hostSnap['mem_free'])) ?> of <?= h(ba_host_bytes((float)$hostSnap['mem_total'])) ?><?php if ($hostSnap['cpu_count']): ?>. Processor load is the average across <?= (int)$hostSnap['cpu_count'] ?> <?= (int)$hostSnap['cpu_count'] === 1 ? 'processor' : 'processors' ?><?php endif; ?>.</p>
+        <?php elseif (!$hostSnap['wmi']): ?>
+          <p class="muted">Processor and memory were not read. Enable <code>extension=com_dotnet</code> in the site php.ini, then recycle the app pool.</p>
+        <?php endif; ?>
+        <?php if ($hostSnap['disks']): ?>
+        <table>
+          <thead><tr><th>Disk</th><th>Label</th><th>Used</th><th>Free</th><th>Size</th><th>Used %</th></tr></thead>
+          <tbody>
+          <?php foreach ($hostSnap['disks'] as $disk):
+              $used = (float)$disk['total'] - (float)$disk['free'];
+              $usedPct = $disk['total'] > 0 ? ($used / (float)$disk['total']) * 100 : 0;
+              $diskWarn = ((float)$disk['free'] / (float)$disk['total']) < 0.10 || (float)$disk['free'] < 2 * 1073741824;
+              $isSite = $hostSnap['site_drive'] !== '' && strtoupper((string)$disk['letter']) === $hostSnap['site_drive'];
+          ?>
+            <tr class="<?= $diskWarn ? 'st-warn' : '' ?>">
+              <td><?= h((string)$disk['letter']) ?><?= $isSite ? ' site' : '' ?></td>
+              <td><?= h((string)($disk['label'] !== '' ? $disk['label'] : '—')) ?></td>
+              <td><?= h(ba_host_bytes($used)) ?></td>
+              <td><?= h(ba_host_bytes((float)$disk['free'])) ?></td>
+              <td><?= h(ba_host_bytes((float)$disk['total'])) ?></td>
+              <td><?= h(number_format($usedPct, 0)) ?>%</td>
+            </tr>
+          <?php endforeach; ?>
+          </tbody>
+        </table>
+        <?php endif; ?>
+        <p class="muted">PHP process <?= h(ba_host_bytes((float)$hostSnap['php_used'])) ?> of <?= h((string)$hostSnap['php_limit']) ?> (<?= h((string)$hostSnap['sapi']) ?>).<?php if ($hostSnap['ini'] !== ''): ?> Ini <?= h((string)$hostSnap['ini']) ?>.<?php endif; ?></p>
+      </div>
+    </section>
       <form method="post" class="ucard stack">
         <div class="ucard-head"><h3>Default thresholds</h3></div>
         <div class="ucard-body">

@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.5.83] - 2026-10-22
+
+- Admin has a Server section, read when the page opens. It shows the PHP version, operating system, computer name, processor load, physical memory, time since boot, and fixed disks. The drive that holds the site is marked.
+- Processor and memory need extension=com_dotnet in the site php.ini. A new install enables that extension when the DLL is present. Recycle the app pool after adding the line to an existing php.ini. The collector and the writer do not need a restart.
+
 ## [0.5.82] - 2026-10-19
 
 - Adding a rack to a closet with no UPS left the IDFs page showing a SQL Server connection error, and the dashboard stopped listing closets. The closet name is now read with the rack list, instead of in a second query while that list is still open.
