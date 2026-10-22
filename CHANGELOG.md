@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.5.84] - 2026-10-22
+
+- Admin Server shows the Windows product name, and lists every fixed disk, even when extension=com_dotnet is off.
+- Processor load, physical memory, and time since boot still use that extension when it is on. When it is off, the page reads them from Windows. If that read is blocked, time since boot is taken from the workstation service, and processor and memory stay blank until the extension is enabled and the app pool is recycled.
+- The collector and the writer do not need a restart.
+
 ## [0.5.83] - 2026-10-22
 
 - Admin has a Server section, read when the page opens. It shows the PHP version, operating system, computer name, processor load, physical memory, time since boot, and fixed disks. The drive that holds the site is marked.

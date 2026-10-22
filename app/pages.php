@@ -1674,8 +1674,8 @@ function page_admin(PDO $db, array $user): void {
         </div>
         <?php if ($hostSnap['mem_total']): ?>
           <p class="muted">Physical memory free <?= h(ba_host_bytes((float)$hostSnap['mem_free'])) ?> of <?= h(ba_host_bytes((float)$hostSnap['mem_total'])) ?><?php if ($hostSnap['cpu_count']): ?>. Processor load is the average across <?= (int)$hostSnap['cpu_count'] ?> <?= (int)$hostSnap['cpu_count'] === 1 ? 'processor' : 'processors' ?><?php endif; ?>.</p>
-        <?php elseif (!$hostSnap['wmi']): ?>
-          <p class="muted">Processor and memory were not read. Enable <code>extension=com_dotnet</code> in the site php.ini, then recycle the app pool.</p>
+        <?php elseif ($hostSnap['cpu_pct'] === null): ?>
+          <p class="muted">Processor and memory could not be read.</p>
         <?php endif; ?>
         <?php if ($hostSnap['disks']): ?>
         <table>
