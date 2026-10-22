@@ -951,6 +951,285 @@ function ba_host_boot_age(string $wmiTime): ?int
     return time() - $boot->getTimestamp();
 }
 
+function ba_host_os_is_generic(string $os): bool
+{
+    return preg_match('/^Windows NT\b/i', $os) === 1;
+}
+
+/** Run a command and stop it if it is still going. A hung read must not sit until FastCGI gives up. */
+function ba_host_exec(array $cmd, int $timeoutSec): ?string
+{
+    if (!function_exists('proc_open') || $timeoutSec < 1) {
+        return null;
+    }
+    $dir = sys_get_temp_dir();
+    if (defined('BA_ROOT')) {
+        $alt = BA_ROOT . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'tmp';
+        if (is_dir($alt) && is_writable($alt)) {
+            $dir = $alt;
+        }
+    }
+    $tmp = $dir . DIRECTORY_SEPARATOR . 'ba-host-' . bin2hex(random_bytes(4)) . '.out';
+    $desc = [0 => ['pipe', 'r'], 1 => ['file', $tmp, 'w'], 2 => ['file', 'NUL', 'a']];
+    $proc = @proc_open($cmd, $desc, $pipes, null, null, ['bypass_shell' => true]);
+    if (!is_resource($proc)) {
+        @unlink($tmp);
+        return null;
+    }
+    fclose($pipes[0]);
+    $deadline = microtime(true) + $timeoutSec;
+    $running = true;
+    while (microtime(true) < $deadline) {
+        $status = proc_get_status($proc);
+        $running = !empty($status['running']);
+        if (!$running) {
+            break;
+        }
+        usleep(50000);
+    }
+    if ($running) {
+        @proc_terminate($proc);
+        $killDeadline = microtime(true) + 2;
+        while (microtime(true) < $killDeadline) {
+            $status = proc_get_status($proc);
+            if (empty($status['running'])) {
+                $running = false;
+                break;
+            }
+            usleep(50000);
+        }
+    }
+    proc_get_status($proc);
+    proc_close($proc);
+    $stdout = is_file($tmp) ? (string)file_get_contents($tmp) : '';
+    @unlink($tmp);
+    if (strlen($stdout) > 262144) {
+        $stdout = substr($stdout, 0, 262144);
+    }
+    $stdout = str_replace("\0", '', $stdout);
+    return trim($stdout) === '' ? null : $stdout;
+}
+
+function ba_host_product_name(): ?string
+{
+    $root = getenv('SystemRoot');
+    if (!is_string($root) || $root === '') {
+        $root = 'C:\\Windows';
+    }
+    $exe = $root . '\\System32\\reg.exe';
+    if (!is_file($exe)) {
+        return null;
+    }
+    $out = ba_host_exec([
+        $exe,
+        'query',
+        'HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion',
+        '/v',
+        'ProductName',
+    ], 4);
+    if ($out === null || !preg_match('/ProductName\s+REG_\w+\s+(\S.*)$/m', $out, $m)) {
+        return null;
+    }
+    $name = trim($m[1]);
+    return $name !== '' ? $name : null;
+}
+
+function ba_host_ps_encode(string $script): string
+{
+    $wide = '';
+    $n = strlen($script);
+    for ($i = 0; $i < $n; $i++) {
+        $wide .= $script[$i] . "\0";
+    }
+    return base64_encode($wide);
+}
+
+function ba_host_apply_disk_rows(array &$snap, mixed $rows): void
+{
+    if (!is_array($rows)) {
+        return;
+    }
+    if (isset($rows['letter']) || isset($rows['total'])) {
+        $rows = [$rows];
+    }
+    foreach ($rows as $disk) {
+        if (!is_array($disk)) {
+            continue;
+        }
+        $total = (float)($disk['total'] ?? 0);
+        if ($total <= 0) {
+            continue;
+        }
+        $snap['disks'][] = [
+            'letter' => strtoupper(trim((string)($disk['letter'] ?? ''))),
+            'label' => trim((string)($disk['label'] ?? '')),
+            'total' => $total,
+            'free' => max(0, (float)($disk['free'] ?? 0)),
+        ];
+    }
+    usort($snap['disks'], static function (array $a, array $b): int {
+        return strcmp((string)$a['letter'], (string)$b['letter']);
+    });
+}
+
+/** CIM reading used when com_dotnet is off or WMI left processor, memory, or uptime empty. */
+function ba_host_cim_fill(array &$snap): void
+{
+    $root = getenv('SystemRoot');
+    if (!is_string($root) || $root === '') {
+        $root = 'C:\\Windows';
+    }
+    $ps = $root . '\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
+    if (!is_file($ps)) {
+        return;
+    }
+    $script = <<<'PS'
+$ProgressPreference = "SilentlyContinue"
+$ErrorActionPreference = "Stop"
+$os = Get-CimInstance -ClassName Win32_OperatingSystem
+$loads = @()
+foreach ($p in @(Get-CimInstance -ClassName Win32_Processor)) {
+  if ($null -ne $p.LoadPercentage) { $loads += [int]$p.LoadPercentage }
+}
+$ncpu = @($loads).Count
+$cpu = $null
+if ($ncpu -gt 0) {
+  $sum = 0
+  foreach ($n in $loads) { $sum += $n }
+  $cpu = [int][math]::Round($sum / [double]$ncpu)
+}
+$boot = $null
+if ($os -and $os.LastBootUpTime) {
+  $boot = [int64]([DateTimeOffset]$os.LastBootUpTime).ToUnixTimeSeconds()
+}
+$caption = ""
+$totalKb = [int64]0
+$freeKb = [int64]0
+if ($os) {
+  $caption = [string]$os.Caption
+  if ($os.TotalVisibleMemorySize) { $totalKb = [int64]$os.TotalVisibleMemorySize }
+  if ($null -ne $os.FreePhysicalMemory) { $freeKb = [int64]$os.FreePhysicalMemory }
+}
+$disks = @()
+foreach ($d in @(Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DriveType=3")) {
+  if ($null -eq $d.Size -or [int64]$d.Size -le 0) { continue }
+  $free = [int64]0
+  if ($null -ne $d.FreeSpace) { $free = [int64]$d.FreeSpace }
+  $disks += [pscustomobject]@{ letter = [string]$d.DeviceID; label = [string]$d.VolumeName; total = [int64]$d.Size; free = $free }
+}
+$obj = [pscustomobject]@{ caption = $caption; totalKb = $totalKb; freeKb = $freeKb; boot = $boot; cpu = $cpu; ncpu = [int]$ncpu; disks = @($disks) }
+Write-Output ($obj | ConvertTo-Json -Compress -Depth 4)
+PS;
+    $out = ba_host_exec([
+        $ps,
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-EncodedCommand',
+        ba_host_ps_encode($script),
+    ], 12);
+    if ($out === null) {
+        return;
+    }
+    $start = strpos($out, '{');
+    $end = strrpos($out, '}');
+    if ($start === false || $end === false || $end <= $start) {
+        return;
+    }
+    $data = json_decode(substr($out, $start, $end - $start + 1), true);
+    if (!is_array($data)) {
+        return;
+    }
+    $caption = trim((string)($data['caption'] ?? ''));
+    if ($caption !== '') {
+        $snap['os'] = $caption;
+    }
+    if ($snap['cpu_pct'] === null && isset($data['cpu']) && is_numeric($data['cpu'])) {
+        $snap['cpu_pct'] = (int)$data['cpu'];
+        $count = (int)($data['ncpu'] ?? 0);
+        $snap['cpu_count'] = $count > 0 ? $count : null;
+    }
+    if ($snap['mem_total'] === null) {
+        $totalKb = (float)($data['totalKb'] ?? 0);
+        if ($totalKb > 0) {
+            $snap['mem_total'] = $totalKb * 1024;
+            $snap['mem_free'] = max(0, (float)($data['freeKb'] ?? 0)) * 1024;
+        }
+    }
+    if ($snap['uptime'] === null && isset($data['boot']) && is_numeric($data['boot'])) {
+        $age = time() - (int)$data['boot'];
+        if ($age >= 0 && $age < 86400 * 365 * 30) {
+            $snap['uptime'] = $age;
+        }
+    }
+    if (!$snap['disks']) {
+        ba_host_apply_disk_rows($snap, $data['disks'] ?? null);
+    }
+}
+
+/** Boot age from the workstation service start when WMI did not return a boot time. */
+function ba_host_uptime_net(array &$snap): void
+{
+    if ($snap['uptime'] !== null) {
+        return;
+    }
+    $root = getenv('SystemRoot');
+    if (!is_string($root) || $root === '') {
+        $root = 'C:\\Windows';
+    }
+    $exe = $root . '\\System32\\net.exe';
+    if (!is_file($exe)) {
+        return;
+    }
+    $out = ba_host_exec([$exe, 'statistics', 'workstation'], 4);
+    if ($out === null) {
+        return;
+    }
+    $when = null;
+    if (preg_match('/Statistics since\s+(\d{1,4}[\/.-]\d{1,2}[\/.-]\d{2,4}[^\r\n]*)/', $out, $m)) {
+        $when = trim($m[1]);
+    } elseif (preg_match('/(\d{1,4}[\/.-]\d{1,2}[\/.-]\d{2,4}\s+\d{1,2}:\d{2}:\d{2}(?:\s*[AP]M)?)/i', $out, $m)) {
+        $when = trim($m[1]);
+    }
+    if ($when === null) {
+        return;
+    }
+    $bias = ba_host_exec([
+        $root . '\\System32\\reg.exe',
+        'query',
+        'HKLM\\SYSTEM\\CurrentControlSet\\Control\\TimeZoneInformation',
+        '/v',
+        'ActiveTimeBias',
+    ], 4);
+    if ($bias === null || !preg_match('/ActiveTimeBias\s+REG_DWORD\s+(0x[0-9a-f]+|\d+)/i', $bias, $bm)) {
+        return;
+    }
+    $biasMin = stripos($bm[1], '0x') === 0 ? hexdec($bm[1]) : (int)$bm[1];
+    if ($biasMin > 0x7FFFFFFF) {
+        $biasMin -= 0x100000000;
+    }
+    $zone = new DateTimeZone('UTC');
+    $local = false;
+    foreach (['n/j/Y g:i:s A', 'n/j/Y G:i:s', 'm/d/Y h:i:s A', 'Y-m-d G:i:s', 'd/m/Y G:i:s'] as $fmt) {
+        $parsed = DateTime::createFromFormat($fmt, $when, $zone);
+        if ($parsed instanceof DateTime) {
+            $local = $parsed;
+            break;
+        }
+    }
+    if (!$local) {
+        return;
+    }
+    if ($biasMin !== 0) {
+        $local->modify(($biasMin > 0 ? '+' : '') . $biasMin . ' minutes');
+    }
+    $age = time() - $local->getTimestamp();
+    if ($age >= 0 && $age < 86400 * 365 * 30) {
+        $snap['uptime'] = $age;
+    }
+}
+
 /** One reading for the Admin page. Not a live chart. */
 function ba_host_snapshot(): array
 {
@@ -977,53 +1256,69 @@ function ba_host_snapshot(): array
     if (defined('BA_ROOT') && preg_match('/^[A-Za-z]:/', (string)BA_ROOT, $drive)) {
         $snap['site_drive'] = strtoupper($drive[0]);
     }
-    if (!class_exists('COM')) {
-        ba_host_disk_fallback($snap);
-        return $snap;
+    if (class_exists('COM')) {
+        try {
+            $wmi = new COM('winmgmts:{impersonationLevel=impersonate}//./root/cimv2');
+            $loads = [];
+            foreach ($wmi->ExecQuery('SELECT LoadPercentage FROM Win32_Processor') as $cpuRow) {
+                $loads[] = (int)$cpuRow->LoadPercentage;
+            }
+            if ($loads) {
+                $snap['cpu_count'] = count($loads);
+                $snap['cpu_pct'] = (int)round(array_sum($loads) / count($loads));
+            }
+            foreach ($wmi->ExecQuery('SELECT Caption, FreePhysicalMemory, TotalVisibleMemorySize, LastBootUpTime FROM Win32_OperatingSystem') as $os) {
+                $caption = trim((string)$os->Caption);
+                if ($caption !== '') {
+                    $snap['os'] = $caption;
+                }
+                $totalKb = (float)$os->TotalVisibleMemorySize;
+                $freeKb = (float)$os->FreePhysicalMemory;
+                if ($totalKb > 0) {
+                    $snap['mem_total'] = $totalKb * 1024;
+                    $snap['mem_free'] = max(0, $freeKb) * 1024;
+                }
+                $snap['uptime'] = ba_host_boot_age((string)$os->LastBootUpTime);
+                break;
+            }
+            foreach ($wmi->ExecQuery('SELECT DeviceID, VolumeName, Size, FreeSpace FROM Win32_LogicalDisk WHERE DriveType=3') as $disk) {
+                $total = (float)$disk->Size;
+                $free = (float)$disk->FreeSpace;
+                if ($total <= 0) {
+                    continue;
+                }
+                $snap['disks'][] = [
+                    'letter' => strtoupper((string)$disk->DeviceID),
+                    'label' => trim((string)$disk->VolumeName),
+                    'total' => $total,
+                    'free' => max(0, $free),
+                ];
+            }
+            usort($snap['disks'], static function (array $a, array $b): int {
+                return strcmp((string)$a['letter'], (string)$b['letter']);
+            });
+            $snap['wmi'] = true;
+        } catch (Throwable $e) {
+            $snap['wmi'] = false;
+        }
     }
-    try {
-        $wmi = new COM('winmgmts:{impersonationLevel=impersonate}//./root/cimv2');
-        $loads = [];
-        foreach ($wmi->ExecQuery('SELECT LoadPercentage FROM Win32_Processor') as $cpuRow) {
-            $loads[] = (int)$cpuRow->LoadPercentage;
-        }
-        if ($loads) {
-            $snap['cpu_count'] = count($loads);
-            $snap['cpu_pct'] = (int)round(array_sum($loads) / count($loads));
-        }
-        foreach ($wmi->ExecQuery('SELECT Caption, FreePhysicalMemory, TotalVisibleMemorySize, LastBootUpTime FROM Win32_OperatingSystem') as $os) {
-            $caption = trim((string)$os->Caption);
-            if ($caption !== '') {
-                $snap['os'] = $caption;
+    if ($snap['cpu_pct'] === null || $snap['mem_total'] === null || $snap['uptime'] === null) {
+        ba_host_cim_fill($snap);
+    }
+    if (ba_host_os_is_generic((string)$snap['os'])) {
+        $name = ba_host_product_name();
+        if ($name === null && preg_match('/\(([^)]+)\)/', (string)php_uname('v'), $m)) {
+            $name = trim($m[1]);
+            if ($name === '') {
+                $name = null;
             }
-            $totalKb = (float)$os->TotalVisibleMemorySize;
-            $freeKb = (float)$os->FreePhysicalMemory;
-            if ($totalKb > 0) {
-                $snap['mem_total'] = $totalKb * 1024;
-                $snap['mem_free'] = max(0, $freeKb) * 1024;
-            }
-            $snap['uptime'] = ba_host_boot_age((string)$os->LastBootUpTime);
-            break;
         }
-        foreach ($wmi->ExecQuery('SELECT DeviceID, VolumeName, Size, FreeSpace FROM Win32_LogicalDisk WHERE DriveType=3') as $disk) {
-            $total = (float)$disk->Size;
-            $free = (float)$disk->FreeSpace;
-            if ($total <= 0) {
-                continue;
-            }
-            $snap['disks'][] = [
-                'letter' => strtoupper((string)$disk->DeviceID),
-                'label' => trim((string)$disk->VolumeName),
-                'total' => $total,
-                'free' => max(0, $free),
-            ];
+        if ($name !== null) {
+            $snap['os'] = $name;
         }
-        usort($snap['disks'], static function (array $a, array $b): int {
-            return strcmp((string)$a['letter'], (string)$b['letter']);
-        });
-        $snap['wmi'] = true;
-    } catch (Throwable $e) {
-        $snap['wmi'] = false;
+    }
+    if ($snap['uptime'] === null) {
+        ba_host_uptime_net($snap);
     }
     if (!$snap['disks']) {
         ba_host_disk_fallback($snap);
@@ -1033,7 +1328,21 @@ function ba_host_snapshot(): array
 
 function ba_host_disk_fallback(array &$snap): void
 {
-    if (!defined('BA_ROOT')) {
+    for ($i = 0; $i < 24; $i++) {
+        $letter = chr(ord('C') + $i) . ':';
+        $total = @disk_total_space($letter . '\\');
+        $free = @disk_free_space($letter . '\\');
+        if (!$total || $free === false) {
+            continue;
+        }
+        $snap['disks'][] = [
+            'letter' => $letter,
+            'label' => '',
+            'total' => (float)$total,
+            'free' => max(0, (float)$free),
+        ];
+    }
+    if ($snap['disks'] || !defined('BA_ROOT')) {
         return;
     }
     $total = @disk_total_space(BA_ROOT);
