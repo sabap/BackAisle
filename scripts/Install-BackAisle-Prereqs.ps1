@@ -333,7 +333,7 @@ function Write-SitePhpIni {
         foreach ($ext in @('curl','mbstring','openssl','fileinfo','ldap','pdo_sqlite','sqlite3','pdo_odbc','zip')) {
             $c = Set-IniValue $c $ext -IsExtension
         }
-        foreach ($ext in @('pdo_sqlsrv','sqlsrv')) {
+        foreach ($ext in @('pdo_sqlsrv','sqlsrv','com_dotnet')) {
             $dll = Join-Path $PhpInstallPath "ext\php_$ext.dll"
             if (Test-Path $dll) { $c = Set-IniValue $c $ext -IsExtension }
         }
