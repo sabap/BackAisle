@@ -87,6 +87,25 @@ function ba_group_path(PDO $db, ?int $id): string {
     return implode(' / ', $parts);
 }
 
+/** @param array<int, array<string, mixed>> $byId */
+function ba_group_path_from_map(array $byId, ?int $id): string {
+    if (!$id) {
+        return '—';
+    }
+    $parts = [];
+    $guard = 0;
+    $cur = $id;
+    while ($cur && $guard++ < 20) {
+        if (!isset($byId[$cur])) {
+            break;
+        }
+        array_unshift($parts, (string)$byId[$cur]['name']);
+        $pid = $byId[$cur]['parent_id'] ?? null;
+        $cur = $pid ? (int)$pid : 0;
+    }
+    return $parts ? implode(' / ', $parts) : '—';
+}
+
 function page_org(PDO $db, array $user): void {
     ba_require_perm('edit_org');
     $tab = $_POST['tab'] ?? $_GET['tab'] ?? 'groups';
@@ -96,12 +115,32 @@ function page_org(PDO $db, array $user): void {
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $act = $_POST['act'] ?? '';
         try {
-            if ($act === 'add_group') {
-                $parent = $_POST['parent_id'] === '' ? null : (int)$_POST['parent_id'];
+            if ($act === 'add_group' || $act === 'add_idf') {
+                $name = trim((string)($_POST['name'] ?? ''));
+                if ($name === '') {
+                    throw new RuntimeException('Name is required');
+                }
+                $rawParent = trim((string)($_POST['parent_id'] ?? ''));
+                $parent = ($rawParent === '' || (int)$rawParent === 0) ? null : (int)$rawParent;
+                if ($act === 'add_idf' && $parent === null) {
+                    throw new RuntimeException('An IDF has to sit under a campus or building');
+                }
+                if ($parent !== null) {
+                    $chk = $db->prepare('SELECT id FROM groups WHERE id=?');
+                    $chk->execute([$parent]);
+                    $found = $chk->fetchAll();
+                    if (!$found) {
+                        throw new RuntimeException('Pick a location that already exists');
+                    }
+                }
+                $hold = (int)($_POST['alert_hold_sec'] ?? 180);
+                if ($hold < 0) {
+                    $hold = 0;
+                }
                 $db->prepare('INSERT INTO groups (parent_id, name, alert_hold_sec, notes) VALUES (?,?,?,?)')
-                    ->execute([$parent, trim($_POST['name']), (int)($_POST['alert_hold_sec'] ?? 180), trim($_POST['notes'] ?? '')]);
-                ba_audit($db, 'add_group', 'group', trim($_POST['name']));
-                $msg = 'Group created';
+                    ->execute([$parent, $name, $hold, trim((string)($_POST['notes'] ?? ''))]);
+                ba_audit($db, $act, 'group', $name);
+                $msg = $act === 'add_idf' ? 'IDF created' : 'Group created';
             } elseif ($act === 'save_group') {
                 $id = (int)($_POST['id'] ?? 0);
                 $name = trim((string)($_POST['name'] ?? ''));
@@ -391,11 +430,12 @@ PY);
     echo '</nav>';
 
     if ($tab === 'groups') {
-        $groupActions = '<button type="button" class="btn" data-open-modal="modal-add-group">New group</button>';
+        $groupActions = '<button type="button" class="btn" data-open-modal="modal-add-group">Add Group</button>';
+        $groupActions .= '<button type="button" class="btn" data-open-modal="modal-add-idf">Add IDF</button>';
         $groupActions .= '<button type="button" class="btn" data-open-modal="modal-move-unit">Move a unit</button>';
         $groupActions .= '<button type="button" class="btn" data-open-modal="modal-alert-hold">Alert hold</button>';
         ba_card_open('IDF tree', $groupActions, 'groups');
-        echo '<p class="muted">Campuses and buildings are the top of the tree. IDFs sit under them. The IDFs page only shows this tree. Edit a location to rename it, move it, or change how long a repeated problem waits before it alerts.</p>';
+        echo '<p class="muted">Add Group creates a campus, site, or building. Add IDF creates a closet under one of those. The IDFs page only shows this tree. Edit a location to rename it, move it, or change how long a repeated problem waits before it alerts.</p>';
         echo '<div class="org-tree">';
         $editId = (str_starts_with($msg, 'Error') && ($_POST['act'] ?? '') === 'save_group') ? (int)($_POST['id'] ?? 0) : 0;
         $walk = function ($parent) use (&$walk, $groups, $db, $editId) {
@@ -404,6 +444,7 @@ PY);
                 $n = $db->prepare('SELECT COUNT(*) FROM devices WHERE group_id=?');
                 $n->execute([$id]);
                 $units = (int)$n->fetchColumn();
+                $n->closeCursor();
                 $kids = ba_group_children($groups, $id);
                 $childCount = count($kids);
                 $meta = $units.' unit'.($units === 1 ? '' : 's');
@@ -455,7 +496,7 @@ PY);
             }
         };
         if (!$groups) {
-            echo '<p class="empty">No locations yet. Use New group to add a campus or site.</p>';
+            echo '<p class="empty">No locations yet. Add Group creates a campus or site. Add IDF puts a closet under a group.</p>';
         }
         $walk(null);
         echo '</div>';
@@ -502,20 +543,40 @@ PY);
 </script>
 JS;
         ba_card_close();
-        ba_users_modal_open('modal-add-group', 'New group / subgroup', false);
+        ba_users_modal_open('modal-add-group', 'Add Group', false);
         echo '<form method="post" class="stack">';
         echo '<label>Name</label><input name="name" required>';
         echo '<label>Parent</label><select name="parent_id"><option value="">(top level)</option>'.ba_group_options($groups).'</select>';
-        echo '<p class="muted">The location this one sits under. Top level starts a campus or site.</p>';
+        echo '<p class="muted">Top level starts a campus or site. Choose a parent to add a building under a campus.</p>';
         echo '<label>Alert hold (seconds)</label><input type="number" min="0" name="alert_hold_sec" value="180">';
         echo '<p class="muted">How long a repeated problem waits before devices here open an alert.</p>';
         echo '<input type="hidden" name="act" value="add_group"><button>Create</button></form>';
         ba_users_modal_close();
+        ba_users_modal_open('modal-add-idf', 'Add IDF', false);
+        if (!$groups) {
+            echo '<p class="muted">Add a group first. An IDF sits under a campus or building.</p>';
+        } else {
+            echo '<form method="post" class="stack">';
+            echo '<label>Name</label><input name="name" required>';
+            echo '<label>Parent</label><select name="parent_id" required>'.ba_group_options($groups).'</select>';
+            echo '<p class="muted">The campus or building this closet sits under.</p>';
+            echo '<label>Alert hold (seconds)</label><input type="number" min="0" name="alert_hold_sec" value="180">';
+            echo '<p class="muted">How long a repeated problem waits before devices here open an alert.</p>';
+            echo '<input type="hidden" name="act" value="add_idf"><button>Create</button></form>';
+        }
+        ba_users_modal_close();
         ba_users_modal_open('modal-move-unit', 'Move a unit', false, '', true);
         echo '<form method="post" class="stack">';
         echo '<label>Device</label><select name="device_id">';
-        foreach ($db->query('SELECT id, hostname, ip, group_id FROM devices ORDER BY hostname') as $d) {
-            echo '<option value="'.(int)$d['id'].'">'.h(($d['hostname']?:$d['ip']).' — '.ba_group_path($db, $d['group_id']? (int)$d['group_id']:null)).'</option>';
+        $groupById = [];
+        foreach ($groups as $g) {
+            $groupById[(int)$g['id']] = $g;
+        }
+        $deviceRows = $db->query('SELECT id, hostname, ip, group_id FROM devices ORDER BY hostname')->fetchAll() ?: [];
+        foreach ($deviceRows as $d) {
+            $gid = !empty($d['group_id']) ? (int)$d['group_id'] : null;
+            $label = ($d['hostname'] ?: $d['ip']).' — '.ba_group_path_from_map($groupById, $gid);
+            echo '<option value="'.(int)$d['id'].'">'.h($label).'</option>';
         }
         echo '</select><label>Group</label><select name="group_id"><option value="">(none)</option>'.ba_group_options($groups).'</select>';
         echo '<input type="hidden" name="act" value="move_device"><button>Move</button></form>';

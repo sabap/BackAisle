@@ -410,7 +410,7 @@ function page_idfs(PDO $db, array $user): void {
       </div>
       <div class="ucard-body loc-tree" data-loc-tree="1">
       <?php
-      if (!$sites) echo '<p class="empty">No locations yet. Add groups under Org.</p>';
+      if (!$sites) echo '<p class="empty">No locations yet. Add a group on the Org page, then add an IDF under that group.</p>';
       else ba_render_loc_tree($groups, null, $summaries, $memo, 0);
       ?>
       </div>
@@ -419,7 +419,7 @@ function page_idfs(PDO $db, array $user): void {
     if (ba_tech_mode()) {
         echo '<p class="muted">Open a closet to add a rack, then tap a U to place a device.</p>';
     } else {
-        echo '<p class="muted"><a href="'.h(ba_href('/org?tab=groups')).'">Add, move, or remove IDFs on the Org page.</a> Re-upload the PowerPanel profile there if a campus has no closets under it.</p>';
+        echo '<p class="muted"><a href="'.h(ba_href('/org?tab=groups')).'">Add a group or an IDF on the Org page.</a> Re-upload the PowerPanel profile there if a campus has no closets under it.</p>';
     }
     ba_layout_end();
 }

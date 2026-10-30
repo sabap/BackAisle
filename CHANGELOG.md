@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.5.85] - 2026-10-30
+
+- Organization, on the Groups tab, has Add Group and Add IDF. Add Group creates a campus, site, or building, and it can sit at the top. Add IDF creates a closet under a location that already exists.
+- The Move a unit list is read completely before location names are filled in, so the Groups page finishes and those buttons can open on SQL Server.
+- The collector and the writer do not need a restart.
+
 ## [0.5.84] - 2026-10-22
 
 - Admin Server shows the Windows product name, and lists every fixed disk, even when extension=com_dotnet is off.
