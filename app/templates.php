@@ -250,6 +250,41 @@ function ba_tpl_save_picture(int $id, string $field, array $file): ?string {
     return '/assets/tpl/' . $id . '/' . $name;
 }
 
+function ba_tpl_public_picture(mixed $raw): string
+{
+    $path = str_replace('\\', '/', trim((string)$raw));
+    if ($path === '' || str_contains($path, '..') || str_contains($path, "\0")) {
+        return '';
+    }
+    if (preg_match('#^/assets/tpl/[0-9]+/(front|rear)\.(jpe?g|png|webp)$#', $path) !== 1) {
+        return '';
+    }
+    return $path;
+}
+
+/** @return array{front:string,rear:string,template:string} */
+function ba_device_faces(PDO $db, array $device): array
+{
+    $empty = ['front' => '', 'rear' => '', 'template' => ''];
+    $tid = (int)ba_col($device, 'template_id', 0);
+    if ($tid < 1) {
+        return $empty;
+    }
+    $st = $db->prepare('SELECT manufacturer, model, front_picture, rear_picture FROM device_templates WHERE id=?');
+    $st->execute([$tid]);
+    $row = $st->fetch();
+    $st->closeCursor();
+    if (!$row) {
+        return $empty;
+    }
+    $label = trim(trim((string)ba_col($row, 'manufacturer', '')) . ' ' . trim((string)ba_col($row, 'model', '')));
+    return [
+        'front' => ba_tpl_public_picture(ba_col($row, 'front_picture', '')),
+        'rear' => ba_tpl_public_picture(ba_col($row, 'rear_picture', '')),
+        'template' => $label,
+    ];
+}
+
 function page_templates(PDO $db, array $user): void {
     ba_ensure_template_links($db);
     ba_ensure_template_ports($db);
