@@ -222,10 +222,14 @@ CREATE TABLE snmp_profiles (
   username NVARCHAR(128) NOT NULL,
   auth_proto NVARCHAR(16) NOT NULL DEFAULT 'SHA',
   priv_proto NVARCHAR(16) NOT NULL DEFAULT 'AES',
+  cred_style NVARCHAR(16) NOT NULL DEFAULT 'authpriv',
   web_user NVARCHAR(128) NULL,
   is_default INT NOT NULL DEFAULT 0,
   notes NVARCHAR(MAX) NULL
 );
+GO
+IF COL_LENGTH('snmp_profiles', 'cred_style') IS NULL
+  ALTER TABLE snmp_profiles ADD cred_style NVARCHAR(16) NOT NULL CONSTRAINT DF_snmp_profiles_cred_style DEFAULT 'authpriv';
 GO
 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'web_credentials')
 CREATE TABLE web_credentials (

@@ -180,42 +180,94 @@ function page_org(PDO $db, array $user): void {
                 ]);
                 ba_audit($db, 'move_device', 'device', (string)$_POST['device_id'], 'group '.($_POST['group_id'] ?? ''));
                 $msg = 'Unit moved';
-            } elseif ($act === 'add_snmp') {
-                $db->prepare('INSERT INTO snmp_profiles (name, username, auth_proto, priv_proto, web_user, notes) VALUES (?,?,?,?,?,?)')
-                    ->execute([
-                        trim($_POST['name']), trim($_POST['username']),
-                        $_POST['auth_proto'] ?? 'SHA', $_POST['priv_proto'] ?? 'AES',
-                        trim($_POST['web_user'] ?? ''), trim($_POST['notes'] ?? ''),
-                    ]);
-                $id = ba_last_id($db);
-                ba_snmp_store_secret(
-                    $id,
-                    (string)($_POST['auth_pass'] ?? ''),
-                    (string)($_POST['priv_pass'] ?? ''),
-                    (string)($_POST['web_pass'] ?? '')
-                );
-                ba_audit($db, 'add_snmp_profile', 'snmp_profile', (string)$id);
-                $msg = 'SNMPv3 credentials saved (secrets outside web root)';
-            } elseif ($act === 'save_snmp') {
-                $id = (int)($_POST['id'] ?? 0);
-                if ($id < 1) {
+            } elseif ($act === 'add_snmp' || $act === 'save_snmp') {
+                ba_ensure_snmp_schema($db);
+                $ownTx = !$db->inTransaction();
+                if ($ownTx) {
+                    $db->beginTransaction();
+                }
+                try {
+                $id = $act === 'save_snmp' ? (int)($_POST['id'] ?? 0) : 0;
+                if ($act === 'save_snmp' && $id < 1) {
                     throw new RuntimeException('Missing SNMPv3 credentials');
                 }
-                $db->prepare('UPDATE snmp_profiles SET name=?, username=?, auth_proto=?, priv_proto=?, web_user=?, notes=? WHERE id=?')
-                    ->execute([
-                        trim($_POST['name']), trim($_POST['username']),
-                        $_POST['auth_proto'] ?? 'SHA', $_POST['priv_proto'] ?? 'AES',
-                        trim($_POST['web_user'] ?? ''), trim($_POST['notes'] ?? ''),
-                        $id,
-                    ]);
-                $auth = (string)($_POST['auth_pass'] ?? '');
-                $priv = (string)($_POST['priv_pass'] ?? '');
-                $web = (string)($_POST['web_pass'] ?? '');
-                if ($auth !== '' || $priv !== '' || $web !== '') {
-                    ba_snmp_store_secret($id, $auth, $priv !== '' ? $priv : $auth, $web !== '' ? $web : null);
+                $prev = null;
+                if ($id > 0) {
+                    $st = $db->prepare('SELECT * FROM snmp_profiles WHERE id=?');
+                    $st->execute([$id]);
+                    $prev = $st->fetch() ?: null;
+                    if (!$prev) {
+                        throw new RuntimeException('Missing SNMPv3 credentials');
+                    }
                 }
-                ba_audit($db, 'edit_snmp_profile', 'snmp_profile', (string)$id);
-                $msg = 'SNMPv3 credentials updated';
+                $name = trim((string)($_POST['name'] ?? ''));
+                $userName = trim((string)($_POST['username'] ?? ''));
+                if ($name === '' || $userName === '') {
+                    throw new RuntimeException('Name and username are required');
+                }
+                if (strlen($name) > 128 || strlen($userName) > 128) {
+                    throw new RuntimeException('Name or username is too long');
+                }
+                $style = strtolower(trim((string)($_POST['cred_style'] ?? 'authpriv')));
+                $style = $style === 'password' ? 'password' : 'authpriv';
+                if (array_key_exists('notes', $_POST)) {
+                    $notes = trim((string)$_POST['notes']);
+                } else {
+                    $notes = $prev ? trim((string)($prev['notes'] ?? '')) : '';
+                }
+                if ($style === 'password') {
+                    $authProto = 'SHA';
+                    $privProto = 'AES';
+                    $webUser = $prev ? trim((string)($prev['web_user'] ?? '')) : '';
+                    $pw = (string)($_POST['snmp_password'] ?? '');
+                    if (strlen($pw) > 128) {
+                        throw new RuntimeException('Password is too long');
+                    }
+                    $was = $prev ? ba_snmp_cred_style($prev) : '';
+                    if ($pw === '' && ($was !== 'password' || !ba_snmp_has_secret($id))) {
+                        throw new RuntimeException('Password is required');
+                    }
+                } else {
+                    $authProto = (($_POST['auth_proto'] ?? 'SHA') === 'MD5') ? 'MD5' : 'SHA';
+                    $privProto = (($_POST['priv_proto'] ?? 'AES') === 'DES') ? 'DES' : 'AES';
+                    $webUser = trim((string)($_POST['web_user'] ?? ''));
+                    $pw = '';
+                }
+                if ($id < 1) {
+                    $db->prepare('INSERT INTO snmp_profiles (name, username, auth_proto, priv_proto, cred_style, web_user, notes) VALUES (?,?,?,?,?,?,?)')
+                        ->execute([$name, $userName, $authProto, $privProto, $style, $webUser, $notes]);
+                    $id = ba_last_id($db);
+                    if ($id < 1) {
+                        throw new RuntimeException('Could not save SNMPv3 credentials');
+                    }
+                    ba_audit($db, 'add_snmp_profile', 'snmp_profile', (string)$id);
+                    $msg = 'SNMPv3 credentials saved (secrets outside web root)';
+                } else {
+                    $db->prepare('UPDATE snmp_profiles SET name=?, username=?, auth_proto=?, priv_proto=?, cred_style=?, web_user=?, notes=? WHERE id=?')
+                        ->execute([$name, $userName, $authProto, $privProto, $style, $webUser, $notes, $id]);
+                    ba_audit($db, 'edit_snmp_profile', 'snmp_profile', (string)$id);
+                    $msg = 'SNMPv3 credentials updated';
+                }
+                if ($style === 'password') {
+                    ba_snmp_store_secret($id, $pw, $pw, null, 'password');
+                } else {
+                    $auth = (string)($_POST['auth_pass'] ?? '');
+                    $priv = (string)($_POST['priv_pass'] ?? '');
+                    $web = (string)($_POST['web_pass'] ?? '');
+                    $leavingPassword = $prev && ba_snmp_cred_style($prev) === 'password';
+                    if ($auth !== '' || $priv !== '' || $web !== '' || $leavingPassword) {
+                        ba_snmp_store_secret($id, $auth, $priv !== '' ? $priv : $auth, $web !== '' ? $web : null, 'authpriv');
+                    }
+                }
+                if ($ownTx) {
+                    $db->commit();
+                }
+                } catch (Throwable $snmpSaveError) {
+                    if ($ownTx && $db->inTransaction()) {
+                        $db->rollBack();
+                    }
+                    throw $snmpSaveError;
+                }
             } elseif ($act === 'bulk_snmp') {
                 $sid = (int)($_POST['snmp_profile_id'] ?? 0);
                 $gid = ($_POST['group_id'] ?? '') === '' ? null : (int)$_POST['group_id'];
@@ -602,21 +654,37 @@ JS;
         ba_card_open('SNMPv3 credentials', $snmpActions);
         echo '<table><thead><tr><th>Name</th><th>User</th><th>Auth</th><th>Priv</th><th>Web</th><th></th></tr></thead><tbody>';
         foreach ($db->query('SELECT * FROM snmp_profiles ORDER BY name') as $p) {
-            echo '<tr><td>'.h($p['name']).($p['is_default']?' <span class="muted">default</span>':'').'</td><td>'.h($p['username']).'</td><td>'.h($p['auth_proto']).'</td><td>'.h($p['priv_proto']).'</td><td>'.h($p['web_user']).'</td>';
+            if (ba_snmp_cred_style($p) === 'password') {
+                $authShow = 'Password';
+                $privShow = 'SHA + AES';
+            } else {
+                $authShow = (string)$p['auth_proto'];
+                $privShow = (string)$p['priv_proto'];
+            }
+            echo '<tr><td>'.h($p['name']).($p['is_default']?' <span class="muted">default</span>':'').'</td><td>'.h($p['username']).'</td><td>'.h($authShow).'</td><td>'.h($privShow).'</td><td>'.h($p['web_user']).'</td>';
             echo '<td><a href="/org.php?tab=snmp&edit='.(int)$p['id'].'">edit</a></td></tr>';
         }
         echo '</tbody></table>';
+        echo '<p class="muted">Password is one username and one password. Polls use that password as both the SHA authentication key and the AES privacy key. Those profiles are not written to a UPS card.</p>';
         ba_card_close();
         ba_users_modal_open('modal-snmp-profile', $edit ? 'Edit SNMPv3 credentials' : 'New SNMPv3 credentials', (bool)$edit, $edit ? ba_href('/org?tab=snmp') : '');
-        echo '<form method="post" action="/org.php?tab=snmp" class="stack">';
+        echo '<form method="post" action="/org.php?tab=snmp" class="stack" id="snmp-cred-form">';
         if ($edit) {
             echo '<input type="hidden" name="act" value="save_snmp"><input type="hidden" name="id" value="'.(int)$edit['id'].'">';
         } else {
             echo '<input type="hidden" name="act" value="add_snmp">';
         }
         echo '<input type="hidden" name="tab" value="snmp">';
+        $styleNow = $edit ? ba_snmp_cred_style($edit) : 'authpriv';
         echo '<label>Name</label><input name="name" required value="'.h($edit['name'] ?? '').'">';
         echo '<label>Username</label><input name="username" required value="'.h($edit['username'] ?? '').'">';
+        echo '<label>Sign-in</label><select name="cred_style">';
+        echo '<option value="authpriv"'.($styleNow === 'authpriv' ? ' selected' : '').'>Auth and Priv</option>';
+        echo '<option value="password"'.($styleNow === 'password' ? ' selected' : '').'>Username and password</option>';
+        echo '</select>';
+        $authHidden = $styleNow === 'password' ? ' hidden' : '';
+        $passHidden = $styleNow === 'password' ? '' : ' hidden';
+        echo '<div data-snmp-style="authpriv"'.$authHidden.'>';
         $ap = $edit['auth_proto'] ?? 'SHA';
         $pp = $edit['priv_proto'] ?? 'AES';
         echo '<label>Auth / Priv</label><select name="auth_proto"><option'.($ap==='SHA'?' selected':'').'>SHA</option><option'.($ap==='MD5'?' selected':'').'>MD5</option></select>';
@@ -625,15 +693,22 @@ JS;
         echo '<label>Priv passphrase'.($edit?' (blank = keep)':'').'</label><input type="password" name="priv_pass" autocomplete="new-password">';
         echo '<label>Web user (optional)</label><input name="web_user" value="'.h($edit['web_user'] ?? '').'" placeholder="Infrastructure or cyber">';
         echo '<label>Web password'.($edit?' (blank = keep)':'').'</label><input type="password" name="web_pass" autocomplete="new-password">';
+        echo '</div>';
+        echo '<div data-snmp-style="password"'.$passHidden.'>';
+        $pwLabel = $edit ? 'Password (blank = keep)' : 'Password';
+        echo '<label>'.h($pwLabel).'</label><input type="password" name="snmp_password" autocomplete="new-password">';
+        echo '<p class="muted">One password. Polls send it as both the SHA authentication key and the AES privacy key. This profile is not written to a UPS card.</p>';
+        echo '</div>';
         echo '<button>'.($edit ? 'Save changes' : 'Save credentials').'</button>';
         echo '<p class="muted">Secrets go to C:\\ProgramData\\BackAisle\\snmp_profiles.json and are never shown again.</p></form>';
+        echo '<script>(function(){var form=document.getElementById("snmp-cred-form");if(!form)return;var sel=form.querySelector("[name=cred_style]");function paint(){var mode=sel?sel.value:"authpriv";form.querySelectorAll("[data-snmp-style]").forEach(function(el){el.hidden=el.getAttribute("data-snmp-style")!==mode;});}if(sel)sel.addEventListener("change",paint);paint();})();</script>';
         ba_users_modal_close();
         ba_users_modal_open('modal-snmp-bulk', 'Bulk assign SNMPv3 credentials', false);
         echo '<form method="post" action="/org.php?tab=snmp" class="stack">';
         echo '<input type="hidden" name="act" value="bulk_snmp"><input type="hidden" name="tab" value="snmp">';
         echo '<p class="muted">Sets the SNMPv3 credentials on the UPS records. A device template can apply the same credentials when that template is applied. Card slots stay as they are.</p>';
         echo '<label>Credentials</label><select name="snmp_profile_id" required><option value="">choose</option>';
-        foreach ($db->query('SELECT id,name FROM snmp_profiles ORDER BY name') as $p) {
+        foreach (ba_snmp_card_profiles($db) as $p) {
             echo '<option value="'.(int)$p['id'].'">'.h($p['name']).'</option>';
         }
         echo '</select><label>Location</label><select name="group_id"><option value="">All UPS</option>'.ba_group_options($groups).'</select>';
@@ -729,7 +804,7 @@ JS;
         }
         echo '</select><label>Web/SSH/FTP login</label><select name="web_credential_id"><option value="">(site default)</option>'.ba_webcred_options($db, null).'</select>';
         echo '<label>SNMPv3 credentials</label><select name="snmp_profile_id"><option value="">SNMPv3 after apply</option>';
-        foreach ($db->query('SELECT id,name FROM snmp_profiles') as $p) {
+        foreach (ba_snmp_card_profiles($db) as $p) {
             echo '<option value="'.(int)$p['id'].'">'.h($p['name']).'</option>';
         }
         echo '</select>';

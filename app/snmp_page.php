@@ -228,7 +228,7 @@ function page_snmp_body(PDO $db, array $user): void
                 $all = $act === 'poll_scheduled';
                 if ($all) {
                     $ids = [];
-                    foreach ($db->query("SELECT id FROM devices WHERE enabled=1 AND IFNULL(kind,'ups')='ups'") as $row) {
+                    foreach ($db->query("SELECT id FROM devices WHERE enabled=1 AND (IFNULL(kind,'ups')='ups' OR kind='router')") as $row) {
                         $ids[] = (int)$row['id'];
                     }
                 } else {
@@ -239,18 +239,18 @@ function page_snmp_body(PDO $db, array $user): void
                 }
                 $ids = array_values(array_unique(array_filter(array_map('intval', $ids), static fn (int $i): bool => $i > 0)));
                 if (!$ids) {
-                    throw new RuntimeException($all ? 'No UPS on the polling schedule.' : 'No devices selected.');
+                    throw new RuntimeException($all ? 'No devices on the polling schedule.' : 'No devices selected.');
                 }
                 // A climate poll can take 30s. The page allows about 120s, so a
                 // short list waits here and a full schedule runs in the background.
                 if (count($ids) > 40) {
                     ba_poll_spawn($all ? [] : $ids);
                     $who = $all ? 'scheduled' : 'selected';
-                    $msg = 'Polling ' . count($ids) . ' ' . $who . ' UPS in the background, 24 at a time. Refresh this page for the collector log. Battery replacement dates fill in as each card answers.';
+                    $msg = 'Polling ' . count($ids) . ' ' . $who . ' devices in the background, 24 at a time. Refresh this page for the collector log. Battery replacement dates fill in as each UPS card answers.';
                     $_SESSION['ba_flash_cls'] = 'info';
                 } else {
                     $r = ba_poll_devices_now($ids);
-                    $msg = 'Polled ' . count($r['ids']) . ' ' . ($all ? 'scheduled UPS' : 'selected device(s)') . '.';
+                    $msg = 'Polled ' . count($r['ids']) . ' ' . ($all ? 'scheduled devices' : 'selected device(s)') . '.';
                     if ($r['ok'] !== null) {
                         $msg .= ' Collector ok=' . (int)$r['ok'] . ' fail=' . (int)$r['fail'] . '.';
                     }
@@ -304,6 +304,7 @@ function page_snmp_body(PDO $db, array $user): void
                 if ($sid < 1) {
                     throw new RuntimeException('Choose SNMPv3 credentials');
                 }
+                ba_snmp_reject_password_profile($db, $sid);
                 $scope = (string)($_POST['scope'] ?? 'selected');
                 $gid = ($_POST['group_id'] ?? '') === '' ? null : (int)$_POST['group_id'];
                 $ids = $_POST['ids'] ?? [];
@@ -332,6 +333,7 @@ function page_snmp_body(PDO $db, array $user): void
                 if ($sid < 1) {
                     throw new RuntimeException('Choose SNMPv3 credentials');
                 }
+                ba_snmp_reject_password_profile($db, $sid);
                 $name = trim((string)($_POST['receiver_name'] ?? ''));
                 if ($name === '') {
                     $name = 'BackAisle';
@@ -434,12 +436,12 @@ function page_snmp_body(PDO $db, array $user): void
         echo '</div>';
     }
     echo '<h1>SNMP polling</h1>';
-    echo '<p class="muted">SNMPv3 authPriv collector. Scheduled devices have <code>enabled=1</code>. Manual poll talks to the unit now, even if it is not on the schedule. While the collector is running it also listens for SNMPv3 traps on UDP 162. Enable SNMPv3 traps here so each card sends them to this server. A trap opens the same alert a poll would, and the notice goes out without waiting for the next poll. Polling still confirms the condition.</p>';
+    echo '<p class="muted">SNMPv3 collector. A username and password profile polls a router and is not written to a UPS card. Scheduled devices have <code>enabled=1</code>. Manual poll talks to the unit now, even if it is not on the schedule. While the collector is running it also listens for SNMPv3 traps on UDP 162. Enable SNMPv3 traps here so each card sends them to this server. A trap opens the same alert a poll would, and the notice goes out without waiting for the next poll. Polling still confirms the condition.</p>';
 
     if ($admin) {
         $profiles = [];
         try {
-            $profiles = $db->query('SELECT id, name FROM snmp_profiles ORDER BY name')->fetchAll();
+            $profiles = ba_snmp_card_profiles($db);
         } catch (Throwable $e) {
             $profiles = [];
         }

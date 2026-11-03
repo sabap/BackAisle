@@ -1072,14 +1072,14 @@ function page_devices(PDO $db, array $user): void {
         if ($canEditDevices && $act === 'add') {
             $ip = trim($_POST['ip'] ?? '');
             if (filter_var($ip, FILTER_VALIDATE_IP)) {
-                $kind = $_POST['kind'] ?? 'ups';
-                if (!in_array($kind, ['ups', 'switch', 'patch_panel', 'other'], true)) $kind = 'ups';
+                $kind = ba_kind_allowed((string)($_POST['kind'] ?? 'ups'), 'ups');
+                $sensor = ($kind === 'router') ? 0 : (isset($_POST['sensor_expected']) ? 1 : 0);
                 $db->prepare("INSERT INTO devices (ip, hostname, site, building, idf_closet, rack, circuit, load_notes, sensor_expected, is_simulated, enabled, kind) VALUES (?,?,?,?,?,?,?,?,?,0,1,?)")
                     ->execute([
                         $ip, trim($_POST['hostname'] ?? ''), trim($_POST['site'] ?? 'Hospital'),
                         trim($_POST['building'] ?? ''), trim($_POST['idf_closet'] ?? ''),
                         trim($_POST['rack'] ?? ''), trim($_POST['circuit'] ?? ''),
-                        trim($_POST['load_notes'] ?? ''), isset($_POST['sensor_expected']) ? 1 : 0,
+                        trim($_POST['load_notes'] ?? ''), $sensor,
                         $kind,
                     ]);
                 $newId = ba_last_id($db);
@@ -1415,6 +1415,15 @@ function ba_render_device_stage(array $r, array $faces, string $deptName): void
         $add('Failed polls', (string)$fails);
     }
     $out = ba_output_text(isset($r['output_status']) ? (int)$r['output_status'] : null);
+    $kindNow = strtolower(trim((string)ba_col($r, 'kind', 'ups')));
+    if ($kindNow === '') {
+        $kindNow = 'ups';
+    }
+    $isUps = $kindNow === 'ups';
+    if (!$isUps && $comm !== 'ok') {
+        $pill = $comm === 'down' ? 'down' : 'warn';
+        $worst = $comm === 'down' ? 'st-down' : 'st-warn';
+    }
     echo '<section class="dev-stage ' . h($worst) . '">';
     echo '<div class="dev-faces">';
     ba_render_device_face('Front', (string)($faces['front'] ?? ''), $frontEmpty);
@@ -1425,8 +1434,12 @@ function ba_render_device_stage(array $r, array $faces, string $deptName): void
     }
     echo '</div><div class="dev-summary">';
     echo '<div class="dev-kicker">';
-    echo '<span class="pill ' . h($pill) . '">' . h(ba_kind_label((string)ba_col($r, 'kind', 'ups'))) . '</span>';
-    echo '<span class="pill ' . h($pill) . '">' . h($out) . '</span>';
+    echo '<span class="pill ' . h($pill) . '">' . h(ba_kind_label($kindNow)) . '</span>';
+    if ($isUps) {
+        echo '<span class="pill ' . h($pill) . '">' . h($out) . '</span>';
+    } else {
+        echo '<span class="pill ' . h($pill) . '">' . h($comm !== '' ? $comm : 'unknown') . '</span>';
+    }
     if ($retiredAt !== '') {
         echo '<span class="pill down">Decommissioned</span>';
     } elseif (!(int)ba_col($r, 'enabled', 1)) {
@@ -1444,6 +1457,11 @@ function ba_render_device_stage(array $r, array $faces, string $deptName): void
         echo '<p class="dev-retired">Decommissioned ' . h($retiredAt) . '. Polling is off. The record is kept.</p>';
     }
     echo '<div class="dev-meters">';
+    if (!$isUps) {
+        echo '<div class="dev-meter"><span>Comm</span><b>' . h($comm !== '' ? $comm : 'unknown') . '</b></div>';
+        echo '<div class="dev-meter"><span>Last success</span><b>' . h($lastOk !== '' ? $lastOk : 'never') . '</b></div>';
+        echo '</div>';
+    } else {
     echo '<div class="dev-meter"><span>UPS</span><b>' . h($out) . '</b></div>';
     echo '<div class="dev-meter"><span>Capacity</span><b>' . h(ba_fmt($r['capacity_pct'] ?? null, '%', 0)) . '</b></div>';
     echo '<div class="dev-meter"><span>Runtime</span><b>' . h(ba_fmt($r['runtime_min'] ?? null, 'min', 0)) . '</b></div>';
@@ -1463,6 +1481,7 @@ function ba_render_device_stage(array $r, array $faces, string $deptName): void
         echo h(ba_fmt($tempShow, '°F'));
     }
     echo '</b></div></div>';
+    }
     echo '<dl class="dev-facts">';
     foreach ($facts as $fact) {
         echo '<div><dt>' . h($fact[0]) . '</dt><dd title="' . h($fact[1]) . '">' . h($fact[1]) . '</dd></div>';
@@ -1577,8 +1596,7 @@ function page_device(PDO $db, array $user): void {
                 $sid = ($curSid === null || $curSid === '') ? null : (int)$curSid;
             }
             $wid = ba_webcred_posted($db, $_POST['web_credential_id'] ?? '');
-            $kind = $_POST['kind'] ?? ($r['kind'] ?? 'ups');
-            if (!in_array($kind, ['ups', 'switch', 'patch_panel', 'other'], true)) $kind = 'ups';
+            $kind = ba_kind_allowed((string)($_POST['kind'] ?? ($r['kind'] ?? 'ups')), 'ups');
             $rid = ($_POST['rack_id'] ?? '') === '' ? null : (int)$_POST['rack_id'];
             $pos = ($_POST['position_u'] ?? '') === '' ? null : (int)$_POST['position_u'];
             $uh = max(1, (int)($_POST['u_height'] ?? 1));
@@ -1669,6 +1687,8 @@ function page_device(PDO $db, array $user): void {
     ba_render_device_stage($r, $faces, $deptName);
     $canMakeProfile = $canEditThis && ba_editor($user, 'edit_snmp');
     ba_render_device_readings($db, $r, '');
+    $kindPage = strtolower(trim((string)ba_col($r, 'kind', 'ups')));
+    if ($kindPage === '' || $kindPage === 'ups'):
     ?>
     <section class="ucard dev-history">
       <div class="ucard-head"><h3>History</h3></div>
@@ -1683,6 +1703,7 @@ function page_device(PDO $db, array $user): void {
     </div>
       </div>
     </section>
+    <?php endif; ?>
     <?php ba_device_owner_card($db, $user, $r); ?>
     <?php if ($canEditThis): ?>
     <div class="dev-settings-head" id="device-settings">

@@ -24,6 +24,7 @@ from secrets import load_secrets  # noqa: E402
 from profiles import get_secret, seed_from_env  # noqa: E402
 
 snmp_get = None  # set after SQL connect; pysnmp/cryptography can break msodbcsql TLS
+snmp_get_host = None
 new_engine = None
 close_engine = None
 
@@ -451,6 +452,20 @@ def _carry_climate(con, device_id: int, sample: dict) -> dict:
     return sample
 
 
+def store_router(con, device, sample: dict) -> None:
+    """A router poll records reachability. It does not write UPS samples or UPS alerts."""
+    device_id = _db_int(device["id"])
+    ts = now()
+    upsert_poll_state_ok(con, device_id, ts)
+    clear_alert(con, device_id, "poll_fail")
+    name = str(sample.get("snmp_name") or "").replace("\x00", "").strip()
+    if name:
+        con.execute(
+            "UPDATE devices SET snmp_name=?, updated_at=? WHERE id=?",
+            (name[:128], ts, device_id),
+        )
+
+
 def store_sample(con, device_id, sample, va_rating=2000):
     device_id = _db_int(device_id)
     ts = now()
@@ -557,14 +572,37 @@ def simulate(device: dict) -> dict:
 
 async def poll_live(device, secrets, climate=False, engine=None):
     cred = get_secret(device.get("snmp_profile_id"))
-    user = device.get("snmp_username") or cred["user"] or secrets["SNMPV3_USER"]
+    kind = str(device.get("kind") or "ups").strip().lower()
+    if str(cred.get("style") or "") == "password":
+        user = str(device.get("snmp_username") or cred.get("user") or "").strip()
+        auth = str(cred.get("auth_pass") or "")
+        priv = str(cred.get("priv_pass") or auth)
+        if not user or not auth:
+            raise RuntimeError("Username and password profile is missing a username or password")
+    else:
+        user = device.get("snmp_username") or cred["user"] or secrets["SNMPV3_USER"]
+        auth = cred["auth_pass"]
+        priv = cred["priv_pass"]
     budget = CLIMATE_TIMEOUT_S if climate else POLL_TIMEOUT_S
+    if kind == "router":
+        return await asyncio.wait_for(
+            snmp_get_host(
+                device["ip"],
+                user,
+                auth,
+                priv,
+                timeout=SNMP_TIMEOUT_S,
+                retries=SNMP_RETRIES,
+                engine=engine,
+            ),
+            timeout=budget,
+        )
     return await asyncio.wait_for(
         snmp_get(
             device["ip"],
             user,
-            cred["auth_pass"],
-            cred["priv_pass"],
+            auth,
+            priv,
             timeout=SNMP_TIMEOUT_S,
             retries=SNMP_RETRIES,
             climate=climate,
@@ -575,6 +613,19 @@ async def poll_live(device, secrets, climate=False, engine=None):
 
 
 def _apply_result(con, secrets, kind: str, device: dict, payload) -> None:
+    if isinstance(payload, dict) and payload.get("_router"):
+        extra = payload.pop("_profile_fields", None)
+        try:
+            store_router(con, device, payload)
+            if extra:
+                try:
+                    from profile_fields import store_profile_fields
+                    store_profile_fields(con, device["id"], extra)
+                except Exception as e:
+                    log(f"profile fields store {device.get('id')}: {e}")
+        except Exception as e:
+            log(f"store fail device {device['id']}: {e}")
+        return
     extra = None
     if isinstance(payload, dict):
         extra = payload.pop("_profile_fields", None)
@@ -710,7 +761,7 @@ def load_enabled_devices() -> list[dict]:
                FROM devices d
                LEFT JOIN snmp_profiles sp ON sp.id=d.snmp_profile_id
                LEFT JOIN poll_state ps ON ps.device_id=d.id
-               WHERE d.enabled=1 AND IFNULL(d.kind,'ups')='ups'"""
+               WHERE d.enabled=1 AND (IFNULL(d.kind,'ups')='ups' OR d.kind='router')"""
         ).fetchall()]
     finally:
         con.close()
@@ -1126,6 +1177,8 @@ def _trap_users() -> dict:
         if profile_id < 1:
             continue
         cred = get_secret(profile_id)
+        if str(cred.get("style") or "") == "password":
+            continue
         username = str(_row_get(row, "username") or cred.get("user") or "").strip()
         auth_proto = str(cred.get("auth_proto") or "SHA").upper()
         priv_proto = str(cred.get("priv_proto") or "AES").upper()
@@ -1310,8 +1363,8 @@ def main():
         log("trap listener only")
         trap_loop(secrets)
         return
-    global snmp_get, new_engine, close_engine
-    from snmp_client import close_engine, new_engine, snmp_get  # noqa: E402
+    global snmp_get, snmp_get_host, new_engine, close_engine
+    from snmp_client import close_engine, new_engine, snmp_get, snmp_get_host  # noqa: E402
     seed_from_env()
     if args.qc:
         asyncio.run(qc_poll(secrets, args.qc))

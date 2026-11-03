@@ -20,7 +20,7 @@ function ba_device_is_cyberpower(array $row): bool
     if ($kind === '') {
         $kind = 'ups';
     }
-    if (in_array($kind, ['switch', 'patch_panel'], true)) {
+    if (in_array($kind, ['switch', 'patch_panel', 'router'], true)) {
         return false;
     }
     $mfr = strtolower(trim((string)($row['manufacturer'] ?? '') . ' ' . (string)($row['template_manufacturer'] ?? '')));

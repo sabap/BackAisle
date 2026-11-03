@@ -273,6 +273,7 @@ CREATE TABLE IF NOT EXISTS snmp_profiles (
   username TEXT NOT NULL,
   auth_proto TEXT NOT NULL DEFAULT 'SHA',
   priv_proto TEXT NOT NULL DEFAULT 'AES',
+  cred_style TEXT NOT NULL DEFAULT 'authpriv',
   web_user TEXT,
   is_default INTEGER NOT NULL DEFAULT 0,
   notes TEXT
@@ -646,6 +647,7 @@ def init_db(con=None):
             "IF OBJECT_ID('dbo.web_credentials','U') IS NULL CREATE TABLE web_credentials (id INT IDENTITY(1,1) PRIMARY KEY, name NVARCHAR(128) NOT NULL, username NVARCHAR(128) NOT NULL, notes NVARCHAR(MAX) NULL)",
             "IF COL_LENGTH('devices','web_credential_id') IS NULL ALTER TABLE devices ADD web_credential_id INT NULL",
             "IF COL_LENGTH('events','source') IS NULL ALTER TABLE events ADD source NVARCHAR(16) NULL",
+            "IF COL_LENGTH('snmp_profiles','cred_style') IS NULL ALTER TABLE snmp_profiles ADD cred_style NVARCHAR(16) NOT NULL CONSTRAINT DF_snmp_profiles_cred_style DEFAULT 'authpriv'",
             "UPDATE events SET source='trap' WHERE source IS NULL AND code='snmp_trap'",
             "UPDATE events SET source='poll' WHERE source IS NULL AND code IN ('poll_timeout','poll_fail')",
         ):
@@ -672,6 +674,7 @@ def init_db(con=None):
     _add_col(con, "samples", "power_w", "REAL")
     _add_col(con, "samples_hourly", "power_avg", "REAL")
     _add_col(con, "events", "source", "TEXT")
+    _add_col(con, "snmp_profiles", "cred_style", "TEXT DEFAULT 'authpriv'")
     con.execute("UPDATE events SET source='trap' WHERE source IS NULL AND code='snmp_trap'")
     con.execute("UPDATE events SET source='poll' WHERE source IS NULL AND code IN ('poll_timeout','poll_fail')")
     _add_col(con, "users", "source", "TEXT NOT NULL DEFAULT 'local'")

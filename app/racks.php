@@ -171,10 +171,16 @@ function ba_render_elevation(array $rack, array $devices, string $face, bool $co
             elseif ($clsH === 'st-down') $health = ' down';
             elseif ($clsH === 'st-hot' || $clsH === 'st-warn') $health = ' warn';
             elseif ($clsH === 'st-ok') $health = ' ok';
+        } elseif ($kind === 'router') {
+            $comm = strtolower(trim((string)($d['comm_state'] ?? '')));
+            if ($comm === 'down') $health = ' down';
+            elseif ($comm === 'degraded') $health = ' warn';
+            elseif ($comm === 'ok') $health = ' ok';
         }
         $label = $d['hostname'] ?: ($d['ip'] ?: ba_kind_label($kind));
         $uTxt = $pos === $topU ? 'U'.$pos : 'U'.$pos.'–'.$topU;
-        $href = (( $kind ?? 'ups') === 'ups' && (int)$d['id'] > 0 && ($d['ip'] ?? '') !== '')
+        $toDevice = in_array($kind, ['ups', 'router'], true) && (int)$d['id'] > 0 && ($kind !== 'ups' || ($d['ip'] ?? '') !== '');
+        $href = $toDevice
             ? ba_href('/device?id='.(int)$d['id'])
             : ba_href('/rack?id='.$rackId.'&item='.(int)$d['id']);
         echo '<a class="idf-dev kind-'.h($kind).$health.'" href="'.h($href).'" style="bottom:'.$bottom.'%;height:'.$h.'%" title="'.h($label.' · '.$uTxt.' · '.ba_kind_label($kind)).'">';
@@ -501,8 +507,7 @@ function page_rack(PDO $db, array $user): void {
             } elseif ($act === 'add_item') {
                 $tid = (int)($_POST['template_id'] ?? 0);
                 $tpl = $tid ? ba_template($db, $tid) : null;
-                $kind = $_POST['kind'] ?? ($tpl['kind'] ?? 'switch');
-                if (!in_array($kind, ['switch', 'patch_panel', 'other', 'ups'], true)) $kind = 'other';
+                $kind = ba_kind_allowed((string)($_POST['kind'] ?? ($tpl['kind'] ?? 'switch')), 'other');
                 $pos = (int)$_POST['position_u'];
                 $uh = max(1, (int)($_POST['u_height'] ?? ($tpl['u_height'] ?? 1)));
                 $face = $_POST['face'] ?? ($tpl['face'] ?? ($kind === 'patch_panel' ? 'front' : 'both'));
@@ -516,12 +521,13 @@ function page_rack(PDO $db, array $user): void {
                 if ($hit) throw new RuntimeException('U overlap with '.($hit['hostname'] ?: $hit['ip']));
                 $ip = trim($_POST['ip'] ?? '');
                 if ($ip !== '' && !filter_var($ip, FILTER_VALIDATE_IP)) throw new RuntimeException('Bad IP');
-                if ($kind !== 'ups') {
-                    $ip = $ip ?: '';
-                } elseif ($ip === '') {
+                if ($kind === 'ups' && $ip === '') {
                     throw new RuntimeException('UPS needs an IP so it can be polled');
                 }
-                $enabled = ($kind === 'ups') ? 1 : 0;
+                if ($kind === 'router' && $ip === '') {
+                    throw new RuntimeException('A router needs an IP so it can be polled');
+                }
+                $enabled = ($kind === 'ups' || $kind === 'router') ? 1 : 0;
                 $sensor = ($kind === 'ups') ? 1 : 0;
                 $ports = ($_POST['port_count'] ?? '') === '' ? ($tpl['port_count'] ?? null) : (int)$_POST['port_count'];
                 $model = trim($_POST['model'] ?? '') ?: (string)($tpl['model'] ?? '');
@@ -692,8 +698,14 @@ function page_rack(PDO $db, array $user): void {
                 $uLabel = $d['position_u'] === null ? '—' : ($pos === $top ? (string)$pos : $pos.'–'.$top);
                 $kind = $d['kind'] ?? 'ups';
                 $name = $d['hostname'] ?: ($d['ip'] ?: ba_kind_label($kind));
-                $href = $kind === 'ups' ? ba_href('/device?id='.(int)$d['id']) : ba_href('/rack?id='.$id.'&item='.(int)$d['id']);
-                $st = $kind === 'ups' ? (ba_output_text(isset($d['output_status']) ? (int)$d['output_status'] : null).' · '.($d['comm_state'] ?: 'unknown')) : ba_kind_label($kind);
+                $href = in_array($kind, ['ups', 'router'], true) ? ba_href('/device?id='.(int)$d['id']) : ba_href('/rack?id='.$id.'&item='.(int)$d['id']);
+                if ($kind === 'ups') {
+                    $st = ba_output_text(isset($d['output_status']) ? (int)$d['output_status'] : null).' · '.($d['comm_state'] ?: 'unknown');
+                } elseif ($kind === 'router') {
+                    $st = $d['comm_state'] ?: 'unknown';
+                } else {
+                    $st = ba_kind_label($kind);
+                }
             ?>
               <tr>
                 <td title="<?= h($d['face'] ?? '') ?>"><?= h($uLabel) ?></td>
@@ -760,14 +772,14 @@ function page_rack(PDO $db, array $user): void {
         <p class="muted">Unplaced UPS in this closet. A 2U UPS at U1 occupies U1–U2.</p>
       </form>
       <?php ba_users_modal_close(); ?>
-      <?php ba_users_modal_open('modal-add-item', 'Add switch or patch panel', false, '', true); ?>
+      <?php ba_users_modal_open('modal-add-item', 'Add to this rack', false, '', true); ?>
       <form method="post" class="stack">
         <input type="hidden" name="act" value="add_item">
         <label>Template</label>
         <select name="template_id" data-tpl-fill="1"><?= ba_template_options($db) ?></select>
         <label>Kind</label>
         <select name="kind">
-          <?php foreach (['switch' => 'Switch', 'patch_panel' => 'Patch panel', 'other' => 'Other'] as $k => $lab): ?>
+          <?php foreach (['switch' => 'Switch', 'router' => 'Router', 'patch_panel' => 'Patch panel', 'other' => 'Other'] as $k => $lab): ?>
             <option value="<?= h($k) ?>"><?= h($lab) ?></option>
           <?php endforeach; ?>
         </select>
@@ -783,10 +795,10 @@ function page_rack(PDO $db, array $user): void {
           <option value="both"<?= $focusFace==='both'?' selected':'' ?>>both</option>
         </select>
         <label>Ports (patch panels)</label><input type="number" name="port_count" min="0" placeholder="24 or 48">
-        <label>Management IP (optional)</label><input name="ip" placeholder="not polled unless kind is UPS">
+        <label>Management IP</label><input name="ip" placeholder="required for a router">
         <?php ba_department_field($db, $user, null); ?>
         <button>Add to rack</button>
-        <p class="muted">Inventory on the U grid only. A template also copies its credentials and model profile. SNMPv3 polling stays UPS-only.</p>
+        <p class="muted">A router with an IP is polled with its SNMPv3 credentials. A switch or patch panel stays on the drawing. A template also copies its credentials and model profile.</p>
       </form>
       <?php ba_users_modal_close(); ?>
     </div>
