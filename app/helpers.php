@@ -418,14 +418,69 @@ function ba_kind_label(?string $kind): string {
     return [
         'ups' => 'UPS',
         'switch' => 'Switch',
+        'router' => 'Router',
         'patch_panel' => 'Patch panel',
         'other' => 'Other',
     ][$kind ?? 'ups'] ?? 'UPS';
 }
 
+function ba_kind_allowed(string $kind, string $fallback = 'ups'): string {
+    $kind = strtolower(trim($kind));
+    if (!in_array($kind, ['ups', 'switch', 'router', 'patch_panel', 'other'], true)) {
+        return $fallback;
+    }
+    return $kind;
+}
+
+function ba_ensure_snmp_schema(PDO $db): void {
+    static $done = false;
+    if ($done) {
+        return;
+    }
+    if (!function_exists('ba_ensure_column')) {
+        return;
+    }
+    $done = true;
+    if (ba_db_driver() === 'sqlsrv') {
+        ba_ensure_column($db, 'snmp_profiles', 'cred_style', "NVARCHAR(16) NOT NULL CONSTRAINT DF_snmp_profiles_cred_style DEFAULT 'authpriv'");
+        return;
+    }
+    ba_ensure_column($db, 'snmp_profiles', 'cred_style', "TEXT DEFAULT 'authpriv'");
+}
+
+function ba_snmp_cred_style(array $row): string {
+    $style = strtolower(trim((string)($row['cred_style'] ?? '')));
+    return $style === 'password' ? 'password' : 'authpriv';
+}
+
+function ba_snmp_reject_password_profile(PDO $db, int $id): void {
+    ba_ensure_snmp_schema($db);
+    $st = $db->prepare('SELECT cred_style FROM snmp_profiles WHERE id=?');
+    $st->execute([$id]);
+    $row = $st->fetch();
+    if (!$row) {
+        throw new RuntimeException('Choose SNMPv3 credentials');
+    }
+    if (ba_snmp_cred_style($row) === 'password') {
+        throw new RuntimeException('That credential profile is a username and password. It is not written to a UPS card.');
+    }
+}
+
+/** Profiles that can be written onto a CyberPower card. Username-and-password profiles are excluded. */
+function ba_snmp_card_profiles(PDO $db): array {
+    ba_ensure_snmp_schema($db);
+    $out = [];
+    foreach ($db->query('SELECT id, name, cred_style FROM snmp_profiles ORDER BY name') as $p) {
+        if (ba_snmp_cred_style($p) === 'authpriv') {
+            $out[] = $p;
+        }
+    }
+    return $out;
+}
+
 function ba_kind_options(?string $selected = 'ups'): string {
     $html = '';
-    foreach (['ups' => 'UPS', 'switch' => 'Switch', 'patch_panel' => 'Patch panel', 'other' => 'Other'] as $k => $lab) {
+    foreach (['ups' => 'UPS', 'switch' => 'Switch', 'router' => 'Router', 'patch_panel' => 'Patch panel', 'other' => 'Other'] as $k => $lab) {
         $sel = ($selected === $k) ? ' selected' : '';
         $html .= '<option value="'.h($k).'"'.$sel.'>'.h($lab).'</option>';
     }

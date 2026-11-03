@@ -21,23 +21,59 @@ def _save(data: dict) -> None:
     PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
-def set_secret(profile_id: int, auth_pass: str, priv_pass: str, web_pass: str | None = None) -> None:
+def set_secret(
+    profile_id: int,
+    auth_pass: str,
+    priv_pass: str,
+    web_pass: str | None = None,
+    style: str | None = None,
+) -> None:
     data = _load()
     rec = data.get(str(profile_id), {})
-    if auth_pass:
-        rec["auth_pass"] = auth_pass
-    if priv_pass:
-        rec["priv_pass"] = priv_pass
+    if style == "password":
+        pw = auth_pass or priv_pass
+        if pw:
+            rec["auth_pass"] = pw
+            rec["priv_pass"] = pw
+        elif rec.get("auth_pass") and not rec.get("priv_pass"):
+            rec["priv_pass"] = rec["auth_pass"]
+        elif rec.get("priv_pass") and not rec.get("auth_pass"):
+            rec["auth_pass"] = rec["priv_pass"]
+        rec["style"] = "password"
+        rec["auth_proto"] = "SHA"
+        rec["priv_proto"] = "AES"
+    else:
+        if auth_pass:
+            rec["auth_pass"] = auth_pass
+        if priv_pass:
+            rec["priv_pass"] = priv_pass
+        if style == "authpriv":
+            rec["style"] = "authpriv"
     if web_pass is not None and web_pass != "":
         rec["web_pass"] = web_pass
     data[str(profile_id)] = rec
     _save(data)
 
 
-def get_secret(profile_id: int | None) -> dict:
-    secrets = load_secrets()
-    data = _load()
-    rec = data.get(str(profile_id or ""), {})
+def secret_view(rec: dict, secrets: dict) -> dict:
+    """Map one stored profile to the keys a poll uses.
+
+    A password profile is the Ubiquiti form: one password. The poll still
+    speaks SNMPv3 authPriv, with that password as both the SHA key and the
+    AES key. It must not pick up the UPS secrets from the environment.
+    """
+    if str(rec.get("style") or "") == "password":
+        pw = rec.get("auth_pass") or rec.get("priv_pass") or ""
+        return {
+            "user": rec.get("user") or "",
+            "auth_pass": pw,
+            "priv_pass": pw,
+            "web_user": "",
+            "web_pass": "",
+            "auth_proto": "SHA",
+            "priv_proto": "AES",
+            "style": "password",
+        }
     return {
         "user": rec.get("user") or secrets.get("SNMPV3_USER") or "",
         "auth_pass": rec.get("auth_pass") or secrets.get("SNMPV3_AUTH_PASS") or "",
@@ -46,7 +82,15 @@ def get_secret(profile_id: int | None) -> dict:
         "web_pass": rec.get("web_pass") or secrets.get("UPS_WEB_PASS") or "",
         "auth_proto": rec.get("auth_proto") or secrets.get("SNMPV3_AUTH_PROTO") or "SHA",
         "priv_proto": rec.get("priv_proto") or secrets.get("SNMPV3_PRIV_PROTO") or "AES",
+        "style": "authpriv",
     }
+
+
+def get_secret(profile_id: int | None) -> dict:
+    secrets = load_secrets()
+    data = _load()
+    rec = data.get(str(profile_id or ""), {})
+    return secret_view(rec if isinstance(rec, dict) else {}, secrets)
 
 
 def seed_from_env() -> None:

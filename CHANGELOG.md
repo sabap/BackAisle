@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.88] - 2026-11-03
+
+- SNMPv3 credentials can be a username and one password. Polls use that password as both the SHA authentication key and the AES privacy key. Those profiles are not written to a UPS card, and they are left out of bulk assign.
+- Router is a device kind. A router on a rack needs an IP. The collector reads its name and uptime. The device page shows communication and the last successful poll. The rack tile is blue.
+- Settings alert tables use the width of the card, so the email, in-app, and NOC boxes stay in view.
+- Restart the collector if it is already running, so a router is polled with the new sign-in. The writer does not need a restart.
+
 ## [0.5.87] - 2026-11-03
 
 - Find is on every signed-in page. Press / when you are not typing in a field, press Ctrl+K, or use Find in the header. Matches include devices, IDFs, and racks. Enter opens the highlighted match. When several match and none is highlighted, Enter opens the filtered inventory list.

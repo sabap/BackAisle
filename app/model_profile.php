@@ -231,6 +231,10 @@ function ba_model_for_device(PDO $db, array $device): ?array
             return $p;
         }
     }
+    $kindNow = strtolower(trim((string)ba_col($device, 'kind', '')));
+    if ($kindNow === 'router') {
+        return null;
+    }
     if (count($profiles) === 1) {
         return $profiles[0];
     }
@@ -290,7 +294,11 @@ function ba_render_device_readings(PDO $db, array $device, string $actionsHtml =
     }
     $explicit = (int)ba_col($device, 'model_profile_id', 0);
     $how = $explicit > 0 ? 'Assigned profile' : 'Matched profile';
-    echo '<p class="muted">' . h($how) . ' ' . h((string)$profile['name']) . '. Capacity, runtime, and the battery dates stay in the summary above. A field shows here only after this card returns it.</p>';
+    $kindHere = strtolower(trim((string)ba_col($device, 'kind', 'ups')));
+    $readingNote = ($kindHere === '' || $kindHere === 'ups')
+        ? 'Capacity, runtime, and the battery dates stay in the summary above. A field shows here only after this card returns it.'
+        : 'A field shows here only after this device returns it.';
+    echo '<p class="muted">' . h($how) . ' ' . h((string)$profile['name']) . '. ' . h($readingNote) . '</p>';
     $id = (int)ba_col($device, 'id', 0);
     $fields = ba_model_fields($db, (int)$profile['id']);
     $extra = [];

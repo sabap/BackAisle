@@ -416,6 +416,7 @@ a.idf-empty:hover {
 .idf-dev.kind-switch { background:linear-gradient(90deg,#064e3b,#059669); }
 .idf-dev.kind-patch_panel { background:linear-gradient(90deg,#854d0e,#ca8a04); }
 .idf-dev.kind-other { background:linear-gradient(90deg,#334155,#64748b); }
+.idf-dev.kind-router { background:linear-gradient(90deg,#1e3a8a,#3b82f6); }
 .idf-dev.ok { box-shadow:inset 3px 0 0 0 rgba(34,197,94,.9); }
 .idf-dev.warn { box-shadow:inset 3px 0 0 0 rgba(234,179,8,.95); }
 .idf-dev.batt { box-shadow:inset 3px 0 0 0 rgba(239,68,68,.95); }
@@ -720,14 +721,23 @@ form.ucard.stack select, form.ucard.stack textarea { width:100%; max-width:100%;
   .ldaps-modal-panel { width: 100%; max-height: 85vh; border-radius: 12px 12px 0 0; }
 }
 .who a.on { color: var(--ink); font-weight: 600; text-decoration: none; }
-.notify-form { max-width: 46rem; }
+form.stack.notify-form { max-width: none; }
 .notify-sub { margin: 1.1rem 0 .35rem; font-size: 1rem; }
 .notify-group { display: flex; gap: .55rem; align-items: flex-start; line-height: 1.4; }
 .notify-group input { margin-top: .2rem; }
-.notify-scroll { overflow-x: auto; }
+.notify-scroll { overflow-x: visible; }
 .notify-matrix { width: 100%; }
+.notify-matrix th:first-child,
+.notify-matrix td:first-child { white-space: normal; }
+.notify-matrix td:first-child strong { display: block; }
 .notify-matrix th:not(:first-child),
-.notify-matrix td.notify-check { text-align: center; width: 5.5rem; }
+.notify-matrix td.notify-check {
+  text-align: center;
+  white-space: nowrap;
+  width: 4.75rem;
+  padding-left: .4rem;
+  padding-right: .4rem;
+}
 .notify-noc { list-style: none; padding: 0; margin: .4rem 0 0; }
 .notify-noc li { padding: .45rem 0; border-top: 1px solid var(--line); }
 .sr-only {

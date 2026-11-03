@@ -48,6 +48,8 @@ def resolve_profile_id(con, device: dict) -> int:
         mv = str(row.get("vendor") or "").strip().lower()
         if mv and ((vendor and vendor == mv) or (model and mv in model)):
             return _int(row.get("id"))
+    if str(device.get("kind") or "").strip().lower() == "router":
+        return 0
     if len(profiles) == 1:
         return _int(profiles[0].get("id"))
     return 0
@@ -112,9 +114,14 @@ async def read_profile_fields(device: dict, secrets: dict, engine) -> list[dict]
     from profiles import get_secret
 
     cred = get_secret(device.get("snmp_profile_id"))
-    user = device.get("snmp_username") or cred["user"] or secrets.get("SNMPV3_USER") or ""
-    auth = cred["auth_pass"] or secrets.get("SNMPV3_AUTH_PASS") or ""
-    priv = cred["priv_pass"] or secrets.get("SNMPV3_PRIV_PASS") or ""
+    if str(cred.get("style") or "") == "password":
+        user = str(device.get("snmp_username") or cred.get("user") or "").strip()
+        auth = str(cred.get("auth_pass") or "")
+        priv = str(cred.get("priv_pass") or auth)
+    else:
+        user = device.get("snmp_username") or cred["user"] or secrets.get("SNMPV3_USER") or ""
+        auth = cred["auth_pass"] or secrets.get("SNMPV3_AUTH_PASS") or ""
+        priv = cred["priv_pass"] or secrets.get("SNMPV3_PRIV_PASS") or ""
     host = str(device.get("ip") or "")
     if not host or not user:
         return []

@@ -10,6 +10,8 @@ from typing import Any
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 OIDS = {
+    "sysDescr": (1, 3, 6, 1, 2, 1, 1, 1, 0),
+    "sysUpTime": (1, 3, 6, 1, 2, 1, 1, 3, 0),
     "sysName": (1, 3, 6, 1, 2, 1, 1, 5, 0),
     "ifPhysAddress": (1, 3, 6, 1, 2, 1, 2, 2, 1, 6, 1),
     "rfcRuntimeMin": (1, 3, 6, 1, 2, 1, 33, 1, 2, 3, 0),
@@ -213,6 +215,7 @@ STATUS_KEYS = (
     "capacity", "runtimeTicks", "batteryStatus", "outputStatus",
     "outputLoad", "inputVoltage", "outputVoltage",
 )
+HOST_KEYS = ("sysDescr", "sysName", "sysUpTime")
 OPTIONAL_STATUS_KEYS = ("rfcRuntimeMin",)
 IDENTITY_KEYS = (
     "sysName", "ifPhysAddress", "model", "name", "firmware", "serial",
@@ -394,6 +397,52 @@ async def snmp_get(
             for name in ("batteryLastReplace", "batteryAgeMonths"):
                 await _snmp_one(engine, creds, date_target, ctx, name, raw)
         return decode(raw)
+    finally:
+        if own:
+            close_engine(engine)
+
+
+async def snmp_get_host(
+    host: str,
+    user: str,
+    auth: str,
+    priv: str,
+    timeout: float = 3.0,
+    retries: int = 1,
+    engine=None,
+) -> dict[str, Any]:
+    """MIB-2 reachability for a router. SHA and AES, same USM shape as a UPS poll."""
+    from pysnmp.hlapi.v3arch.asyncio import (
+        UsmUserData, UdpTransportTarget, ContextData,
+        usmHMACSHAAuthProtocol, usmAesCfb128Protocol,
+    )
+    own = engine is None
+    if own:
+        engine = new_engine()
+    try:
+        creds = UsmUserData(
+            user, auth, priv,
+            authProtocol=usmHMACSHAAuthProtocol,
+            privProtocol=usmAesCfb128Protocol,
+        )
+        target = await UdpTransportTarget.create((host, 161), timeout=timeout, retries=retries)
+        ctx = ContextData()
+        raw: dict[str, Any] = {}
+        try:
+            await _snmp_batches(engine, creds, target, ctx, HOST_KEYS, raw, fallback_singles=True)
+        except TimeoutError:
+            if "sysDescr" not in raw and "sysName" not in raw and "sysUpTime" not in raw:
+                raise RuntimeError("No SNMP response received before timeout")
+        descr = _str(raw.get("sysDescr"))
+        name = _str(raw.get("sysName"))
+        up = _str(raw.get("sysUpTime"))
+        if not descr and not name and not up:
+            raise RuntimeError("empty SNMP GET")
+        return {
+            "_router": True,
+            "snmp_name": ((name or "")[:128] or None),
+            "sys_descr": ((descr or "")[:500] or None),
+        }
     finally:
         if own:
             close_engine(engine)

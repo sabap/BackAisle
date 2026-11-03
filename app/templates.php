@@ -172,10 +172,7 @@ function ba_save_device_as_template(PDO $db, array $device, string $manufacturer
     if (strlen($model) > 150 || strlen($manufacturer) > 100) {
         throw new RuntimeException('Manufacturer or model is too long.');
     }
-    $kind = (string)ba_col($device, 'kind', 'ups');
-    if (!in_array($kind, ['ups', 'switch', 'patch_panel', 'other'], true)) {
-        $kind = 'other';
-    }
+    $kind = ba_kind_allowed((string)ba_col($device, 'kind', 'ups'), 'other');
     $face = (string)ba_col($device, 'face', 'both');
     if (!in_array($face, ['front', 'rear', 'both'], true)) {
         $face = 'both';
@@ -298,8 +295,7 @@ function page_templates(PDO $db, array $user): void {
         try {
             if ($act === 'save') {
                 $tid = (int)($_POST['id'] ?? 0);
-                $kind = $_POST['kind'] ?? 'other';
-                if (!in_array($kind, ['ups', 'switch', 'patch_panel', 'other'], true)) $kind = 'other';
+                $kind = ba_kind_allowed((string)($_POST['kind'] ?? 'other'), 'other');
                 $face = $_POST['face'] ?? 'both';
                 if (!in_array($face, ['front', 'rear', 'both'], true)) $face = 'both';
                 $model = trim($_POST['model'] ?? '');

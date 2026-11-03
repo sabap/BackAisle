@@ -128,6 +128,9 @@ function ba_db(bool $reconnect = false): PDO {
         if (function_exists('ba_ensure_webcred_schema')) {
             ba_ensure_webcred_schema($pdo);
         }
+        if (function_exists('ba_ensure_snmp_schema')) {
+            ba_ensure_snmp_schema($pdo);
+        }
         return $pdo;
     }
     $path = (string)($db['path'] ?? BA_DB);
@@ -147,6 +150,9 @@ function ba_db(bool $reconnect = false): PDO {
     }
     if (function_exists('ba_ensure_webcred_schema')) {
         ba_ensure_webcred_schema($pdo);
+    }
+    if (function_exists('ba_ensure_snmp_schema')) {
+        ba_ensure_snmp_schema($pdo);
     }
     return $pdo;
 }

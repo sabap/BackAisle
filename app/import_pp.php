@@ -48,7 +48,26 @@ function ba_pp_is_root(mixed $parent): bool
     return $p === '' || $p === '-1' || $p === '0' || $p === 'none' || $p === 'null';
 }
 
-function ba_snmp_store_secret(int $profileId, string $auth, string $priv, ?string $web = null): void
+function ba_snmp_has_secret(int $profileId): bool
+{
+    $path = 'C:\\ProgramData\\BackAisle\\snmp_profiles.json';
+    if (!is_file($path)) {
+        return false;
+    }
+    $j = json_decode((string)file_get_contents($path), true);
+    if (!is_array($j)) {
+        return false;
+    }
+    $rec = $j[(string)$profileId] ?? null;
+    if (!is_array($rec)) {
+        return false;
+    }
+    $auth = trim((string)($rec['auth_pass'] ?? ''));
+    $priv = trim((string)($rec['priv_pass'] ?? ''));
+    return $auth !== '' || $priv !== '';
+}
+
+function ba_snmp_store_secret(int $profileId, string $auth, string $priv, ?string $web = null, ?string $style = null): void
 {
     $path = 'C:\\ProgramData\\BackAisle\\snmp_profiles.json';
     $dir = dirname($path);
@@ -63,11 +82,32 @@ function ba_snmp_store_secret(int $profileId, string $auth, string $priv, ?strin
         }
     }
     $rec = $data[(string)$profileId] ?? [];
-    if ($auth !== '') {
-        $rec['auth_pass'] = $auth;
+    if (!is_array($rec)) {
+        $rec = [];
     }
-    if ($priv !== '') {
-        $rec['priv_pass'] = $priv;
+    if ($style === 'password') {
+        $pw = $auth !== '' ? $auth : $priv;
+        if ($pw !== '') {
+            $rec['auth_pass'] = $pw;
+            $rec['priv_pass'] = $pw;
+        } elseif (!empty($rec['auth_pass']) && empty($rec['priv_pass'])) {
+            $rec['priv_pass'] = $rec['auth_pass'];
+        } elseif (!empty($rec['priv_pass']) && empty($rec['auth_pass'])) {
+            $rec['auth_pass'] = $rec['priv_pass'];
+        }
+        $rec['style'] = 'password';
+        $rec['auth_proto'] = 'SHA';
+        $rec['priv_proto'] = 'AES';
+    } else {
+        if ($auth !== '') {
+            $rec['auth_pass'] = $auth;
+        }
+        if ($priv !== '') {
+            $rec['priv_pass'] = $priv;
+        }
+        if ($style === 'authpriv') {
+            $rec['style'] = 'authpriv';
+        }
     }
     if ($web !== null && $web !== '') {
         $rec['web_pass'] = $web;

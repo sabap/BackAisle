@@ -76,6 +76,17 @@ def job_is_simulate(job: dict) -> bool:
     return job_truthy(job, "simulate")
 
 
+def _password_profile(prof, sec: dict) -> bool:
+    """Username-and-password profiles poll a router. They are not RMCARD slot writes."""
+    if str(sec.get("style") or "") == "password":
+        return True
+    try:
+        raw = prof["cred_style"]
+    except Exception:
+        return False
+    return str(raw or "").strip().lower() == "password"
+
+
 _log_lock = threading.Lock()
 
 
@@ -788,6 +799,8 @@ def run_push_snmpv3(con, job: dict, secrets: dict) -> None:
     if not prof:
         raise RuntimeError("SNMPv3 credentials missing")
     sec = get_secret(profile_id)
+    if _password_profile(prof, sec):
+        raise RuntimeError("This credential profile is a username and password. It is not written to a UPS card.")
     username = (prof["username"] or sec.get("user") or "").strip()
     if not username:
         raise RuntimeError("profile has no SNMPv3 username")
@@ -926,6 +939,8 @@ def run_push_traps(con, job: dict, secrets: dict) -> None:
     if not prof:
         raise RuntimeError("SNMPv3 credentials missing")
     sec = get_secret(profile_id)
+    if _password_profile(prof, sec):
+        raise RuntimeError("This credential profile is a username and password. It is not written to a UPS card.")
     username = (prof["username"] or sec.get("user") or "").strip()
     if not username:
         raise RuntimeError("profile has no SNMPv3 username")
