@@ -775,6 +775,192 @@ function page_events(PDO $db): void {
     ba_layout_end();
 }
 
+/* Strip LIKE wildcards so a lone percent sign cannot match every row. */
+function ba_search_needle(string $raw): string
+{
+    $q = str_replace(['%', '_', "\0", "\r", "\n", "\t"], '', trim($raw));
+    if (function_exists('mb_substr')) {
+        $q = mb_substr($q, 0, 80);
+    } elseif (strlen($q) > 80) {
+        $q = substr($q, 0, 80);
+    }
+    return trim($q);
+}
+
+/** @return array{q:string,total:int,groups:list<array{label:string,href?:string,hits:list<array{title:string,subtitle:string,href:string}>}>} */
+function ba_search_lookup(PDO $db, string $q): array
+{
+    $q = ba_search_needle($q);
+    $out = ['q' => $q, 'total' => 0, 'groups' => []];
+    if ($q === '') {
+        return $out;
+    }
+    $like = '%' . $q . '%';
+    $parts = [];
+    $params = [];
+    foreach (['hostname', 'ip', 'serial', 'mac', 'model', 'snmp_name', 'site', 'building', 'idf_closet', 'circuit', 'rack', 'manufacturer'] as $col) {
+        $parts[] = 'd.' . $col . ' LIKE ?';
+        $params[] = $like;
+    }
+    $idExact = ctype_digit($q) && strlen($q) <= 9;
+    if ($idExact) {
+        $parts[] = 'd.id=?';
+        $params[] = (int)$q;
+    }
+    $sql = 'SELECT d.id, d.hostname, d.ip, d.serial, d.model, d.manufacturer, d.kind, d.building, d.idf_closet, d.decommissioned_at'
+        . ' FROM devices d WHERE (' . implode(' OR ', $parts) . ') ORDER BY ';
+    if ($idExact) {
+        $sql .= 'CASE WHEN d.id=? THEN 0 WHEN d.hostname LIKE ? OR d.ip LIKE ? THEN 1 ELSE 2 END';
+        $params[] = (int)$q;
+        $params[] = $q;
+        $params[] = $q;
+    } else {
+        $sql .= 'CASE WHEN d.hostname LIKE ? OR d.ip LIKE ? THEN 0 ELSE 1 END';
+        $params[] = $q;
+        $params[] = $q;
+    }
+    $sql .= ', d.hostname, d.ip LIMIT 8';
+    $st = ba_pp_exec($db, $sql, $params);
+    $deviceRows = $st->fetchAll();
+    $st->closeCursor();
+
+    $deviceHits = [];
+    foreach ($deviceRows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $id = (int)ba_col($row, 'id', 0);
+        if ($id < 1) {
+            continue;
+        }
+        $host = trim((string)ba_col($row, 'hostname', ''));
+        $ip = trim((string)ba_col($row, 'ip', ''));
+        $title = $host !== '' ? $host : ($ip !== '' ? $ip : ('Device ' . $id));
+        $bits = [ba_kind_label((string)ba_col($row, 'kind', 'ups'))];
+        if ($host !== '' && $ip !== '') {
+            $bits[] = $ip;
+        }
+        $place = trim(trim((string)ba_col($row, 'building', '')) . ' / ' . trim((string)ba_col($row, 'idf_closet', '')), ' /');
+        if ($place !== '') {
+            $bits[] = $place;
+        }
+        $model = trim(trim((string)ba_col($row, 'manufacturer', '')) . ' ' . trim((string)ba_col($row, 'model', '')));
+        if ($model !== '') {
+            $bits[] = $model;
+        }
+        $serial = trim((string)ba_col($row, 'serial', ''));
+        if ($serial !== '') {
+            $bits[] = $serial;
+        }
+        if (trim((string)ba_col($row, 'decommissioned_at', '')) !== '') {
+            $bits[] = 'decommissioned';
+        }
+        $deviceHits[] = [
+            'title' => $title,
+            'subtitle' => implode(' · ', $bits),
+            'href' => ba_href('/device?id=' . $id),
+        ];
+    }
+    if ($deviceHits) {
+        $out['groups'][] = [
+            'label' => 'Devices',
+            'href' => ba_href('/devices?q=' . rawurlencode($q)),
+            'hits' => $deviceHits,
+        ];
+    }
+
+    $byId = [];
+    foreach (ba_groups($db) as $g) {
+        $byId[(int)$g['id']] = $g;
+    }
+    $matched = [];
+    foreach ($byId as $id => $g) {
+        $name = trim((string)($g['name'] ?? ''));
+        if ($name === '') {
+            continue;
+        }
+        $pos = function_exists('mb_stripos') ? mb_stripos($name, $q) : stripos($name, $q);
+        if ($pos === false) {
+            continue;
+        }
+        $exact = function_exists('mb_strtolower')
+            ? mb_strtolower($name) === mb_strtolower($q)
+            : strcasecmp($name, $q) === 0;
+        $matched[] = ['rank' => $exact ? 0 : ($pos === 0 ? 1 : 2), 'name' => $name, 'id' => (int)$id];
+    }
+    usort($matched, static function (array $a, array $b): int {
+        if ($a['rank'] !== $b['rank']) {
+            return $a['rank'] <=> $b['rank'];
+        }
+        return strcasecmp($a['name'], $b['name']);
+    });
+    $idfHits = [];
+    foreach (array_slice($matched, 0, 8) as $hit) {
+        $path = ba_group_path_from_map($byId, $hit['id']);
+        $idfHits[] = [
+            'title' => $hit['name'],
+            'subtitle' => ($path === '' || $path === '—' || $path === $hit['name']) ? 'Location' : $path,
+            'href' => ba_href('/idfs?group=' . $hit['id']),
+        ];
+    }
+    if ($idfHits) {
+        $out['groups'][] = ['label' => 'IDFs', 'hits' => $idfHits];
+    }
+
+    $rst = ba_pp_exec(
+        $db,
+        'SELECT r.id, r.name, r.group_id, r.u_height FROM racks r WHERE r.name LIKE ?'
+        . ' ORDER BY CASE WHEN r.name LIKE ? THEN 0 ELSE 1 END, r.name LIMIT 8',
+        [$like, $q]
+    );
+    $rackRows = $rst->fetchAll();
+    $rst->closeCursor();
+    $rackHits = [];
+    foreach ($rackRows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $id = (int)ba_col($row, 'id', 0);
+        if ($id < 1) {
+            continue;
+        }
+        $name = trim((string)ba_col($row, 'name', ''));
+        $gid = (int)ba_col($row, 'group_id', 0);
+        $path = $gid > 0 ? ba_group_path_from_map($byId, $gid) : '';
+        $bits = [];
+        if ($path !== '' && $path !== '—') {
+            $bits[] = $path;
+        }
+        $uh = (int)ba_col($row, 'u_height', 0);
+        if ($uh > 0) {
+            $bits[] = $uh . 'U';
+        }
+        $rackHits[] = [
+            'title' => $name !== '' ? $name : ('Rack ' . $id),
+            'subtitle' => $bits ? implode(' · ', $bits) : 'Rack',
+            'href' => ba_href('/rack?id=' . $id),
+        ];
+    }
+    if ($rackHits) {
+        $out['groups'][] = ['label' => 'Racks', 'hits' => $rackHits];
+    }
+
+    $total = 0;
+    foreach ($out['groups'] as $group) {
+        $total += count($group['hits']);
+    }
+    $out['total'] = $total;
+    return $out;
+}
+
+function page_api_search(PDO $db): void
+{
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store');
+    $q = ba_search_needle((string)($_GET['q'] ?? ''));
+    echo json_encode(ba_search_lookup($db, $q), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+}
+
 function page_devices(PDO $db, array $user): void {
     $canEditDevices = ba_can_edit_device($user, null);
     $canAssign = ba_can($user, 'edit_devices_all');
@@ -937,6 +1123,7 @@ function page_devices(PDO $db, array $user): void {
     }
     $showRetired = isset($_GET['retired']);
     $filterDept = (int)($_GET['dept'] ?? 0);
+    $q = ba_search_needle((string)($_GET['q'] ?? ''));
     $listSql = 'SELECT d.*, t.manufacturer AS template_manufacturer FROM devices d LEFT JOIN device_templates t ON t.id=d.template_id WHERE 1=1';
     $listParams = [];
     if (!$showRetired) {
@@ -946,8 +1133,23 @@ function page_devices(PDO $db, array $user): void {
         $listSql .= ' AND d.department_id=?';
         $listParams[] = $filterDept;
     }
+    if ($q !== '') {
+        $like = '%' . $q . '%';
+        $searchParts = [];
+        foreach (['hostname', 'ip', 'serial', 'mac', 'model', 'snmp_name', 'site', 'building', 'idf_closet', 'circuit', 'rack', 'manufacturer'] as $col) {
+            $searchParts[] = 'd.' . $col . ' LIKE ?';
+            $listParams[] = $like;
+        }
+        if (ctype_digit($q) && strlen($q) <= 9) {
+            $searchParts[] = 'd.id=?';
+            $listParams[] = (int)$q;
+        }
+        $listSql .= ' AND (' . implode(' OR ', $searchParts) . ')';
+    }
     $listSql .= ' ORDER BY d.is_simulated, d.building, d.idf_closet';
-    $rows = ba_pp_exec($db, $listSql, $listParams)->fetchAll();
+    $listSt = ba_pp_exec($db, $listSql, $listParams);
+    $rows = $listSt->fetchAll();
+    $listSt->closeCursor();
     ba_layout_start('Inventory', 'devices');
     echo '<h1>Inventory</h1>';
     if (!empty($_GET['job'])) {
@@ -969,16 +1171,31 @@ function page_devices(PDO $db, array $user): void {
     $canCard = ba_card_settings_available($db, $user);
     $showPick = $canAssign || $canCard;
     ba_card_open('Devices', $canEditDevices ? '<button type="button" class="btn" data-open-modal="modal-add-device">Add device</button>' : '');
+    $keep = [];
+    if ($filterDept > 0) {
+        $keep['dept'] = (string)$filterDept;
+    }
+    if ($q !== '') {
+        $keep['q'] = $q;
+    }
+    $withRetired = $keep;
+    $withRetired['retired'] = '1';
+    $hideHref = ba_href('/devices' . ($keep ? '?' . http_build_query($keep) : ''));
+    $showHref = ba_href('/devices?' . http_build_query($withRetired));
     echo '<form method="get" action="'.h(ba_href('/devices')).'" class="filters">';
-    echo '<select name="dept"><option value="">All departments</option>';
+    if ($showRetired) {
+        echo '<input type="hidden" name="retired" value="1">';
+    }
+    echo '<input type="search" name="q" value="'.h($q).'" placeholder="Host, IP, serial, closet" aria-label="Search inventory" autocomplete="off">';
+    echo '<select name="dept" aria-label="Department"><option value="">All departments</option>';
     foreach ($deptNames as $id => $name) {
         echo '<option value="'.$id.'"'.($filterDept === $id ? ' selected' : '').'>'.h($name).'</option>';
     }
     echo '</select><button>Filter</button>';
     if ($showRetired) {
-        echo '<a href="'.h(ba_href('/devices'.($filterDept > 0 ? '?dept='.$filterDept : ''))).'">Hide decommissioned</a>';
+        echo '<a href="'.h($hideHref).'">Hide decommissioned</a>';
     } else {
-        echo '<a href="'.h(ba_href('/devices?retired=1'.($filterDept > 0 ? '&dept='.$filterDept : ''))).'">Show decommissioned</a>';
+        echo '<a href="'.h($showHref).'">Show decommissioned</a>';
     }
     echo '</form>';
     if ($showPick) {
@@ -1035,7 +1252,8 @@ function page_devices(PDO $db, array $user): void {
         echo '</td></tr>';
     }
     if (!$rows) {
-        echo '<tr><td colspan="'.($showPick ? 10 : 9).'" class="muted">No devices in this list.</td></tr>';
+        $empty = $q !== '' ? 'No devices match this search.' : 'No devices in this list.';
+        echo '<tr><td colspan="'.($showPick ? 10 : 9).'" class="muted">'.h($empty).'</td></tr>';
     }
     echo '</tbody></table>';
     if ($showPick) {

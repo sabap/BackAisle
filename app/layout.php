@@ -25,7 +25,7 @@ function ba_layout_start(string $title, string $nav = 'fleet'): void {
   <link rel="icon" href="/assets/logo.svg?v=aisle1" type="image/svg+xml">
   <link rel="icon" href="/assets/favicon-32.png?v=aisle1" type="image/png" sizes="32x32">
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=aisle1">
-  <link rel="stylesheet" href="/assets/app.css?v=layout10">
+  <link rel="stylesheet" href="/assets/app.css?v=layout11">
 </head>
 <body<?= ba_tech_mode() ? ' class="tech"' : '' ?>>
 <header class="top">
@@ -63,7 +63,7 @@ function ba_layout_start(string $title, string $nav = 'fleet'): void {
       </span>
     <?php endif; ?>
   </nav>
-  <div class="who"><?php if (ba_tech_mode() && $nav !== 'dash') { ba_tech_toggle(true); } ?><?= h($u['username'] ?? '') ?> · <?= h($roleLabel) ?> · <a class="<?= $nav==='account'?'on':'' ?>" href="/account.php">settings</a> · <a href="/logout.php">out</a></div>
+  <div class="who"><button type="button" class="btn find-open" data-open-find>Find <kbd>/</kbd></button><?php if (ba_tech_mode() && $nav !== 'dash') { ba_tech_toggle(true); } ?><?= h($u['username'] ?? '') ?> · <?= h($roleLabel) ?> · <a class="<?= $nav==='account'?'on':'' ?>" href="/account.php">settings</a> · <a href="/logout.php">out</a></div>
 </header>
 <main>
 <?php
@@ -144,9 +144,23 @@ function ba_users_modal_script(): void
 JS;
 }
 
+function ba_search_palette(): void
+{
+    echo '<div class="gs-palette" id="globalSearchPalette" hidden>';
+    echo '<div class="gs-palette-backdrop" data-close-find></div>';
+    echo '<div class="gs-palette-card" role="dialog" aria-modal="true" aria-labelledby="globalSearchLabel">';
+    echo '<div class="gs-palette-head"><h2 id="globalSearchLabel" class="sr-only">Find</h2>';
+    echo '<button type="button" class="btn" data-close-find>Close</button></div>';
+    echo '<input class="gs-palette-input" type="search" id="globalSearchInput" placeholder="Device, closet, or rack" autocomplete="off" spellcheck="false" enterkeyhint="search" aria-controls="globalSearchPanel" aria-expanded="false">';
+    echo '<p class="gs-palette-hint">Esc closes. <kbd>/</kbd> or <kbd>Ctrl</kbd>+<kbd>K</kbd> opens. Enter opens the highlighted match.</p>';
+    echo '<div class="gs-palette-results" id="globalSearchPanel" hidden role="listbox" aria-label="Search results"></div>';
+    echo '</div></div>';
+}
+
 function ba_layout_end(): void {
     echo '</main><footer class="site-foot">BackAisle v'.h(ba_version()).' · <a href="https://github.com/sabap/BackAisle" target="_blank" rel="noopener">GitHub</a></footer>';
-    echo '<script src="/assets/app.js?v=notify1"></script>';
+    ba_search_palette();
+    echo '<script src="/assets/app.js?v=search1"></script>';
     if (function_exists('ba_users_modal_script')) {
         ba_users_modal_script();
     }

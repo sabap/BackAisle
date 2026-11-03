@@ -93,6 +93,7 @@ function ba_request_path(): string {
         'api_series.php' => '/api/series',
         'api_dashboard.php' => '/api/dashboard',
         'api_notify.php' => '/api/notify',
+        'api_search.php' => '/api/search',
     ];
     if (isset($map[$base]) && $base !== 'index.php') {
         return $map[$base];
