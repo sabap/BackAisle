@@ -518,7 +518,23 @@ function page_models(PDO $db, array $user): void
                 }
                 $_SESSION['ba_walk'] = ['device_id' => $deviceId, 'profile_id' => $pid, 'root' => $root, 'rows' => $rows];
                 $id = $pid;
-                $msg = count($rows) . ' objects answered under ' . $root . '. Check the ones to keep on this model.';
+                $walkKind = '';
+                $kst = $db->prepare('SELECT kind FROM devices WHERE id=?');
+                $kst->execute([$deviceId]);
+                $krow = $kst->fetch();
+                if ($krow) {
+                    $walkKind = strtolower(trim((string)($krow['kind'] ?? '')));
+                }
+                if ($rows === []) {
+                    $msg = 'Nothing answered under ' . $root . '.';
+                    if ($walkKind === 'router') {
+                        $msg .= ' A router answers MIB-2 system at 1.3.6.1.2.1.1 and interface names at 1.3.6.1.2.1.2.2.1.2.';
+                    } else {
+                        $msg .= ' Try a shorter branch of that tree.';
+                    }
+                } else {
+                    $msg = count($rows) . ' objects answered under ' . $root . '. Check the ones to keep on this model.';
+                }
             } elseif ($act === 'save_walk') {
                 $walk = $_SESSION['ba_walk'] ?? null;
                 $pid = (int)($_POST['profile_id'] ?? 0);
@@ -663,16 +679,44 @@ function page_models(PDO $db, array $user): void
             $walk = $_SESSION['ba_walk'] ?? null;
             ba_card_open('Walk one device');
             echo '<p class="muted">Walk stays under the root you type and stops after 40 replies. Check the objects worth keeping. This does not poll the rest of the fleet.</p>';
-            echo '<form method="post" class="stack">';
+            $walkDevices = $db->query("SELECT id, hostname, ip, model, kind FROM devices WHERE enabled=1 ORDER BY hostname, ip")->fetchAll() ?: [];
+            $walkDeviceId = (int)($_POST['device_id'] ?? 0);
+            $walkRootValue = '1.3.6.1.2.1.33';
+            if (($_POST['act'] ?? '') === 'walk') {
+                $postedRoot = trim((string)($_POST['root'] ?? ''));
+                if (ba_oid_ok($postedRoot)) {
+                    $walkRootValue = $postedRoot;
+                }
+            }
+            $walkKindNow = '';
+            foreach ($walkDevices as $d) {
+                if ($walkDeviceId > 0 && (int)$d['id'] === $walkDeviceId) {
+                    $walkKindNow = strtolower(trim((string)($d['kind'] ?? '')));
+                    break;
+                }
+            }
+            if ($walkKindNow === '' && $walkDevices !== []) {
+                $walkKindNow = strtolower(trim((string)($walkDevices[0]['kind'] ?? '')));
+            }
+            if ($walkKindNow === 'router' && ($walkRootValue === '1.3.6.1.2.1.33' || str_starts_with($walkRootValue, '1.3.6.1.2.1.33.'))) {
+                $walkRootValue = '1.3.6.1.2.1.1';
+            }
+            echo '<form method="post" class="stack" id="model-walk-form">';
             echo '<input type="hidden" name="act" value="walk"><input type="hidden" name="profile_id" value="' . (int)$current['id'] . '">';
             echo '<label>Device</label><select name="device_id">';
-            foreach ($db->query("SELECT id, hostname, ip, model FROM devices WHERE enabled=1 ORDER BY hostname, ip") as $d) {
-                echo '<option value="' . (int)$d['id'] . '">' . h((string)(($d['hostname'] ?: $d['ip']) . ' ' . ($d['model'] ?? ''))) . '</option>';
+            foreach ($walkDevices as $d) {
+                $kindOpt = strtolower(trim((string)($d['kind'] ?? 'ups')));
+                if ($kindOpt === '') {
+                    $kindOpt = 'ups';
+                }
+                $picked = ($walkDeviceId > 0 && (int)$d['id'] === $walkDeviceId) ? ' selected' : '';
+                echo '<option value="' . (int)$d['id'] . '" data-kind="' . h($kindOpt) . '"' . $picked . '>' . h((string)(($d['hostname'] ?: $d['ip']) . ' ' . ($d['model'] ?? ''))) . '</option>';
             }
             echo '</select>';
-            echo '<label>Walk root</label><input name="root" value="1.3.6.1.2.1.33">';
-            echo '<p class="muted">1.3.6.1.2.1.33 is standard UPS-MIB. A vendor branch is longer, for example the enterprise OID from the uploaded MIB.</p>';
+            echo '<label>Walk root</label><input name="root" value="' . h($walkRootValue) . '">';
+            echo '<p class="muted" id="walk-root-hint">1.3.6.1.2.1.33 is standard UPS-MIB. A vendor branch is longer, for example the enterprise OID from the uploaded MIB.</p>';
             echo '<button>Walk</button></form>';
+            echo '<script>(function(){var form=document.getElementById("model-walk-form");if(!form)return;var sel=form.querySelector("[name=device_id]");var root=form.querySelector("[name=root]");var hint=document.getElementById("walk-root-hint");var ups="1.3.6.1.2.1.33";var sys="1.3.6.1.2.1.1";function paint(){var opt=sel.options[sel.selectedIndex];var kind=opt?opt.getAttribute("data-kind")||"":"";var cur=(root.value||"").trim();if(kind==="router"){if(cur===""||cur===ups||cur.indexOf(ups+".")===0)root.value=sys;if(hint)hint.textContent="A router answers MIB-2 system at 1.3.6.1.2.1.1. Interface names are 1.3.6.1.2.1.2.2.1.2. UPS-MIB 1.3.6.1.2.1.33 is for a UPS.";}else{if(cur===""||cur===sys)root.value=ups;if(hint)hint.textContent="1.3.6.1.2.1.33 is standard UPS-MIB. A vendor branch is longer, for example the enterprise OID from the uploaded MIB.";}}if(sel)sel.addEventListener("change",paint);paint();})();</script>';
             if (is_array($walk) && (int)($walk['profile_id'] ?? 0) === (int)$current['id'] && ($walk['rows'] ?? []) !== []) {
                 echo '<form method="post">';
                 echo '<input type="hidden" name="act" value="save_walk"><input type="hidden" name="profile_id" value="' . (int)$current['id'] . '">';

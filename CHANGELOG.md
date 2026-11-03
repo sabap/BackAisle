@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.5.89] - 2026-11-03
+
+- Walking a router starts at MIB-2 system, 1.3.6.1.2.1.1. Interface names are a second walk at 1.3.6.1.2.1.2.2.1.2. A UPS walk still starts at 1.3.6.1.2.1.33.
+- When nothing answers, the page says so. A router walk names those two MIB-2 roots instead of asking which UPS objects to keep.
+- The collector and the writer do not need a restart.
+
 ## [0.5.88] - 2026-11-03
 
 - SNMPv3 credentials can be a username and one password. Polls use that password as both the SHA authentication key and the AES privacy key. Those profiles are not written to a UPS card, and they are left out of bulk assign.
