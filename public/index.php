@@ -150,6 +150,9 @@ switch ($path) {
     case '/api/notify':
         page_api_notify($db, $user);
         break;
+    case '/api/search':
+        page_api_search($db);
+        break;
     default:
         http_response_code(404);
         echo 'Not found';

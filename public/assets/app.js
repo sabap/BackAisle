@@ -291,6 +291,187 @@ async function pollNotify() {
   }
 }
 
+function initFind() {
+  const palette = document.getElementById('globalSearchPalette');
+  const input = document.getElementById('globalSearchInput');
+  const panel = document.getElementById('globalSearchPanel');
+  if (!palette || !input || !panel) return;
+
+  let timer = null;
+  let abort = null;
+  let items = [];
+  let active = -1;
+
+  function isOpen() {
+    return !palette.hidden;
+  }
+
+  function openPalette() {
+    palette.hidden = false;
+    palette.setAttribute('aria-hidden', 'false');
+    input.setAttribute('aria-expanded', 'true');
+    document.body.classList.add('gs-palette-open');
+    input.focus();
+    input.select();
+    if (input.value.trim()) run(input.value);
+  }
+
+  function closePalette() {
+    palette.hidden = true;
+    palette.setAttribute('aria-hidden', 'true');
+    input.setAttribute('aria-expanded', 'false');
+    document.body.classList.remove('gs-palette-open');
+    panel.hidden = true;
+    panel.innerHTML = '';
+    items = [];
+    active = -1;
+  }
+
+  document.querySelectorAll('[data-open-find]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      openPalette();
+    });
+  });
+  palette.addEventListener('click', (e) => {
+    if (e.target && e.target.closest('[data-close-find]')) closePalette();
+  });
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[c]);
+  }
+
+  function setActive(i) {
+    active = i;
+    const nodes = panel.querySelectorAll('.gs-hit');
+    nodes.forEach((el, idx) => el.classList.toggle('is-active', idx === i));
+    if (i >= 0 && nodes[i]) nodes[i].scrollIntoView({ block: 'nearest' });
+  }
+
+  function render(data, q) {
+    items = [];
+    active = -1;
+    const groups = (data && data.groups) || [];
+    const devicesHref = '/devices.php?q=' + encodeURIComponent(q);
+    if (!groups.length) {
+      panel.innerHTML = '<div class="gs-empty">No matches for "' + escapeHtml(q) + '". <a href="'
+        + escapeHtml(devicesHref) + '">Search inventory</a></div>';
+      panel.hidden = false;
+      return;
+    }
+    let html = '';
+    groups.forEach((g) => {
+      html += '<div class="gs-group"><div class="gs-group-head"><span>' + escapeHtml(g.label || '') + '</span>';
+      if (g.href) html += '<a href="' + escapeHtml(g.href) + '">See all</a>';
+      html += '</div>';
+      (g.hits || []).forEach((hit) => {
+        items.push(hit);
+        const idx = items.length - 1;
+        html += '<a class="gs-hit" role="option" data-i="' + idx + '" href="'
+          + escapeHtml(hit.href || '#') + '"><strong>' + escapeHtml(hit.title || '')
+          + '</strong><span>' + escapeHtml(hit.subtitle || '') + '</span></a>';
+      });
+      html += '</div>';
+    });
+    panel.innerHTML = html;
+    panel.hidden = false;
+    panel.querySelectorAll('.gs-hit').forEach((el) => {
+      el.addEventListener('mouseenter', () => setActive(parseInt(el.getAttribute('data-i') || '-1', 10)));
+    });
+  }
+
+  function run(q) {
+    q = String(q || '').trim();
+    if (!q) {
+      panel.hidden = true;
+      panel.innerHTML = '';
+      items = [];
+      active = -1;
+      return;
+    }
+    if (abort) {
+      try { abort.abort(); } catch (e) { /* ignore */ }
+    }
+    abort = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    const url = '/api_search.php?q=' + encodeURIComponent(q);
+    fetch(url, {
+      credentials: 'same-origin',
+      headers: { 'Accept': 'application/json' },
+      signal: abort ? abort.signal : undefined,
+    }).then((res) => res.json()).then((data) => {
+      if (input.value.trim() !== q) return;
+      render(data, q);
+    }).catch((err) => {
+      if (err && err.name === 'AbortError') return;
+    });
+  }
+
+  input.addEventListener('input', () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => run(input.value), 180);
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      closePalette();
+      input.blur();
+      return;
+    }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (!items.length) return;
+      setActive(active < items.length - 1 ? active + 1 : 0);
+      return;
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (!items.length) return;
+      setActive(active > 0 ? active - 1 : items.length - 1);
+      return;
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const q = input.value.trim();
+      if (active >= 0 && items[active]) {
+        window.location.href = items[active].href;
+        return;
+      }
+      if (items.length === 1) {
+        window.location.href = items[0].href;
+        return;
+      }
+      if (items.length > 1) {
+        const firstSee = panel.querySelector('.gs-group-head a');
+        window.location.href = (firstSee && firstSee.getAttribute('href')) || items[0].href;
+        return;
+      }
+      if (q) window.location.href = '/devices.php?q=' + encodeURIComponent(q);
+    }
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && isOpen()) {
+      closePalette();
+      return;
+    }
+    const t = e.target;
+    const tag = t && t.tagName ? t.tagName.toLowerCase() : '';
+    const typing = tag === 'input' || tag === 'textarea' || tag === 'select' || (t && t.isContentEditable);
+    if (e.key === 'k' && (e.ctrlKey || e.metaKey) && !e.altKey && !e.repeat) {
+      e.preventDefault();
+      openPalette();
+      return;
+    }
+    if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey || e.repeat || e.isComposing || typing) return;
+    if (document.querySelector('.ldaps-modal:not([hidden])')) return;
+    e.preventDefault();
+    openPalette();
+  });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('device-charts');
   if (el) loadSeries(el.dataset.id);
@@ -298,6 +479,7 @@ document.addEventListener('DOMContentLoaded', () => {
   bindIdfPan();
   bindTemplateFill();
   bindLocTree();
+  initFind();
   if (!document.body.classList.contains('login-page')) {
     pollNotify();
     setInterval(pollNotify, 15000);

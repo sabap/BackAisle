@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.5.87] - 2026-11-03
+
+- Find is on every signed-in page. Press / when you are not typing in a field, press Ctrl+K, or use Find in the header. Matches include devices, IDFs, and racks. Enter opens the highlighted match. When several match and none is highlighted, Enter opens the filtered inventory list.
+- Inventory has a search box for host, IP, serial, MAC, model, closet, and the other identity fields. A department filter and show-decommissioned stay applied.
+- The collector and the writer do not need a restart.
+
 ## [0.5.86] - 2026-11-03
 
 - Opening a device shows its front and rear pictures, the live readings, and the identity details at the top of the page. Pictures come from the device template. A face with no picture stays empty, and the rear is not copied from the front.
