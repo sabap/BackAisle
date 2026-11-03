@@ -1107,12 +1107,158 @@ JS;
     ba_layout_end();
 }
 
+function ba_render_device_face(string $caption, string $src, string $empty): void
+{
+    $emptyClass = $src === '' ? ' is-empty' : '';
+    echo '<figure class="dev-face"><figcaption>' . h($caption) . '</figcaption>';
+    echo '<div class="dev-shot' . $emptyClass . '">';
+    if ($src !== '') {
+        echo '<a href="' . h($src) . '" target="_blank" rel="noopener"><img src="' . h($src) . '" alt="' . h($caption) . '"></a>';
+    } else {
+        echo '<span class="dev-empty">' . h($empty) . '</span>';
+    }
+    echo '</div></figure>';
+}
+
+function ba_render_device_stage(array $r, array $faces, string $deptName): void
+{
+    $worst = ba_worst($r);
+    $pill = [
+        'st-ok' => 'ok',
+        'st-batt' => 'batt',
+        'st-warn' => 'warn',
+        'st-hot' => 'hot',
+        'st-down' => 'down',
+    ][$worst] ?? 'ok';
+    $title = trim((string)ba_col($r, 'hostname', ''));
+    if ($title === '') {
+        $title = (string)ba_col($r, 'ip', '');
+    }
+    $bits = [];
+    foreach (['site', 'building', 'idf_closet'] as $key) {
+        $part = trim((string)ba_col($r, $key, ''));
+        if ($part !== '') {
+            $bits[] = $part;
+        }
+    }
+    $locText = $bits !== [] ? implode(' / ', $bits) : 'Closet not set';
+    $groupName = trim((string)ba_col($r, 'group_name', ''));
+    $retiredAt = trim((string)ba_col($r, 'decommissioned_at', ''));
+    $hasTpl = trim((string)($faces['template'] ?? '')) !== '' || (int)ba_col($r, 'template_id', 0) > 0;
+    $frontEmpty = $hasTpl ? 'No front picture yet.' : 'No template yet.';
+    $rearEmpty = $hasTpl ? 'No rear picture yet.' : 'No template yet.';
+    $facts = [];
+    $add = static function (string $label, mixed $value, bool $always = false) use (&$facts): void {
+        $text = trim((string)$value);
+        if ($text === '') {
+            if (!$always) {
+                return;
+            }
+            $text = '—';
+        }
+        $facts[] = [$label, $text];
+    };
+    $add('IP', ba_col($r, 'ip', ''), true);
+    $add('Model', ba_col($r, 'model', ''), true);
+    $add('Serial', ba_col($r, 'serial', ''), true);
+    $add('MAC', ba_col($r, 'mac', ''), true);
+    $add('Firmware', ba_col($r, 'firmware', ''), true);
+    $add('SNMP name', ba_col($r, 'snmp_name', ''), true);
+    $comm = trim((string)ba_col($r, 'comm_state', ''));
+    $add('Comm', $comm !== '' ? $comm : 'unknown', true);
+    $lastOk = trim((string)ba_col($r, 'last_success', ''));
+    $add('Last success', $lastOk !== '' ? $lastOk : 'never', true);
+    $add('Department', $deptName !== '' ? $deptName : 'none', true);
+    $add('Circuit', ba_col($r, 'circuit', ''));
+    if ($groupName !== '') {
+        $add('Group', $groupName);
+    }
+    $add('Manufacturer', ba_col($r, 'manufacturer', ''));
+    $add('Install', ba_col($r, 'install_date', ''));
+    $add('Last battery', ba_col($r, 'last_battery_replacement', ''));
+    $add('Replace by', ba_col($r, 'warranty_replace_by', ''));
+    $humShow = ba_col($r, 'climate_hum');
+    if ($humShow === null || $humShow === '') {
+        $humShow = ba_col($r, 'humidity_pct');
+    }
+    if ($humShow !== null && $humShow !== '') {
+        $add('Humidity', ba_fmt($humShow, '%', 0));
+    }
+    $outV = ba_col($r, 'output_voltage');
+    if ($outV !== null && $outV !== '') {
+        $add('Output', ba_fmt($outV, 'V'));
+    }
+    $power = ba_col($r, 'power_w');
+    if ($power !== null && $power !== '') {
+        $add('Power', ba_fmt($power, 'W', 0));
+    }
+    $fails = (int)ba_col($r, 'consecutive_failures', 0);
+    if ($fails > 0) {
+        $add('Failed polls', (string)$fails);
+    }
+    $out = ba_output_text(isset($r['output_status']) ? (int)$r['output_status'] : null);
+    echo '<section class="dev-stage ' . h($worst) . '">';
+    echo '<div class="dev-faces">';
+    ba_render_device_face('Front', (string)($faces['front'] ?? ''), $frontEmpty);
+    ba_render_device_face('Rear', (string)($faces['rear'] ?? ''), $rearEmpty);
+    $tplLabel = trim((string)($faces['template'] ?? ''));
+    if ($tplLabel !== '') {
+        echo '<p class="dev-tpl">Template · ' . h($tplLabel) . '</p>';
+    }
+    echo '</div><div class="dev-summary">';
+    echo '<div class="dev-kicker">';
+    echo '<span class="pill ' . h($pill) . '">' . h(ba_kind_label((string)ba_col($r, 'kind', 'ups'))) . '</span>';
+    echo '<span class="pill ' . h($pill) . '">' . h($out) . '</span>';
+    if ($retiredAt !== '') {
+        echo '<span class="pill down">Decommissioned</span>';
+    } elseif (!(int)ba_col($r, 'enabled', 1)) {
+        echo '<span class="pill down">Polling off</span>';
+    }
+    echo '</div>';
+    echo '<h1>' . h($title) . '</h1>';
+    echo '<p class="dev-where">' . h($locText);
+    $rackId = (int)ba_col($r, 'rack_id', 0);
+    if ($rackId > 0) {
+        echo ' · <a href="' . h(ba_href('/rack?id=' . $rackId)) . '">rack ' . h((string)ba_col($r, 'rack', '')) . ' U' . (int)ba_col($r, 'position_u', 0) . '</a>';
+    }
+    echo '</p>';
+    if ($retiredAt !== '') {
+        echo '<p class="dev-retired">Decommissioned ' . h($retiredAt) . '. Polling is off. The record is kept.</p>';
+    }
+    echo '<div class="dev-meters">';
+    echo '<div class="dev-meter"><span>UPS</span><b>' . h($out) . '</b></div>';
+    echo '<div class="dev-meter"><span>Capacity</span><b>' . h(ba_fmt($r['capacity_pct'] ?? null, '%', 0)) . '</b></div>';
+    echo '<div class="dev-meter"><span>Runtime</span><b>' . h(ba_fmt($r['runtime_min'] ?? null, 'min', 0)) . '</b></div>';
+    echo '<div class="dev-meter"><span>Load</span><b>' . h(ba_fmt($r['load_pct'] ?? null, '%', 0)) . '</b></div>';
+    echo '<div class="dev-meter"><span>Input</span><b>' . h(ba_fmt($r['input_voltage'] ?? null, 'V')) . '</b></div>';
+    echo '<div class="dev-meter"><span>Temp</span><b>';
+    $presRaw = $r['sensor_present'] ?? $r['sample_sensor'] ?? null;
+    $pres = ($presRaw === null || $presRaw === '') ? null : (int)$presRaw;
+    $tempShow = (isset($r['climate_temp']) && $r['climate_temp'] !== null && $r['climate_temp'] !== '') ? $r['climate_temp'] : ($r['temp_f'] ?? null);
+    if ($pres === 1 && ($tempShow === null || $tempShow === '')) {
+        echo 'n/a';
+    } elseif ($pres === 0 && $r['sensor_expected']) {
+        echo 'absent';
+    } elseif ($pres === null && $r['sensor_expected']) {
+        echo '—';
+    } else {
+        echo h(ba_fmt($tempShow, '°F'));
+    }
+    echo '</b></div></div>';
+    echo '<dl class="dev-facts">';
+    foreach ($facts as $fact) {
+        echo '<div><dt>' . h($fact[0]) . '</dt><dd title="' . h($fact[1]) . '">' . h($fact[1]) . '</dd></div>';
+    }
+    echo '</dl></div></section>';
+}
+
 function page_device(PDO $db, array $user): void {
     ba_ensure_model_schema($db);
     $id = (int)($_GET['id'] ?? 0);
     $st = $db->prepare(ba_latest_join() . ' WHERE d.id=?');
     $st->execute([$id]);
     $r = $st->fetch();
+    $st->closeCursor();
     if (!$r) { http_response_code(404); echo 'not found'; return; }
     $r = ba_card_attach_template_mfr($db, $r);
     $canEditThis = ba_can_edit_device($user, $r);
@@ -1271,6 +1417,16 @@ function page_device(PDO $db, array $user): void {
     $th = $db->prepare("SELECT * FROM thresholds WHERE (scope='device' AND device_id=?) OR scope='global' ORDER BY CASE scope WHEN 'device' THEN 1 ELSE 0 END DESC LIMIT 1");
     $th->execute([$id]);
     $thr = $th->fetch() ?: [];
+    $th->closeCursor();
+    $faces = ba_device_faces($db, $r);
+    $deptName = '';
+    $deptId = (int)ba_col($r, 'department_id', 0);
+    if ($deptId > 0) {
+        $dst = $db->prepare('SELECT name FROM departments WHERE id=?');
+        $dst->execute([$deptId]);
+        $deptName = trim((string)($dst->fetchColumn() ?: ''));
+        $dst->closeCursor();
+    }
     ba_layout_start($r['hostname'] ?: $r['ip'], 'devices');
     if (!empty($_GET['err'])) echo '<div class="flash err">'.h((string)$_GET['err']).'</div>';
     if (!empty($_GET['job'])) {
@@ -1291,45 +1447,12 @@ function page_device(PDO $db, array $user): void {
         echo '<div class="flash">'.h($savedText).'</div>';
     }
     ?>
-    <h1><?= h($r['hostname'] ?: $r['ip']) ?> <span class="muted"><?= h($r['model']) ?> · <?= h($r['serial']) ?> · <?= h($r['mac']) ?></span></h1>
-    <div class="kpis">
-      <div class="kpi"><span>UPS</span><b><?= h(ba_output_text(isset($r['output_status'])?(int)$r['output_status']:null)) ?></b></div>
-      <div class="kpi"><span>Capacity</span><b><?= h(ba_fmt($r['capacity_pct']??null,'%',0)) ?></b></div>
-      <div class="kpi"><span>Runtime</span><b><?= h(ba_fmt($r['runtime_min']??null,'min',0)) ?></b></div>
-      <div class="kpi"><span>Load</span><b><?= h(ba_fmt($r['load_pct']??null,'%',0)) ?></b></div>
-      <div class="kpi"><span>Input</span><b><?= h(ba_fmt($r['input_voltage']??null,'V')) ?></b></div>
-      <div class="kpi"><span>Temp</span><b><?php
-        $presRaw = $r['sensor_present'] ?? $r['sample_sensor'] ?? null;
-        $pres = ($presRaw === null || $presRaw === '') ? null : (int)$presRaw;
-        $tempShow = (isset($r['climate_temp']) && $r['climate_temp'] !== null && $r['climate_temp'] !== '') ? $r['climate_temp'] : ($r['temp_f'] ?? null);
-        if ($pres === 1 && ($tempShow === null || $tempShow === '')) echo 'n/a';
-        elseif ($pres === 0 && $r['sensor_expected']) echo 'absent';
-        elseif ($pres === null && $r['sensor_expected']) echo '—';
-        else echo h(ba_fmt($tempShow,'°F'));
-      ?></b></div>
-    </div>
-    <p class="muted">Closet <?= h($r['site'].' / '.$r['building'].' / '.$r['idf_closet']) ?>
-      <?php if (!empty($r['rack_id'])): ?>
-        · <a href="<?= h(ba_href('/rack?id='.(int)$r['rack_id'])) ?>">rack <?= h($r['rack']) ?> U<?= (int)$r['position_u'] ?></a>
-      <?php endif; ?>
-      · <?= h(ba_kind_label($r['kind'] ?? 'ups')) ?>
-      · comm <?= h($r['comm_state'] ?: 'unknown') ?> · last ok <?= h($r['last_success'] ?: 'never') ?> · SNMP name <?= h($r['snmp_name']) ?> · fw <?= h($r['firmware']) ?></p>
-    <?php if ($canEditThis && ba_device_is_cyberpower($r)): ?>
-      <p><button type="button" class="btn" data-open-modal="modal-card-settings">Card settings</button></p>
-    <?php endif; ?>
     <?php
+    ba_render_device_stage($r, $faces, $deptName);
     $canMakeProfile = $canEditThis && ba_editor($user, 'edit_snmp');
-    $profileAction = '';
-    if ($canMakeProfile) {
-        $profileAction = '<a class="btn" href="' . h(ba_href('/device?id=' . $id . '&new_profile=1')) . '">Create model profile</a>';
-    }
-    ba_render_device_readings($db, $r, $profileAction);
+    ba_render_device_readings($db, $r, '');
     ?>
-    <?php if (trim((string)ba_col($r, 'decommissioned_at', '')) !== ''): ?>
-      <div class="flash">Decommissioned <?= h((string)ba_col($r, 'decommissioned_at')) ?>. Polling is off. The record is kept.</div>
-    <?php endif; ?>
-    <?php ba_device_owner_card($db, $user, $r); ?>
-    <section class="ucard">
+    <section class="ucard dev-history">
       <div class="ucard-head"><h3>History</h3></div>
       <div class="ucard-body">
     <div id="device-charts" data-id="<?= $id ?>" class="charts">
@@ -1342,7 +1465,14 @@ function page_device(PDO $db, array $user): void {
     </div>
       </div>
     </section>
+    <?php ba_device_owner_card($db, $user, $r); ?>
     <?php if ($canEditThis): ?>
+    <div class="dev-settings-head" id="device-settings">
+      <h2>Settings</h2>
+      <?php if (ba_device_is_cyberpower($r)): ?>
+        <button type="button" class="btn" data-open-modal="modal-card-settings">Card settings</button>
+      <?php endif; ?>
+    </div>
     <div class="card-board">
       <form method="post" class="ucard stack">
         <div class="ucard-head"><h3>Inventory</h3></div>

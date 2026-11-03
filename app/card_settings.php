@@ -102,6 +102,7 @@ function ba_card_attach_template_mfr(PDO $db, array $row): array
     $st = $db->prepare('SELECT manufacturer FROM device_templates WHERE id=?');
     $st->execute([$tid]);
     $row['template_manufacturer'] = (string)($st->fetchColumn() ?: '');
+    $st->closeCursor();
     return $row;
 }
 

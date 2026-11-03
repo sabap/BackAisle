@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.5.86] - 2026-11-03
+
+- Opening a device shows its front and rear pictures, the live readings, and the identity details at the top of the page. Pictures come from the device template. A face with no picture stays empty, and the rear is not copied from the front.
+- The owning department, card settings, inventory, and thresholds are at the bottom.
+- The collector and the writer do not need a restart.
+
 ## [0.5.85] - 2026-10-30
 
 - Organization, on the Groups tab, has Add Group and Add IDF. Add Group creates a campus, site, or building, and it can sit at the top. Add IDF creates a closet under a location that already exists.
