@@ -6,6 +6,7 @@ from typing import Any
 
 from db import connect, is_sqlsrv
 from snmp_client import snmp_get_oid
+from udm_map import IF_NAME_BASE, udm_counter_action, udm_counter_index
 
 
 def _int(v, default: int = 0) -> int:
@@ -125,8 +126,15 @@ async def read_profile_fields(device: dict, secrets: dict, engine) -> list[dict]
     host = str(device.get("ip") or "")
     if not host or not user:
         return []
+    names = await _udm_names(engine, host, user, auth, priv, fields)
     found = []
     for field in fields:
+        action = udm_counter_action(str(field.get("oid") or ""), names)
+        if action == "skip":
+            continue
+        if action == "clear":
+            found.append({"field_key": str(field.get("field_key") or ""), "clear": True})
+            continue
         parts = []
         for piece in str(field.get("oid") or "").split("."):
             if piece.isdigit():
@@ -151,6 +159,27 @@ async def read_profile_fields(device: dict, secrets: dict, engine) -> list[dict]
         shaped["field_key"] = str(field.get("field_key") or "")
         found.append(shaped)
     return found
+
+
+async def _udm_names(engine, host: str, user: str, auth: str, priv: str, fields: list[dict]) -> dict[int, str] | None:
+    """ifIndex to ifName for UDM counter fields. None means a name read timed out."""
+    indexes: list[int] = []
+    for field in fields:
+        idx = udm_counter_index(str(field.get("oid") or ""))
+        if idx is not None and idx not in indexes:
+            indexes.append(idx)
+    if not indexes:
+        return {}
+    names: dict[int, str] = {}
+    for idx in indexes:
+        try:
+            raw = await snmp_get_oid(engine, host, user, auth, priv, IF_NAME_BASE + (idx,), timeout=2.0)
+        except Exception:
+            return None
+        if raw is None:
+            return None
+        names[idx] = str(raw).strip()
+    return names
 
 
 def store_profile_fields(con, device_id: int, rows: list[dict]) -> None:
