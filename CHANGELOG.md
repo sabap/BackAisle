@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.5.91] - 2026-11-04
+
+- A profile that already matches UDM-Pro keeps its name and the fields already saved on it. The built-in description, uptime, and WAN and LAN byte counters are added when that OID is not already there.
+- The collector and the writer do not need a restart.
+
 ## [0.5.90] - 2026-11-04
 
 - Models includes a built-in Ubiquiti UDM-Pro profile. A router uses it when the model contains UDM-Pro, or when that profile is assigned.
