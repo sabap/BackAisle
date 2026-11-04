@@ -157,21 +157,9 @@ function ba_seed_cyberpower_profile(PDO $db): void
     }
 }
 
-function ba_seed_udmpro_profile(PDO $db): void
+function ba_udmpro_builtin_fields(): array
 {
-    $st = $db->prepare('SELECT id FROM model_profiles WHERE match_model=?');
-    $st->execute(['UDM-Pro']);
-    if ($st->fetch()) {
-        return;
-    }
-    $db->prepare('INSERT INTO model_profiles (name, vendor, match_model, notes) VALUES (?,?,?,?)')->execute([
-        'Ubiquiti UDM-Pro',
-        'Ubiquiti',
-        'UDM-Pro',
-        'Built-in map. eth8 ifIndex 4 is the RJ45 WAN, eth9 ifIndex 3 is the SFP WAN, and eth10 ifIndex 5 is the SFP LAN. Counters are 64-bit bytes since boot. The collector confirms the interface name before saving a counter.',
-    ]);
-    $pid = ba_last_id($db);
-    $fields = [
+    return [
         ['description', 'Description', '1.3.6.1.2.1.1.1.0', '', '1'],
         ['uptime', 'Uptime', '1.3.6.1.2.1.1.3.0', 's', '0.01'],
         ['wan_bytes_in', 'WAN bytes in', '1.3.6.1.2.1.31.1.1.1.6.4', 'bytes', '1'],
@@ -181,11 +169,45 @@ function ba_seed_udmpro_profile(PDO $db): void
         ['lan_sfp_bytes_in', 'LAN SFP bytes in', '1.3.6.1.2.1.31.1.1.1.6.5', 'bytes', '1'],
         ['lan_sfp_bytes_out', 'LAN SFP bytes out', '1.3.6.1.2.1.31.1.1.1.10.5', 'bytes', '1'],
     ];
+}
+
+function ba_seed_udmpro_profile(PDO $db): void
+{
+    $st = $db->prepare('SELECT id FROM model_profiles WHERE match_model=? ORDER BY id');
+    $st->execute(['UDM-Pro']);
+    $pid = (int)$st->fetchColumn();
+    if ($pid < 1) {
+        $db->prepare('INSERT INTO model_profiles (name, vendor, match_model, notes) VALUES (?,?,?,?)')->execute([
+            'Ubiquiti UDM-Pro',
+            'Ubiquiti',
+            'UDM-Pro',
+            'Built-in map. eth8 ifIndex 4 is the RJ45 WAN, eth9 ifIndex 3 is the SFP WAN, and eth10 ifIndex 5 is the SFP LAN. Counters are 64-bit bytes since boot. The collector confirms the interface name before saving a counter.',
+        ]);
+        $pid = ba_last_id($db);
+    }
+    ba_seed_udmpro_fields($db, $pid);
+}
+
+function ba_seed_udmpro_fields(PDO $db, int $pid): void
+{
+    $haveOid = [];
+    $haveKey = [];
+    $q = $db->prepare('SELECT field_key, oid FROM model_profile_fields WHERE profile_id=?');
+    $q->execute([$pid]);
+    foreach ($q as $row) {
+        $haveOid[trim((string)$row['oid'])] = true;
+        $haveKey[trim((string)$row['field_key'])] = true;
+    }
+    $sortSt = $db->prepare('SELECT COALESCE(MAX(sort_order), -1) FROM model_profile_fields WHERE profile_id=?');
+    $sortSt->execute([$pid]);
+    $sort = (int)$sortSt->fetchColumn();
     $ins = $db->prepare('INSERT INTO model_profile_fields (profile_id, field_key, label, oid, unit, scale, show_on_device, sort_order) VALUES (?,?,?,?,?,?,?,?)');
-    $i = 0;
-    foreach ($fields as $f) {
-        $ins->execute([$pid, $f[0], $f[1], $f[2], $f[3], (float)$f[4], 1, $i]);
-        $i++;
+    foreach (ba_udmpro_builtin_fields() as $f) {
+        if (isset($haveOid[$f[2]]) || isset($haveKey[$f[0]])) {
+            continue;
+        }
+        $sort++;
+        $ins->execute([$pid, $f[0], $f[1], $f[2], $f[3], (float)$f[4], 1, $sort]);
     }
 }
 
