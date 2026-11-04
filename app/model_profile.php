@@ -119,6 +119,7 @@ function ba_ensure_model_schema(PDO $db): void
     }
     ba_ensure_column($db, 'devices', 'model_profile_id', 'INT NULL');
     ba_seed_cyberpower_profile($db);
+    ba_seed_udmpro_profile($db);
 }
 
 function ba_seed_cyberpower_profile(PDO $db): void
@@ -152,6 +153,38 @@ function ba_seed_cyberpower_profile(PDO $db): void
     foreach ($fields as $f) {
         $scale = $f[0] === 'input_frequency' ? 0.1 : 1;
         $ins->execute([$pid, $f[0], $f[1], $f[2], $f[3], $scale, $f[4] !== '' ? $f[4] : null, 1, $i]);
+        $i++;
+    }
+}
+
+function ba_seed_udmpro_profile(PDO $db): void
+{
+    $st = $db->prepare('SELECT id FROM model_profiles WHERE match_model=?');
+    $st->execute(['UDM-Pro']);
+    if ($st->fetch()) {
+        return;
+    }
+    $db->prepare('INSERT INTO model_profiles (name, vendor, match_model, notes) VALUES (?,?,?,?)')->execute([
+        'Ubiquiti UDM-Pro',
+        'Ubiquiti',
+        'UDM-Pro',
+        'Built-in map. eth8 ifIndex 4 is the RJ45 WAN, eth9 ifIndex 3 is the SFP WAN, and eth10 ifIndex 5 is the SFP LAN. Counters are 64-bit bytes since boot. The collector confirms the interface name before saving a counter.',
+    ]);
+    $pid = ba_last_id($db);
+    $fields = [
+        ['description', 'Description', '1.3.6.1.2.1.1.1.0', '', '1'],
+        ['uptime', 'Uptime', '1.3.6.1.2.1.1.3.0', 's', '0.01'],
+        ['wan_bytes_in', 'WAN bytes in', '1.3.6.1.2.1.31.1.1.1.6.4', 'bytes', '1'],
+        ['wan_bytes_out', 'WAN bytes out', '1.3.6.1.2.1.31.1.1.1.10.4', 'bytes', '1'],
+        ['wan_sfp_bytes_in', 'WAN SFP bytes in', '1.3.6.1.2.1.31.1.1.1.6.3', 'bytes', '1'],
+        ['wan_sfp_bytes_out', 'WAN SFP bytes out', '1.3.6.1.2.1.31.1.1.1.10.3', 'bytes', '1'],
+        ['lan_sfp_bytes_in', 'LAN SFP bytes in', '1.3.6.1.2.1.31.1.1.1.6.5', 'bytes', '1'],
+        ['lan_sfp_bytes_out', 'LAN SFP bytes out', '1.3.6.1.2.1.31.1.1.1.10.5', 'bytes', '1'],
+    ];
+    $ins = $db->prepare('INSERT INTO model_profile_fields (profile_id, field_key, label, oid, unit, scale, show_on_device, sort_order) VALUES (?,?,?,?,?,?,?,?)');
+    $i = 0;
+    foreach ($fields as $f) {
+        $ins->execute([$pid, $f[0], $f[1], $f[2], $f[3], (float)$f[4], 1, $i]);
         $i++;
     }
 }

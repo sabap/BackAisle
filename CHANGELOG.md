@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.90] - 2026-11-04
+
+- Models includes a built-in Ubiquiti UDM-Pro profile. A router uses it when the model contains UDM-Pro, or when that profile is assigned.
+- Description and uptime come from the system objects. Uptime is stored in seconds. The RJ45 WAN, the SFP WAN, and the SFP LAN report 64-bit bytes in and bytes out. Those numbers are totals since boot.
+- The collector reads the interface name first and keeps a counter only when the name is still eth8, eth9, or eth10.
+- The collector reloads when collector.py is newer than the running process. The writer does not need a restart.
+
 ## [0.5.89] - 2026-11-03
 
 - Walking a router starts at MIB-2 system, 1.3.6.1.2.1.1. Interface names are a second walk at 1.3.6.1.2.1.2.2.1.2. A UPS walk still starts at 1.3.6.1.2.1.33.

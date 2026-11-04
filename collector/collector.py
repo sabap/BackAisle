@@ -907,6 +907,7 @@ class WorkerPool:
                     if climate and isinstance(sample, dict):
                         try:
                             from profile_fields import read_profile_fields
+                            # UDM-Pro counters confirm ifName inside read_profile_fields.
                             extra = await read_profile_fields(
                                 device,
                                 self.secrets,
