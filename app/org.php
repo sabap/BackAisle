@@ -863,7 +863,7 @@ JS;
 }
 
 function page_battery_report(PDO $db): void {
-    $rows = $db->query("SELECT d.*, g.name AS group_name FROM devices d LEFT JOIN groups g ON g.id=d.group_id ORDER BY CASE WHEN d.warranty_replace_by IS NULL OR d.warranty_replace_by='' THEN 1 ELSE 0 END, d.warranty_replace_by, d.last_battery_replacement")->fetchAll();
+    $rows = $db->query("SELECT d.*, g.name AS group_name FROM devices d LEFT JOIN groups g ON g.id=d.group_id WHERE ".ba_ups_only_sql()." ORDER BY CASE WHEN d.warranty_replace_by IS NULL OR d.warranty_replace_by='' THEN 1 ELSE 0 END, d.warranty_replace_by, d.last_battery_replacement")->fetchAll();
     ba_layout_start('Battery replacement', 'battery');
     echo '<h1>Battery replacement report</h1>';
     echo '<p class="muted">Uses last replacement date and warranty/replace-by. If replace-by is empty, due is last replacement + 4 years (typical VRLA).</p>';

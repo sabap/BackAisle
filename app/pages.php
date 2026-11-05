@@ -754,9 +754,9 @@ function ba_ensure_event_source(PDO $db): void {
 function page_events(PDO $db): void {
     ba_ensure_event_source($db);
     $st = $db->query("SELECT e.*, d.hostname, d.idf_closet FROM events e LEFT JOIN devices d ON d.id=e.device_id ORDER BY e.id DESC LIMIT 300");
-    ba_layout_start('Power events', 'events');
-    echo '<h1>Power events</h1>';
-    echo '<p class="muted">Source is Trap when the card sent a trap, and Poll when the collector read the card. A dash is an older row saved before this column.</p>';
+    ba_layout_start('Events', 'events');
+    echo '<h1>Events</h1>';
+    echo '<p class="muted">Source is Trap when the device sent a trap, and Poll when the collector read the device. A dash is an older row saved before this column.</p>';
     ba_card_open('Recent events');
     echo '<table><thead><tr><th>Time</th><th>Closet</th><th>Sev</th><th>Source</th><th>Code</th><th>Message</th></tr></thead><tbody>';
     foreach ($st as $r) {
@@ -1123,6 +1123,10 @@ function page_devices(PDO $db, array $user): void {
     }
     $showRetired = isset($_GET['retired']);
     $filterDept = (int)($_GET['dept'] ?? 0);
+    $filterKind = strtolower(trim((string)($_GET['kind'] ?? '')));
+    if (!in_array($filterKind, ['ups', 'switch', 'router', 'patch_panel', 'other'], true)) {
+        $filterKind = '';
+    }
     $q = ba_search_needle((string)($_GET['q'] ?? ''));
     $listSql = 'SELECT d.*, t.manufacturer AS template_manufacturer FROM devices d LEFT JOIN device_templates t ON t.id=d.template_id WHERE 1=1';
     $listParams = [];
@@ -1132,6 +1136,12 @@ function page_devices(PDO $db, array $user): void {
     if ($filterDept > 0) {
         $listSql .= ' AND d.department_id=?';
         $listParams[] = $filterDept;
+    }
+    if ($filterKind === 'ups') {
+        $listSql .= ' AND ' . ba_ups_only_sql();
+    } elseif ($filterKind !== '') {
+        $listSql .= ' AND d.kind=?';
+        $listParams[] = $filterKind;
     }
     if ($q !== '') {
         $like = '%' . $q . '%';
@@ -1177,6 +1187,9 @@ function page_devices(PDO $db, array $user): void {
     if ($q !== '') {
         $keep['q'] = $q;
     }
+    if ($filterKind !== '') {
+        $keep['kind'] = $filterKind;
+    }
     $withRetired = $keep;
     $withRetired['retired'] = '1';
     $hideHref = ba_href('/devices' . ($keep ? '?' . http_build_query($keep) : ''));
@@ -1189,6 +1202,10 @@ function page_devices(PDO $db, array $user): void {
     $head .= '<select name="dept" aria-label="Department"><option value="">All departments</option>';
     foreach ($deptNames as $id => $name) {
         $head .= '<option value="'.$id.'"'.($filterDept === $id ? ' selected' : '').'>'.h($name).'</option>';
+    }
+    $head .= '</select><select name="kind" aria-label="Kind"><option value="">All kinds</option>';
+    foreach (['ups' => 'UPS', 'switch' => 'Switch', 'router' => 'Router', 'patch_panel' => 'Patch panel', 'other' => 'Other'] as $kindKey => $kindLabel) {
+        $head .= '<option value="'.$kindKey.'"'.($filterKind === $kindKey ? ' selected' : '').'>'.h($kindLabel).'</option>';
     }
     $head .= '</select><button>Filter</button>';
     if ($showRetired) {
