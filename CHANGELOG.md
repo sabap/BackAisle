@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.5.92] - 2026-11-05
+
+- Inventory search sits in the Devices heading, with the department filter and the decommissioned link.
+- Apply template, Assign department, and Card settings are heading buttons. Each opens a dialog. The checkbox at the top of the list is the only select-all.
+- The collector and the writer do not need a restart.
+
 ## [0.5.91] - 2026-11-04
 
 - A profile that already matches UDM-Pro keeps its name and the fields already saved on it. The built-in description, uptime, and WAN and LAN byte counters are added when that OID is not already there.

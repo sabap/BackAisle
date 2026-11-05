@@ -637,6 +637,10 @@ body.tech .tech-u.busy { color: var(--muted); background: #0e141c; }
 .ucard-head .head-actions .filters,
 .ucard-head .filters,
 .ucard-head .loc-toolbar { margin:0; }
+#inventory .ucard-head .head-actions { flex: 1 1 18rem; }
+#inventory .ucard-head .filters { flex: 1 1 16rem; }
+#inventory .ucard-head .filters input[name="q"] { min-width: 0; width: 14rem; max-width: 100%; }
+#inventory .ucard-head .filters a { color: #fff8ee; }
 .ucard-head .loc-toolbar { flex:1 1 18rem; justify-content:flex-end; }
 .ucard-head input, .ucard-head select {
   background:#2a211b; color:#fff8ee; border-color:#8a6a45;
