@@ -1170,7 +1170,6 @@ function page_devices(PDO $db, array $user): void {
     }
     $canCard = ba_card_settings_available($db, $user);
     $showPick = $canAssign || $canCard;
-    ba_card_open('Devices', $canEditDevices ? '<button type="button" class="btn" data-open-modal="modal-add-device">Add device</button>' : '');
     $keep = [];
     if ($filterDept > 0) {
         $keep['dept'] = (string)$filterDept;
@@ -1182,42 +1181,33 @@ function page_devices(PDO $db, array $user): void {
     $withRetired['retired'] = '1';
     $hideHref = ba_href('/devices' . ($keep ? '?' . http_build_query($keep) : ''));
     $showHref = ba_href('/devices?' . http_build_query($withRetired));
-    echo '<form method="get" action="'.h(ba_href('/devices')).'" class="filters">';
+    $head = '<form method="get" action="'.h(ba_href('/devices')).'" class="filters">';
     if ($showRetired) {
-        echo '<input type="hidden" name="retired" value="1">';
+        $head .= '<input type="hidden" name="retired" value="1">';
     }
-    echo '<input type="search" name="q" value="'.h($q).'" placeholder="Host, IP, serial, closet" aria-label="Search inventory" autocomplete="off">';
-    echo '<select name="dept" aria-label="Department"><option value="">All departments</option>';
+    $head .= '<input type="search" name="q" value="'.h($q).'" placeholder="Host, IP, serial, closet" aria-label="Search inventory" autocomplete="off">';
+    $head .= '<select name="dept" aria-label="Department"><option value="">All departments</option>';
     foreach ($deptNames as $id => $name) {
-        echo '<option value="'.$id.'"'.($filterDept === $id ? ' selected' : '').'>'.h($name).'</option>';
+        $head .= '<option value="'.$id.'"'.($filterDept === $id ? ' selected' : '').'>'.h($name).'</option>';
     }
-    echo '</select><button>Filter</button>';
+    $head .= '</select><button>Filter</button>';
     if ($showRetired) {
-        echo '<a href="'.h($hideHref).'">Hide decommissioned</a>';
+        $head .= '<a href="'.h($hideHref).'">Hide decommissioned</a>';
     } else {
-        echo '<a href="'.h($showHref).'">Show decommissioned</a>';
+        $head .= '<a href="'.h($showHref).'">Show decommissioned</a>';
     }
-    echo '</form>';
-    if ($showPick) {
-        echo '<form method="post">';
-    }
+    $head .= '</form>';
     if ($canAssign) {
-        echo '<div class="filters"><select name="department_id" aria-label="Department"><option value="">(no department)</option>';
-        foreach ($db->query('SELECT id, name FROM departments WHERE is_active=1 ORDER BY name') as $dep) {
-            echo '<option value="'.(int)ba_col($dep, 'id').'">'.h((string)ba_col($dep, 'name')).'</option>';
-        }
-        echo '</select><label><input type="checkbox" data-device-select-all aria-label="Select all"> Select all</label>';
-        echo '<button name="act" value="assign_department">Assign department</button>';
-        echo '<select name="template_id" aria-label="Template">'.ba_template_options($db).'</select>';
-        echo '<button name="act" value="apply_template">Apply template</button>';
-        if ($canCard) {
-            echo '<button type="button" class="btn" data-open-modal="modal-card-settings">Card settings</button>';
-        }
-        echo '<p class="owner-hint muted">Apply template sets the model, height, outlets, credentials, and model profile on the checked devices. When the template has no credentials or model profile, those stay as they are on each device.</p></div>';
-    } elseif ($canCard) {
-        echo '<div class="filters"><button type="button" class="btn" data-open-modal="modal-card-settings">Card settings</button>';
-        echo '<p class="owner-hint muted">Card settings sends one named change to the checked CyberPower cards. Other devices in the list are left out.</p></div>';
+        $head .= '<button type="button" class="btn" data-open-modal="modal-apply-template">Apply template</button>';
+        $head .= '<button type="button" class="btn" data-open-modal="modal-assign-department">Assign department</button>';
     }
+    if ($canCard) {
+        $head .= '<button type="button" class="btn" data-open-modal="modal-card-settings">Card settings</button>';
+    }
+    if ($canEditDevices) {
+        $head .= '<button type="button" class="btn" data-open-modal="modal-add-device">Add device</button>';
+    }
+    ba_card_open('Devices', $head, 'inventory');
     echo '<table><thead><tr>';
     if ($showPick) {
         echo '<th><input type="checkbox" data-device-select-all aria-label="Select all" title="Select all"></th>';
@@ -1257,18 +1247,11 @@ function page_devices(PDO $db, array $user): void {
     }
     echo '</tbody></table>';
     if ($showPick) {
-        echo '</form>';
-    }
-    if ($canCard) {
-        ba_card_settings_modal(true);
-    }
-    if ($showPick) {
         echo <<<'JS'
 <script>
 (function () {
   var boxes = document.querySelectorAll('input[name="device_ids[]"]');
   var masters = document.querySelectorAll('[data-device-select-all]');
-  if (!masters.length) return;
   function paint(checked, mixed) {
     masters.forEach(function (master) {
       master.checked = checked;
@@ -1288,11 +1271,70 @@ function page_devices(PDO $db, array $user): void {
     });
   });
   boxes.forEach(function (box) { box.addEventListener('change', sync); });
+  document.addEventListener('submit', function (ev) {
+    var form = ev.target;
+    if (!form || !form.getAttribute || form.getAttribute('data-copy-devices') !== '1') return;
+    form.querySelectorAll('input[data-picked-device="1"]').forEach(function (node) { node.remove(); });
+    var count = 0;
+    boxes.forEach(function (box) {
+      if (!box.checked) return;
+      var hidden = document.createElement('input');
+      hidden.type = 'hidden';
+      hidden.name = 'device_ids[]';
+      hidden.value = box.value;
+      hidden.setAttribute('data-picked-device', '1');
+      form.appendChild(hidden);
+      count++;
+    });
+    var need = form.querySelector('[data-need-devices]');
+    if (!count) {
+      ev.preventDefault();
+      if (need) need.hidden = false;
+      return;
+    }
+    if (need) need.hidden = true;
+  });
+  document.addEventListener('click', function (ev) {
+    var opener = ev.target.closest ? ev.target.closest('[data-open-modal]') : null;
+    if (!opener) return;
+    var modal = document.getElementById(opener.getAttribute('data-open-modal') || '');
+    if (!modal) return;
+    var need = modal.querySelector('[data-need-devices]');
+    if (!need) return;
+    var n = 0;
+    boxes.forEach(function (box) { if (box.checked) n++; });
+    need.hidden = n > 0;
+  });
 })();
 </script>
 JS;
     }
     ba_card_close();
+    if ($canAssign) {
+        ba_users_modal_open('modal-apply-template', 'Apply template', false);
+        echo '<form method="post" class="stack" data-copy-devices="1">';
+        echo '<input type="hidden" name="act" value="apply_template">';
+        echo '<p class="muted" data-need-devices hidden>Select at least one device in the list.</p>';
+        echo '<label for="apply-template-id">Template</label><select id="apply-template-id" name="template_id">'.ba_template_options($db).'</select>';
+        echo '<p class="muted">Apply template sets the model, height, outlets, credentials, and model profile on the checked devices. When the template has no credentials or model profile, those stay as they are on each device.</p>';
+        echo '<button>Apply template</button></form>';
+        ba_users_modal_close();
+        ba_users_modal_open('modal-assign-department', 'Assign department', false);
+        echo '<form method="post" class="stack" data-copy-devices="1">';
+        echo '<input type="hidden" name="act" value="assign_department">';
+        echo '<p class="muted" data-need-devices hidden>Select at least one device in the list.</p>';
+        echo '<label for="assign-department-id">Department</label><select id="assign-department-id" name="department_id"><option value="">(no department)</option>';
+        foreach ($db->query('SELECT id, name FROM departments WHERE is_active=1 ORDER BY name') as $dep) {
+            echo '<option value="'.(int)ba_col($dep, 'id').'">'.h((string)ba_col($dep, 'name')).'</option>';
+        }
+        echo '</select>';
+        echo '<p class="muted">The owning department receives alerts for these devices and can edit them.</p>';
+        echo '<button>Assign department</button></form>';
+        ba_users_modal_close();
+    }
+    if ($canCard) {
+        ba_card_settings_modal(true);
+    }
     if ($canEditDevices) {
         ba_users_modal_open('modal-add-device', 'Add device', false);
         echo '<form method="post" class="stack">';
