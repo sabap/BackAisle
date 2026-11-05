@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.93] - 2026-11-05
+
+- The header groups shared pages apart from UPS tools. Watch holds Alerts and Events. Poll holds SNMP and Models. Power holds UPS fleet, Batteries, Due, and Writes.
+- Inventory filters the device list by kind.
+- The Events page is titled Events. Due lists UPS units.
+- The collector and the writer do not need a restart.
+
 ## [0.5.92] - 2026-11-05
 
 - Inventory search sits in the Devices heading, with the department filter and the decommissioned link.

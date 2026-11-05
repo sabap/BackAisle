@@ -13,7 +13,9 @@ function ba_layout_start(string $title, string $nav = 'fleet'): void {
     $canSettings = function_exists('ba_can') && ba_can($u, 'manage_settings');
     $canUsers = function_exists('ba_can') && ba_can($u, 'manage_users');
     $canWrites = function_exists('ba_editor') && ba_editor($u, 'edit_writes');
-    $powerOn = ba_nav_on($nav, ['fleet', 'batteries', 'battery', 'alerts', 'events', 'writes', 'snmp', 'models']);
+    $watchOn = ba_nav_on($nav, ['alerts', 'events']);
+    $pollOn = ba_nav_on($nav, ['snmp', 'models']);
+    $powerOn = ba_nav_on($nav, ['fleet', 'batteries', 'battery', 'writes']);
     $envOn = ba_nav_on($nav, ['climate']);
     ?>
 <!doctype html>
@@ -37,15 +39,21 @@ function ba_layout_start(string $title, string $nav = 'fleet'): void {
     <?php if (!ba_tech_mode()): ?>
     <a class="<?= $nav==='templates'?'on':'' ?>" href="/templates.php">Templates</a>
     <?php endif; ?>
-    <span class="nav-cat <?= $powerOn ?>">
-      <span class="nav-cat-label">Power</span>
+    <span class="nav-cat <?= $watchOn ?>">
+      <span class="nav-cat-label">Watch</span>
+      <a class="<?= $nav==='alerts'?'on':'' ?>" href="/alerts.php">Alerts</a>
+      <a class="<?= $nav==='events'?'on':'' ?>" href="/events.php">Events</a>
+    </span>
+    <span class="nav-cat <?= $pollOn ?>">
+      <span class="nav-cat-label">Poll</span>
       <a class="<?= $nav==='snmp'?'on':'' ?>" href="/snmp.php">SNMP</a>
       <a class="<?= $nav==='models'?'on':'' ?>" href="/models.php">Models</a>
+    </span>
+    <span class="nav-cat <?= $powerOn ?>">
+      <span class="nav-cat-label">Power</span>
       <a class="<?= $nav==='fleet'?'on':'' ?>" href="/fleet.php">UPS fleet</a>
       <a class="<?= $nav==='batteries'?'on':'' ?>" href="/batteries.php">Batteries</a>
       <a class="<?= $nav==='battery'?'on':'' ?>" href="/battery.php">Due</a>
-      <a class="<?= $nav==='alerts'?'on':'' ?>" href="/alerts.php">Alerts</a>
-      <a class="<?= $nav==='events'?'on':'' ?>" href="/events.php">Events</a>
       <?php if ($canWrites): ?>
         <a class="<?= $nav==='writes'?'on':'' ?>" href="/writes.php">Writes</a>
       <?php endif; ?>
