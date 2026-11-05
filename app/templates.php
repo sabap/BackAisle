@@ -149,7 +149,8 @@ function ba_apply_template(PDO $db, int $deviceId, int $templateId): void {
     $kind = $tpl['kind'] ?: ($dev['kind'] ?? 'other');
     if ($dev['rack_id'] && $dev['position_u']) {
         $occupants = ba_rack_devices($db, (int)$dev['rack_id']);
-        $hit = ba_slot_taken($occupants, (int)$dev['position_u'], $uh, $face, $deviceId);
+        $slotFace = ($kind === 'ups' || $kind === '') ? 'both' : $face;
+        $hit = ba_slot_taken($occupants, (int)$dev['position_u'], $uh, $slotFace, $deviceId);
         if ($hit) throw new RuntimeException('Template height overlaps '.$hit['hostname']);
     }
     $ports = $tpl['port_count'] !== null && $tpl['port_count'] !== '' ? (int)$tpl['port_count'] : $dev['port_count'];

@@ -35,6 +35,39 @@ a.brand, a.brand:hover { color:var(--ink); text-decoration:none; }
   position:absolute; inset:0; width:100%; height:100%; object-fit:cover; object-position:center;
   pointer-events:none; background:#0b1220;
 }
+/* A UPS rear photo is often taller than the 2U strip. Contain keeps the panel visible. */
+.idf-dev.kind-ups .idf-dev-img { object-fit:contain; background:transparent; }
+.idf-telemetry { margin: .2rem 0 1rem; }
+.idf-lead { margin: .15rem 0 .35rem; font-size: 1.05rem; font-weight: 650; color: var(--muted); }
+.idf-lead.bad { color: var(--crit); }
+.idf-lead.warn { color: var(--warn); }
+.idf-climate { margin: -.25rem 0 .9rem; }
+.idf-extra, .idf-read { color: var(--muted); font-size: .78rem; font-weight: 400; white-space: normal; }
+.idf-alert-msg { white-space: normal; max-width: 36rem; }
+.idf-telemetry td.cell-bad { color: #fff; font-weight: 700; background: #b4233c; }
+.idf-telemetry td.cell-warn { color: #1a1404; font-weight: 700; background: #f5c542; }
+.idf-telemetry td.cell-hot { color: #fff; font-weight: 700; background: #c2410c; }
+.idf-telemetry td.cell-batt { color: #1a1404; font-weight: 700; background: #ffb020; }
+.idf-telemetry tr:hover td.cell-bad { background: #d11d3a; }
+.idf-telemetry tr:hover td.cell-warn { background: #ffd45c; }
+.idf-telemetry tr:hover td.cell-hot { background: #ea580c; }
+.idf-telemetry tr:hover td.cell-batt { background: #ffc14d; }
+.idf-telemetry tr.st-crit { background: rgba(255,93,115,.12); }
+.idf-telemetry tr.st-crit td:first-child, .pill.crit { color: var(--crit); }
+.idf-telemetry tr.st-idle td:first-child, .pill.idle { color: var(--muted); }
+.idf-telemetry tr.st-batt td:first-child,
+.idf-telemetry tr.st-down td:first-child,
+.idf-telemetry tr.st-hot td:first-child,
+.idf-telemetry tr.st-warn td:first-child,
+.idf-telemetry tr.st-crit td:first-child { font-weight: 700; }
+.kpi.batt b { color: var(--batt); }
+.kpi.hot b { color: var(--hot); }
+.dash-kpis .kpi.hot { border-top-color: var(--hot); }
+.dash-kpis .kpi.batt { border-top-color: var(--batt); }
+.idf-telemetry .ucard-head .head-actions a { color: #fff8ee; }
+body.tech .idf-telemetry .idf-extra,
+body.tech .idf-telemetry .idf-read,
+body.tech .idf-telemetry .idf-alert-msg { font-size: .95rem; }
 .who { margin-left:auto; color:var(--muted); font-size:.85rem; }
 .site-foot { padding:.8rem 1rem 1.2rem; color:var(--muted); font-size:.8rem; }
 .update-notes { max-height:12rem; overflow:auto; white-space:pre-wrap; font-size:.82rem; background:#0e141c; padding:.6rem; border-radius:6px; }
@@ -532,9 +565,10 @@ body.tech form.stack button:not(.btn-quiet) {
 body.tech form.stack { max-width: none; }
 body.tech .idf-page { display: flex; flex-direction: column; }
 body.tech .idf-page .dash-hero { order: 1; }
-body.tech .idf-page .idf-add-rack { order: 2; }
+body.tech .idf-page .idf-telemetry { order: 2; }
+body.tech .idf-page .idf-add-rack { order: 3; }
 body.tech .idf-page .idf-row-shell,
-body.tech .idf-page .empty { order: 3; }
+body.tech .idf-page .empty { order: 4; }
 body.tech form.idf-add-rack {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
   gap: .35rem .8rem; align-items: end;
