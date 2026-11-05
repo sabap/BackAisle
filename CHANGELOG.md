@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.5.94] - 2026-11-05
+
+- Opening an IDF shows the UPS, router, switch, and patch panel readings for that closet. A low runtime, low capacity, dead poll, on-battery state, climate reading, or open alert is colored. The rack drawing stays under that summary.
+- A UPS is drawn on the front and the rear of the rack. The rear view uses the rear picture, and the front picture when no rear picture is stored. Switches, routers, and patch panels still follow the face they were placed on.
+- The collector and the writer do not need a restart.
+
 ## [0.5.93] - 2026-11-05
 
 - The header groups shared pages apart from UPS tools. Watch holds Alerts and Events. Poll holds SNMP and Models. Power holds UPS fleet, Batteries, Due, and Writes.

@@ -13,13 +13,15 @@ function ba_rack(PDO $db, int $id): ?array {
 function ba_racks_in_group(PDO $db, int $groupId): array {
     $st = $db->prepare('SELECT * FROM racks WHERE group_id=? ORDER BY sort_order, name, id');
     $st->execute([$groupId]);
-    return $st->fetchAll();
+    $rows = $st->fetchAll() ?: [];
+    $st->closeCursor();
+    return $rows;
 }
 
 function ba_rack_devices(PDO $db, int $rackId): array {
     $st = $db->prepare(
         'SELECT d.*, p.comm_state, s.temp_f, s.on_battery, s.output_status, s.capacity_pct,
-                t.front_picture, t.rear_picture
+                t.front_picture AS tpl_front, t.rear_picture AS tpl_rear
          FROM devices d
          LEFT JOIN poll_state p ON p.device_id=d.id
          LEFT JOIN samples s ON s.id = (SELECT id FROM samples WHERE device_id=d.id ORDER BY ts DESC LIMIT 1)
@@ -28,12 +30,36 @@ function ba_rack_devices(PDO $db, int $rackId): array {
          ORDER BY d.position_u DESC'
     );
     $st->execute([$rackId]);
-    return $st->fetchAll();
+    $rows = $st->fetchAll() ?: [];
+    $st->closeCursor();
+    $out = [];
+    foreach ($rows as $row) {
+        $out[] = array_change_key_case($row, CASE_LOWER);
+    }
+    return $out;
 }
 
 function ba_faces_overlap(string $a, string $b): bool {
     if ($a === 'both' || $b === 'both') return true;
     return $a === $b;
+}
+
+/** A UPS fills the rack depth, so the elevation draws it on the front and the rear. */
+function ba_device_on_face(array $d, string $face): bool {
+    $kind = strtolower(trim((string)ba_col($d, 'kind', 'ups')));
+    if ($kind === '' || $kind === 'ups') {
+        return true;
+    }
+    return ba_faces_overlap($face, (string)ba_col($d, 'face', 'both'));
+}
+
+function ba_rack_face_picture(array $d, string $face): string {
+    $front = ba_tpl_public_picture(ba_col($d, 'tpl_front', ba_col($d, 'front_picture', '')));
+    $rear = ba_tpl_public_picture(ba_col($d, 'tpl_rear', ba_col($d, 'rear_picture', '')));
+    if ($face === 'rear') {
+        return $rear !== '' ? $rear : $front;
+    }
+    return $front;
 }
 
 function ba_u_ranges_overlap(int $a0, int $ah, int $b0, int $bh): bool {
@@ -44,8 +70,7 @@ function ba_slot_taken(array $occupants, int $pos, int $uh, string $face, ?int $
     foreach ($occupants as $d) {
         if ($skipId && (int)$d['id'] === $skipId) continue;
         if ($d['position_u'] === null) continue;
-        $of = (string)($d['face'] ?? 'both');
-        if (!ba_faces_overlap($face, $of)) continue;
+        if (!ba_device_on_face($d, $face)) continue;
         if (ba_u_ranges_overlap($pos, $uh, (int)$d['position_u'], max(1, (int)($d['u_height'] ?? 1)))) {
             return $d;
         }
@@ -57,8 +82,7 @@ function ba_occupied_map(array $devices, string $face): array {
     $map = [];
     foreach ($devices as $d) {
         if ($d['position_u'] === null) continue;
-        $df = (string)($d['face'] ?? 'both');
-        if (!ba_faces_overlap($face, $df)) continue;
+        if (!ba_device_on_face($d, $face)) continue;
         $start = (int)$d['position_u'];
         $uh = max(1, (int)($d['u_height'] ?? 1));
         for ($u = $start; $u < $start + $uh; $u++) {
@@ -156,8 +180,7 @@ function ba_render_elevation(array $rack, array $devices, string $face, bool $co
 
     foreach ($devices as $d) {
         if ($d['position_u'] === null) continue;
-        $df = (string)($d['face'] ?? 'both');
-        if (!ba_faces_overlap($face, $df)) continue;
+        if (!ba_device_on_face($d, $face)) continue;
         $pos = (int)$d['position_u'];
         $uh = max(1, (int)($d['u_height'] ?? 1));
         $bottom = (($pos - 1) / $units) * 100;
@@ -184,9 +207,8 @@ function ba_render_elevation(array $rack, array $devices, string $face, bool $co
             ? ba_href('/device?id='.(int)$d['id'])
             : ba_href('/rack?id='.$rackId.'&item='.(int)$d['id']);
         echo '<a class="idf-dev kind-'.h($kind).$health.'" href="'.h($href).'" style="bottom:'.$bottom.'%;height:'.$h.'%" title="'.h($label.' · '.$uTxt.' · '.ba_kind_label($kind)).'">';
-        $pic = ($face === 'rear') ? ($d['rear_picture'] ?? '') : ($d['front_picture'] ?? '');
-        if ($pic === '' && $face === 'rear') $pic = $d['front_picture'] ?? '';
-        if ($pic) echo '<img class="idf-dev-img" src="'.h($pic).'" alt="">';
+        $pic = ba_rack_face_picture($d, $face);
+        if ($pic !== '') echo '<img class="idf-dev-img" src="'.h($pic).'" alt="">';
         echo '<span class="idf-dev-meta"><span class="idf-dev-name">'.h($label).'</span>';
         echo '<span class="idf-dev-u">'.$uTxt.'</span></span></a>';
     }
@@ -255,6 +277,850 @@ function ba_render_loc_tree(array $groups, ?int $parent, array $summaries, array
     }
 }
 
+/** Devices assigned to this closet, including units that are not in a rack. Child closets are not mixed in. */
+function ba_idf_closet_devices(PDO $db, int $groupId): array {
+    $sql = ba_latest_join()
+        . ' WHERE (d.group_id=? OR d.rack_id IN (SELECT id FROM racks WHERE group_id=?))'
+        . ' AND (d.decommissioned_at IS NULL OR d.decommissioned_at=?)';
+    return ba_idf_fetch($db, $sql, [$groupId, $groupId, '']);
+}
+
+function ba_idf_fetch(PDO $db, string $sql, array $params): array {
+    $st = ba_pp_exec($db, $sql, $params);
+    $rows = $st->fetchAll() ?: [];
+    $st->closeCursor();
+    $out = [];
+    foreach ($rows as $row) {
+        if (is_array($row)) {
+            $out[] = array_change_key_case($row, CASE_LOWER);
+        }
+    }
+    return $out;
+}
+
+function ba_idf_fetch_in(PDO $db, string $sqlBeforeIn, string $column, array $ids): array {
+    $ids = array_values(array_unique(array_filter(array_map('intval', $ids), static function (int $id): bool {
+        return $id > 0;
+    })));
+    $out = [];
+    foreach (array_chunk($ids, 400) as $chunk) {
+        $ph = implode(',', array_fill(0, count($chunk), '?'));
+        $rows = ba_idf_fetch($db, $sqlBeforeIn . ' ' . $column . ' IN (' . $ph . ')', $chunk);
+        foreach ($rows as $row) {
+            $out[] = $row;
+        }
+    }
+    return $out;
+}
+
+function ba_idf_closet_context(PDO $db, array $devices): array {
+    $ctx = [
+        'alerts' => [],
+        'thresholds' => [],
+        'metrics' => [],
+        'fields' => [],
+        'profiles' => [],
+        'error' => '',
+    ];
+    $ids = [];
+    foreach ($devices as $d) {
+        $id = (int)ba_col($d, 'id', 0);
+        if ($id > 0) {
+            $ids[] = $id;
+        }
+    }
+    try {
+        if (function_exists('ba_ensure_model_schema')) {
+            ba_ensure_model_schema($db);
+        }
+    } catch (Throwable $e) {
+        $ctx['error'] = 'model';
+    }
+    try {
+        $ctx['profiles'] = ba_idf_fetch($db, 'SELECT * FROM model_profiles WHERE is_active=1 ORDER BY id', []);
+    } catch (Throwable $e) {
+        $ctx['profiles'] = [];
+    }
+    try {
+        $fieldRows = ba_idf_fetch($db, 'SELECT * FROM model_profile_fields ORDER BY sort_order, id', []);
+        foreach ($fieldRows as $f) {
+            $pid = (int)ba_col($f, 'profile_id', 0);
+            $key = trim((string)ba_col($f, 'field_key', ''));
+            if ($pid < 1 || $key === '') {
+                continue;
+            }
+            if (trim((string)ba_col($f, 'builtin_key', '')) !== '') {
+                continue;
+            }
+            $show = ba_col($f, 'show_on_device', 1);
+            if ($show === null || $show === '') {
+                $show = 1;
+            }
+            if ((int)$show === 0) {
+                continue;
+            }
+            $ctx['fields'][$pid][$key] = $f;
+        }
+    } catch (Throwable $e) {
+        $ctx['fields'] = [];
+    }
+    try {
+        $thrRows = ba_idf_fetch($db, 'SELECT * FROM thresholds WHERE scope=? OR scope=?', ['global', 'device']);
+        foreach ($thrRows as $t) {
+            $scope = strtolower(trim((string)ba_col($t, 'scope', '')));
+            if ($scope === 'global') {
+                $ctx['thresholds'][0] = $t;
+            } elseif ($scope === 'device') {
+                $did = (int)ba_col($t, 'device_id', 0);
+                if ($did > 0) {
+                    $ctx['thresholds'][$did] = $t;
+                }
+            }
+        }
+    } catch (Throwable $e) {
+        $ctx['thresholds'] = [];
+    }
+    if ($ids) {
+        try {
+            $metricRows = ba_idf_fetch_in(
+                $db,
+                'SELECT device_id, field_key, value_num, value_text FROM device_metrics WHERE',
+                'device_id',
+                $ids
+            );
+            foreach ($metricRows as $m) {
+                $did = (int)ba_col($m, 'device_id', 0);
+                $key = trim((string)ba_col($m, 'field_key', ''));
+                if ($did > 0 && $key !== '') {
+                    $ctx['metrics'][$did][$key] = $m;
+                }
+            }
+        } catch (Throwable $e) {
+            $ctx['metrics'] = [];
+        }
+        try {
+            $ctx['alerts'] = ba_idf_fetch_in(
+                $db,
+                "SELECT device_id, code, severity, status, message, opened_at, acked_at FROM alerts WHERE status IN ('open','acked') AND",
+                'device_id',
+                $ids
+            );
+            usort($ctx['alerts'], static function (array $a, array $b): int {
+                $rank = static function (array $row): int {
+                    $sev = strtolower(trim((string)ba_col($row, 'severity', '')));
+                    if ($sev === 'crit') {
+                        return 0;
+                    }
+                    if ($sev === 'warn') {
+                        return 1;
+                    }
+                    return 2;
+                };
+                $d = $rank($a) <=> $rank($b);
+                if ($d !== 0) {
+                    return $d;
+                }
+                return strcmp((string)ba_col($b, 'opened_at', ''), (string)ba_col($a, 'opened_at', ''));
+            });
+        } catch (Throwable $e) {
+            $ctx['alerts'] = [];
+        }
+    }
+    return $ctx;
+}
+
+function ba_idf_kind_key(array $d): string {
+    $kind = strtolower(trim((string)ba_col($d, 'kind', 'ups')));
+    if ($kind === '' || $kind === 'ups') {
+        return 'ups';
+    }
+    if (in_array($kind, ['router', 'switch', 'patch_panel', 'other'], true)) {
+        return $kind;
+    }
+    return 'other';
+}
+
+function ba_idf_gear_state(array $d): string {
+    $kind = ba_idf_kind_key($d);
+    if ($kind === 'ups') {
+        return ba_worst($d);
+    }
+    $comm = strtolower(trim((string)ba_col($d, 'comm_state', '')));
+    if ($comm === 'down') {
+        return 'st-down';
+    }
+    if ($comm === 'degraded') {
+        return 'st-warn';
+    }
+    if ($comm === 'ok') {
+        return 'st-ok';
+    }
+    if ($kind === 'router') {
+        return 'st-warn';
+    }
+    return 'st-idle';
+}
+
+function ba_idf_rank(string $cls): int {
+    if ($cls === 'st-idle' || $cls === 'none') {
+        return -1;
+    }
+    return ba_cls_rank($cls);
+}
+
+function ba_idf_state_label(string $cls): string {
+    $map = [
+        'st-batt' => 'battery',
+        'st-down' => 'down',
+        'st-hot' => 'hot',
+        'st-warn' => 'warn',
+        'st-ok' => 'ok',
+        'st-idle' => 'placed',
+        'st-crit' => 'critical',
+    ];
+    return $map[$cls] ?? 'none';
+}
+
+function ba_idf_kpi_class(string $cls): string {
+    if ($cls === 'st-batt' || $cls === 'st-down') {
+        return 'crit';
+    }
+    if ($cls === 'st-hot' || $cls === 'st-warn') {
+        return 'warn';
+    }
+    if ($cls === 'st-ok') {
+        return 'ok';
+    }
+    return '';
+}
+
+function ba_idf_threshold_set(array $ctx, int $deviceId): array {
+    $defaults = [
+        'capacity_low' => 30.0,
+        'runtime_low_min' => 15.0,
+        'temp_high_f' => 85.0,
+        'temp_low_f' => 50.0,
+        'humidity_high' => 70.0,
+        'humidity_low' => 20.0,
+    ];
+    $global = $ctx['thresholds'][0] ?? [];
+    $own = $ctx['thresholds'][$deviceId] ?? [];
+    $out = [];
+    foreach ($defaults as $key => $fallback) {
+        $raw = null;
+        if (is_array($own) && array_key_exists($key, $own) && $own[$key] !== null && $own[$key] !== '') {
+            $raw = $own[$key];
+        } elseif (is_array($global) && array_key_exists($key, $global) && $global[$key] !== null && $global[$key] !== '') {
+            $raw = $global[$key];
+        }
+        $out[$key] = is_numeric($raw) ? (float)$raw : $fallback;
+    }
+    return $out;
+}
+
+function ba_idf_meter_flag(string $meter, mixed $value, array $th, array $device = []): string {
+    if ($meter === 'comm') {
+        $comm = strtolower(trim((string)$value));
+        if ($comm === 'down') {
+            return 'cell-bad';
+        }
+        if ($comm === 'degraded') {
+            return 'cell-warn';
+        }
+        return '';
+    }
+    if ($meter === 'output') {
+        $on = (int)ba_col($device, 'on_battery', 0) === 1;
+        $out = ($value === null || $value === '' || !is_numeric($value)) ? null : (int)$value;
+        if ($on || $out === 3) {
+            return 'cell-batt';
+        }
+        if ($out !== null && $out !== 0 && !in_array($out, [2, 8], true)) {
+            return 'cell-warn';
+        }
+        return '';
+    }
+    if ($value === null || $value === '' || !is_numeric($value)) {
+        return '';
+    }
+    $n = (float)$value;
+    if ($meter === 'cap' && $n < (float)$th['capacity_low']) {
+        return 'cell-bad';
+    }
+    if ($meter === 'runtime' && $n < (float)$th['runtime_low_min']) {
+        return 'cell-bad';
+    }
+    if ($meter === 'temp' && ($n > (float)$th['temp_high_f'] || $n < (float)$th['temp_low_f'])) {
+        return 'cell-hot';
+    }
+    if ($meter === 'hum' && ($n > (float)$th['humidity_high'] || $n < (float)$th['humidity_low'])) {
+        return 'cell-warn';
+    }
+    return '';
+}
+
+function ba_idf_metric_text(array $metric, array $field): string {
+    $unitRaw = trim((string)ba_col($field, 'unit', ''));
+    $unit = strtolower($unitRaw);
+    $num = ba_col($metric, 'value_num', null);
+    $text = trim((string)ba_col($metric, 'value_text', ''));
+    $timed = in_array($unit, ['s', 'sec', 'second', 'seconds'], true);
+    $bytes = in_array($unit, ['bytes', 'byte'], true);
+    if (($timed || $bytes) && $num !== null && $num !== '' && is_numeric($num)) {
+        $n = (float)$num;
+        if ($timed && $n >= 90) {
+            $sec = (int)round($n);
+            $hours = intdiv($sec, 3600);
+            $mins = intdiv($sec % 3600, 60);
+            if ($hours > 0 && $mins > 0) {
+                return $hours . ' h ' . $mins . ' min';
+            }
+            if ($hours > 0) {
+                return $hours . ' h';
+            }
+            return $mins . ' min';
+        }
+        if ($bytes && $n >= 1000000) {
+            if ($n >= 1000000000) {
+                $shown = rtrim(rtrim(number_format($n / 1000000000, 2, '.', ''), '0'), '.');
+                return $shown . ' GB';
+            }
+            $shown = rtrim(rtrim(number_format($n / 1000000, 2, '.', ''), '0'), '.');
+            return $shown . ' MB';
+        }
+        $shown = rtrim(rtrim(number_format($n, 2, '.', ''), '0'), '.');
+        return $unitRaw !== '' ? $shown . ' ' . $unitRaw : $shown;
+    }
+    if ($text !== '') {
+        return $text;
+    }
+    if ($num !== null && $num !== '' && is_numeric($num)) {
+        $shown = rtrim(rtrim(number_format((float)$num, 2, '.', ''), '0'), '.');
+        return $unitRaw !== '' ? $shown . ' ' . $unitRaw : $shown;
+    }
+    return '';
+}
+
+function ba_idf_profile_for(array $device, array $profiles): ?array {
+    $explicit = (int)ba_col($device, 'model_profile_id', 0);
+    if ($explicit > 0) {
+        foreach ($profiles as $p) {
+            if ((int)ba_col($p, 'id', 0) === $explicit) {
+                return $p;
+            }
+        }
+    }
+    $model = strtolower(trim((string)ba_col($device, 'model', '')));
+    $vendor = strtolower(trim((string)ba_col($device, 'manufacturer', '')));
+    $best = null;
+    $bestLen = 0;
+    foreach ($profiles as $p) {
+        $mm = strtolower(trim((string)ba_col($p, 'match_model', '')));
+        if ($mm !== '' && $model !== '' && str_contains($model, $mm) && strlen($mm) > $bestLen) {
+            $best = $p;
+            $bestLen = strlen($mm);
+        }
+    }
+    if ($best) {
+        return $best;
+    }
+    foreach ($profiles as $p) {
+        $mv = strtolower(trim((string)ba_col($p, 'vendor', '')));
+        if ($mv !== '' && (($vendor !== '' && $vendor === $mv) || ($model !== '' && str_contains($model, $mv)))) {
+            return $p;
+        }
+    }
+    $kind = strtolower(trim((string)ba_col($device, 'kind', '')));
+    if ($kind === 'router') {
+        return null;
+    }
+    if (count($profiles) === 1) {
+        return $profiles[0];
+    }
+    return null;
+}
+
+function ba_idf_extras_text(array $device, array $ctx, int $limit = 6): string {
+    $profile = ba_idf_profile_for($device, $ctx['profiles'] ?? []);
+    if (!$profile) {
+        return '';
+    }
+    $pid = (int)ba_col($profile, 'id', 0);
+    $fields = $ctx['fields'][$pid] ?? [];
+    $metrics = $ctx['metrics'][(int)ba_col($device, 'id', 0)] ?? [];
+    $parts = [];
+    foreach ($fields as $key => $field) {
+        if (!isset($metrics[$key])) {
+            continue;
+        }
+        $text = ba_idf_metric_text($metrics[$key], $field);
+        if ($text === '') {
+            continue;
+        }
+        $label = trim((string)ba_col($field, 'label', ''));
+        $parts[] = $label !== '' ? $label . ' ' . $text : $text;
+    }
+    if (!$parts) {
+        return '';
+    }
+    $shown = array_slice($parts, 0, max(1, $limit));
+    $more = count($parts) - count($shown);
+    $line = implode(' · ', $shown);
+    if ($more > 0) {
+        $line .= ' · +' . $more . ' more';
+    }
+    return $line;
+}
+
+function ba_idf_counts(array $devices, array $ctx): array {
+    $c = [
+        'ups' => 0, 'routers' => 0, 'switches' => 0, 'patches' => 0, 'other' => 0,
+        'batt' => 0, 'down' => 0, 'hot' => 0, 'warn' => 0,
+        'alerts' => 0, 'crit_alerts' => 0,
+        'temps' => [], 'rhs' => [], 'power' => 0.0, 'power_n' => 0,
+        'worst' => 'st-ok', 'polled' => 0, 'devices' => count($devices),
+    ];
+    foreach ($devices as $d) {
+        $kind = ba_idf_kind_key($d);
+        $st = ba_idf_gear_state($d);
+        if ($kind === 'ups') {
+            $c['ups']++;
+        } elseif ($kind === 'router') {
+            $c['routers']++;
+        } elseif ($kind === 'switch') {
+            $c['switches']++;
+        } elseif ($kind === 'patch_panel') {
+            $c['patches']++;
+        } else {
+            $c['other']++;
+        }
+        if ($kind === 'ups' || $kind === 'router') {
+            $c['polled']++;
+        }
+        if ($st === 'st-batt') {
+            $c['batt']++;
+        } elseif ($st === 'st-down') {
+            $c['down']++;
+        } elseif ($st === 'st-hot') {
+            $c['hot']++;
+        } elseif ($st === 'st-warn') {
+            $c['warn']++;
+        }
+        $countsForState = ($kind === 'ups' || $kind === 'router' || in_array($st, ['st-batt', 'st-down', 'st-hot', 'st-warn'], true));
+        if ($countsForState && ba_idf_rank($st) > ba_idf_rank((string)$c['worst'])) {
+            $c['worst'] = $st;
+        }
+        if ($kind === 'ups') {
+            $temp = ba_climate_temp($d);
+            $hum = ba_climate_hum($d);
+            if ($temp !== null) {
+                $c['temps'][] = (float)$temp;
+            }
+            if ($hum !== null) {
+                $c['rhs'][] = (float)$hum;
+            }
+            $pw = ba_col($d, 'power_w', null);
+            if ($pw !== null && $pw !== '' && is_numeric($pw)) {
+                $c['power'] += (float)$pw;
+                $c['power_n']++;
+            }
+        }
+    }
+    foreach ($ctx['alerts'] ?? [] as $alert) {
+        $c['alerts']++;
+        if (strtolower(trim((string)ba_col($alert, 'severity', ''))) === 'crit') {
+            $c['crit_alerts']++;
+        }
+    }
+    if ($c['polled'] === 0 && $c['batt'] === 0 && $c['down'] === 0 && $c['hot'] === 0 && $c['warn'] === 0) {
+        $c['worst'] = 'none';
+    }
+    return $c;
+}
+
+function ba_idf_headline(array $c): string {
+    $parts = [];
+    if ((int)$c['batt'] > 0) {
+        $parts[] = (int)$c['batt'] . ' on battery';
+    }
+    if ((int)$c['down'] > 0) {
+        $parts[] = (int)$c['down'] . ' unreachable';
+    }
+    if ((int)$c['hot'] > 0) {
+        $parts[] = (int)$c['hot'] . ' out of climate range';
+    }
+    $warn = (int)$c['warn'];
+    if ($warn > 0) {
+        $parts[] = $warn . ($warn === 1 ? ' warning' : ' warnings');
+    }
+    $alerts = (int)$c['alerts'];
+    if ($alerts > 0) {
+        $parts[] = $alerts . ($alerts === 1 ? ' alert' : ' alerts');
+    }
+    if ($parts) {
+        return implode(' · ', $parts);
+    }
+    if ((int)$c['polled'] === 0) {
+        return 'No polled gear in this closet yet. Racks below show what is placed.';
+    }
+    return 'Polled gear in this closet is online.';
+}
+
+function ba_idf_lead_class(array $c): string {
+    if ((int)$c['batt'] > 0 || (int)$c['down'] > 0 || (int)$c['crit_alerts'] > 0) {
+        return 'bad';
+    }
+    if ((int)$c['hot'] > 0 || (int)$c['warn'] > 0 || (int)$c['alerts'] > 0) {
+        return 'warn';
+    }
+    return '';
+}
+
+function ba_idf_climate_line(array $c): string {
+    $bits = [];
+    if (!empty($c['temps'])) {
+        $bits[] = number_format(array_sum($c['temps']) / count($c['temps']), 1) . ' °F avg';
+    }
+    if (!empty($c['rhs'])) {
+        $bits[] = number_format(array_sum($c['rhs']) / count($c['rhs']), 0) . '% RH avg';
+    }
+    if (!empty($c['power_n'])) {
+        $bits[] = number_format((float)$c['power'], 0) . ' W';
+    }
+    return implode(' · ', $bits);
+}
+
+function ba_idf_place(array $d, array $racksById): array {
+    $rid = (int)ba_col($d, 'rack_id', 0);
+    $name = '';
+    if ($rid > 0 && isset($racksById[$rid])) {
+        $name = trim((string)ba_col($racksById[$rid], 'name', ''));
+    }
+    if ($name === '') {
+        $name = trim((string)ba_col($d, 'rack', ''));
+    }
+    $pos = ba_col($d, 'position_u', null);
+    $uTxt = '';
+    if ($pos !== null && $pos !== '' && is_numeric($pos)) {
+        $u = (int)$pos;
+        $uh = max(1, (int)ba_col($d, 'u_height', 1));
+        $top = $u + $uh - 1;
+        $uTxt = $u === $top ? 'U' . $u : 'U' . $u . '–' . $top;
+    }
+    if ($name === '' && $uTxt === '') {
+        return ['text' => 'Not placed', 'href' => ''];
+    }
+    $text = $name !== '' && $uTxt !== '' ? $name . ' · ' . $uTxt : ($name !== '' ? $name : $uTxt);
+    $href = $rid > 0 ? ba_href('/rack?id=' . $rid) : '';
+    return ['text' => $text, 'href' => $href];
+}
+
+function ba_idf_device_label(array $d): string {
+    $name = trim((string)ba_col($d, 'hostname', ''));
+    if ($name === '') {
+        $name = trim((string)ba_col($d, 'ip', ''));
+    }
+    if ($name === '') {
+        $name = ba_kind_label(ba_idf_kind_key($d));
+    }
+    return $name;
+}
+
+function ba_idf_model_text(array $d): string {
+    $model = trim((string)ba_col($d, 'model', ''));
+    $mfr = trim((string)ba_col($d, 'manufacturer', ''));
+    if ($model !== '' && $mfr !== '' && stripos($model, $mfr) === false) {
+        return $mfr . ' ' . $model;
+    }
+    if ($model !== '') {
+        return $model;
+    }
+    return $mfr !== '' ? $mfr : '—';
+}
+
+function ba_idf_sort_devices(array $rows): array {
+    usort($rows, static function (array $a, array $b): int {
+        $d = ba_idf_rank(ba_idf_gear_state($b)) <=> ba_idf_rank(ba_idf_gear_state($a));
+        if ($d !== 0) {
+            return $d;
+        }
+        return strcasecmp(ba_idf_device_label($a), ba_idf_device_label($b));
+    });
+    return $rows;
+}
+
+function ba_idf_cell(string $html, string $class = ''): void {
+    if ($class === '') {
+        echo '<td>' . $html . '</td>';
+        return;
+    }
+    echo '<td class="' . $class . '">' . $html . '</td>';
+}
+
+function ba_idf_comm_cell(array $d): void {
+    $comm = strtolower(trim((string)ba_col($d, 'comm_state', '')));
+    $kind = ba_idf_kind_key($d);
+    if ($comm === 'down') {
+        ba_idf_cell('down', 'cell-bad');
+        return;
+    }
+    if ($comm === 'degraded') {
+        ba_idf_cell('degraded', 'cell-warn');
+        return;
+    }
+    if ($comm === 'ok') {
+        ba_idf_cell('ok');
+        return;
+    }
+    if ($kind === 'router') {
+        ba_idf_cell('no answer', 'cell-warn');
+        return;
+    }
+    if ($kind === 'ups') {
+        ba_idf_cell('<span class="muted">unknown</span>');
+        return;
+    }
+    ba_idf_cell('<span class="muted">not polled</span>');
+}
+
+function ba_idf_device_cell(array $d, string $extra): void {
+    $id = (int)ba_col($d, 'id', 0);
+    $html = '<a href="' . h(ba_href('/device?id=' . $id)) . '">' . h(ba_idf_device_label($d)) . '</a>';
+    if ($extra !== '') {
+        $html .= '<div class="idf-extra">' . h($extra) . '</div>';
+    }
+    ba_idf_cell($html);
+}
+
+function ba_idf_place_cell(array $d, array $racksById): void {
+    $place = ba_idf_place($d, $racksById);
+    if ($place['text'] === 'Not placed') {
+        ba_idf_cell('<span class="muted">Not placed</span>');
+        return;
+    }
+    if ($place['href'] !== '') {
+        ba_idf_cell('<a href="' . h($place['href']) . '">' . h($place['text']) . '</a>');
+        return;
+    }
+    ba_idf_cell(h($place['text']));
+}
+
+function ba_idf_ups_note(array $d, array $ctx): string {
+    $extra = ba_idf_extras_text($d, $ctx, 6);
+    $expected = (int)ba_col($d, 'sensor_expected', 0) === 1;
+    $pres = ba_col($d, 'sensor_present', null);
+    $absent = $expected && ($pres === null || $pres === '' || (int)$pres === 0);
+    if (!$absent) {
+        return $extra;
+    }
+    $note = 'Sensor expected and not attached';
+    return $extra === '' ? $note : $extra . ' · ' . $note;
+}
+
+function ba_idf_table_open(string $title, string $note, array $heads, string $actionsHtml = ''): void {
+    $noteHtml = $note !== '' ? '<span class="muted">' . h($note) . '</span>' : '';
+    if ($actionsHtml !== '') {
+        $noteHtml .= $actionsHtml;
+    }
+    ba_card_open($title, $noteHtml);
+    echo '<table class="idf-dev-table"><thead><tr>';
+    foreach ($heads as $head) {
+        echo '<th>' . h($head) . '</th>';
+    }
+    echo '</tr></thead><tbody>';
+}
+
+function ba_idf_table_close(): void {
+    echo '</tbody></table>';
+    ba_card_close();
+}
+
+function ba_idf_num_html(mixed $value, string $unit, int $dec = 0): string {
+    return h(ba_fmt($value, $unit, $dec));
+}
+
+function ba_render_idf_telemetry(PDO $db, int $groupId, array $groups, array $devices, array $ctx, array $counts, array $racksById, bool $loadError): void {
+    echo '<div class="idf-telemetry">';
+    if ($loadError) {
+        echo '<p class="idf-lead bad">Telemetry could not be loaded.</p>';
+    } elseif (!$devices) {
+        echo '<p class="muted">No devices are assigned to this closet yet.</p>';
+    } else {
+        $stateCls = ba_idf_kpi_class((string)$counts['worst']);
+        $alertCls = 'ok';
+        if ((int)$counts['crit_alerts'] > 0) {
+            $alertCls = 'crit';
+        } elseif ((int)$counts['alerts'] > 0) {
+            $alertCls = 'warn';
+        }
+        echo '<div class="kpis dash-kpis">';
+        echo '<div class="kpi ' . $stateCls . '"><span>State</span><b>' . h(ba_idf_state_label((string)$counts['worst'])) . '</b></div>';
+        echo '<div class="kpi"><span>UPS</span><b>' . (int)$counts['ups'] . '</b></div>';
+        echo '<div class="kpi ' . ((int)$counts['batt'] > 0 ? 'crit' : 'ok') . '"><span>On battery</span><b>' . (int)$counts['batt'] . '</b></div>';
+        echo '<div class="kpi ' . ((int)$counts['down'] > 0 ? 'crit' : 'ok') . '"><span>Unreachable</span><b>' . (int)$counts['down'] . '</b></div>';
+        echo '<div class="kpi ' . ((int)$counts['hot'] > 0 ? 'warn' : 'ok') . '"><span>Hot / climate</span><b>' . (int)$counts['hot'] . '</b></div>';
+        echo '<div class="kpi"><span>Routers</span><b>' . (int)$counts['routers'] . '</b></div>';
+        echo '<div class="kpi"><span>Switches</span><b>' . (int)$counts['switches'] . '</b></div>';
+        echo '<div class="kpi ' . $alertCls . '"><span>Alerts</span><b>' . (int)$counts['alerts'] . '</b></div>';
+        echo '</div>';
+        $climate = ba_idf_climate_line($counts);
+        if ($climate !== '') {
+            echo '<p class="muted idf-climate">' . h($climate) . '</p>';
+        }
+        if (!empty($ctx['alerts'])) {
+            $byId = [];
+            foreach ($devices as $d) {
+                $byId[(int)ba_col($d, 'id', 0)] = $d;
+            }
+            ba_idf_table_open('Open alerts', '', ['Severity', 'Device', 'Code', 'Message', 'Opened', 'Status'], '<a href="' . h(ba_href('/alerts')) . '">Alert list</a>');
+            foreach ($ctx['alerts'] as $alert) {
+                $sev = strtolower(trim((string)ba_col($alert, 'severity', '')));
+                $rowCls = $sev === 'crit' ? 'st-crit' : 'st-warn';
+                $did = (int)ba_col($alert, 'device_id', 0);
+                $label = isset($byId[$did]) ? ba_idf_device_label($byId[$did]) : ('Device ' . $did);
+                $status = strtolower(trim((string)ba_col($alert, 'status', '')));
+                echo '<tr class="' . $rowCls . '">';
+                ba_idf_cell(h($sev !== '' ? $sev : 'warn'), 'pill ' . ($sev === 'crit' ? 'crit' : 'warn'));
+                ba_idf_cell('<a href="' . h(ba_href('/device?id=' . $did)) . '">' . h($label) . '</a>');
+                ba_idf_cell(h((string)ba_col($alert, 'code', '')));
+                ba_idf_cell(h((string)ba_col($alert, 'message', '')), 'idf-alert-msg');
+                ba_idf_cell(h((string)ba_col($alert, 'opened_at', '')));
+                ba_idf_cell($status === 'acked' ? '<span class="muted">acked</span>' : h($status !== '' ? $status : 'open'));
+                echo '</tr>';
+            }
+            ba_idf_table_close();
+        }
+        $buckets = ['ups' => [], 'router' => [], 'switch' => [], 'patch_panel' => [], 'other' => []];
+        foreach ($devices as $d) {
+            $buckets[ba_idf_kind_key($d)][] = $d;
+        }
+        if ($buckets['ups']) {
+            ba_idf_table_open('UPS', '', ['State', 'Device', 'Model', 'Place', 'Comm', 'Output', 'Cap', 'Runtime', 'Load', 'Power', 'Input', 'Temp', 'RH', 'Last poll']);
+            foreach (ba_idf_sort_devices($buckets['ups']) as $d) {
+                $st = ba_idf_gear_state($d);
+                $th = ba_idf_threshold_set($ctx, (int)ba_col($d, 'id', 0));
+                $temp = ba_climate_temp($d);
+                $hum = ba_climate_hum($d);
+                $out = ba_col($d, 'output_status', null);
+                echo '<tr class="' . h($st) . '">';
+                ba_idf_cell(h(ba_idf_state_label($st)), 'pill');
+                ba_idf_device_cell($d, ba_idf_ups_note($d, $ctx));
+                ba_idf_cell(h(ba_idf_model_text($d)));
+                ba_idf_place_cell($d, $racksById);
+                ba_idf_comm_cell($d);
+                ba_idf_cell(h(ba_output_text(is_numeric($out) ? (int)$out : null)), ba_idf_meter_flag('output', $out, $th, $d));
+                ba_idf_cell(ba_idf_num_html(ba_col($d, 'capacity_pct', null), '%', 0), ba_idf_meter_flag('cap', ba_col($d, 'capacity_pct', null), $th, $d));
+                ba_idf_cell(ba_idf_num_html(ba_col($d, 'runtime_min', null), 'min', 0), ba_idf_meter_flag('runtime', ba_col($d, 'runtime_min', null), $th, $d));
+                ba_idf_cell(ba_idf_num_html(ba_col($d, 'load_pct', null), '%', 0));
+                ba_idf_cell(ba_idf_num_html(ba_col($d, 'power_w', null), 'W', 0));
+                ba_idf_cell(ba_idf_num_html(ba_col($d, 'input_voltage', null), 'V', 0));
+                ba_idf_cell(ba_idf_num_html($temp, '°F', 1), ba_idf_meter_flag('temp', $temp, $th, $d));
+                ba_idf_cell(ba_idf_num_html($hum, '%', 0), ba_idf_meter_flag('hum', $hum, $th, $d));
+                $last = trim((string)ba_col($d, 'last_success', ''));
+                ba_idf_cell('<span class="muted">' . h($last !== '' ? $last : 'never') . '</span>');
+                echo '</tr>';
+            }
+            ba_idf_table_close();
+        }
+        if ($buckets['router']) {
+            ba_idf_table_open('Routers', '', ['State', 'Device', 'Model', 'Place', 'Comm', 'Last success', 'Readings']);
+            foreach (ba_idf_sort_devices($buckets['router']) as $d) {
+                $st = ba_idf_gear_state($d);
+                $readings = ba_idf_extras_text($d, $ctx, 6);
+                $last = trim((string)ba_col($d, 'last_success', ''));
+                echo '<tr class="' . h($st) . '">';
+                ba_idf_cell(h(ba_idf_state_label($st)), 'pill');
+                ba_idf_device_cell($d, '');
+                ba_idf_cell(h(ba_idf_model_text($d)));
+                ba_idf_place_cell($d, $racksById);
+                ba_idf_comm_cell($d);
+                ba_idf_cell('<span class="muted">' . h($last !== '' ? $last : 'never') . '</span>');
+                ba_idf_cell($readings !== '' ? h($readings) : '<span class="muted">—</span>', 'idf-read');
+                echo '</tr>';
+            }
+            ba_idf_table_close();
+        }
+        if ($buckets['switch']) {
+            ba_idf_table_open('Switches', 'Shown on the drawing. Not polled.', ['State', 'Device', 'Model', 'Place', 'Ports']);
+            foreach (ba_idf_sort_devices($buckets['switch']) as $d) {
+                $st = ba_idf_gear_state($d);
+                $ports = ba_col($d, 'port_count', null);
+                $portTxt = (is_numeric($ports) && (int)$ports > 0) ? (string)(int)$ports : '—';
+                echo '<tr class="' . h($st) . '">';
+                ba_idf_cell(h(ba_idf_state_label($st)), 'pill');
+                ba_idf_device_cell($d, '');
+                ba_idf_cell(h(ba_idf_model_text($d)));
+                ba_idf_place_cell($d, $racksById);
+                ba_idf_cell(h($portTxt));
+                echo '</tr>';
+            }
+            ba_idf_table_close();
+        }
+        if ($buckets['patch_panel']) {
+            ba_idf_table_open('Patch panels', 'Shown on the drawing. Not polled.', ['Device', 'Model', 'Place', 'Ports']);
+            foreach (ba_idf_sort_devices($buckets['patch_panel']) as $d) {
+                $ports = ba_col($d, 'port_count', null);
+                $portTxt = (is_numeric($ports) && (int)$ports > 0) ? (string)(int)$ports : '—';
+                $st = ba_idf_gear_state($d);
+                echo '<tr class="' . h($st) . '">';
+                ba_idf_device_cell($d, '');
+                ba_idf_cell(h(ba_idf_model_text($d)));
+                ba_idf_place_cell($d, $racksById);
+                ba_idf_cell(h($portTxt));
+                echo '</tr>';
+            }
+            ba_idf_table_close();
+        }
+        if ($buckets['other']) {
+            ba_idf_table_open('Other', '', ['State', 'Device', 'Model', 'Place', 'Comm']);
+            foreach (ba_idf_sort_devices($buckets['other']) as $d) {
+                $st = ba_idf_gear_state($d);
+                echo '<tr class="' . h($st) . '">';
+                ba_idf_cell(h(ba_idf_state_label($st)), 'pill');
+                ba_idf_device_cell($d, '');
+                ba_idf_cell(h(ba_idf_model_text($d)));
+                ba_idf_place_cell($d, $racksById);
+                ba_idf_comm_cell($d);
+                echo '</tr>';
+            }
+            ba_idf_table_close();
+        }
+    }
+    $kids = ba_group_children($groups, $groupId);
+    if ($kids) {
+        try {
+            $summaries = [];
+            foreach (ba_idf_summaries($db) as $s) {
+                if (!empty($s['group_id'])) {
+                    $summaries[(int)$s['group_id']] = $s;
+                }
+            }
+            $memo = [];
+            ba_idf_table_open('Closets', '', ['State', 'Closet', 'Racks', 'UPS', 'Temp', 'On battery', 'Down']);
+            foreach ($kids as $kid) {
+                $kidId = (int)ba_col($kid, 'id', 0);
+                $sum = ba_loc_rollup($kidId, $groups, $summaries, $memo);
+                $st = (string)($sum['worst'] ?? 'st-ok');
+                $battN = (int)($sum['batt'] ?? 0);
+                $downN = (int)($sum['down'] ?? 0);
+                echo '<tr class="' . h($st) . '">';
+                ba_idf_cell(h(ba_idf_state_label($st)), 'pill');
+                ba_idf_cell('<a href="' . h(ba_href('/idfs?group=' . $kidId)) . '">' . h((string)ba_col($kid, 'name', 'Closet')) . '</a>');
+                ba_idf_cell((string)(int)($sum['racks'] ?? 0));
+                ba_idf_cell((string)(int)($sum['ups'] ?? 0));
+                ba_idf_cell(h(ba_fmt($sum['temp'] ?? null, '°F')));
+                ba_idf_cell((string)$battN, $battN > 0 ? 'cell-batt' : '');
+                ba_idf_cell((string)$downN, $downN > 0 ? 'cell-bad' : '');
+                echo '</tr>';
+            }
+            ba_idf_table_close();
+        } catch (Throwable $e) {
+            echo '<p class="muted">Closet totals are unavailable.</p>';
+        }
+    }
+    echo '</div>';
+}
+
 function page_idfs(PDO $db, array $user): void {
     $admin = ba_editor($user, 'edit_infrastructure');
     $gid = (int)($_GET['group'] ?? 0);
@@ -308,11 +1174,39 @@ function page_idfs(PDO $db, array $user): void {
         }
         $racks = ba_racks_in_group($db, $gid);
         $maxU = 1;
-        foreach ($racks as $rk) $maxU = max($maxU, (int)$rk['u_height']);
+        $rackMap = [];
+        foreach ($racks as $rk) {
+            if (!is_array($rk)) {
+                continue;
+            }
+            $row = array_change_key_case($rk, CASE_LOWER);
+            $maxU = max($maxU, (int)($row['u_height'] ?? 1));
+            $rackMap[(int)($row['id'] ?? 0)] = $row;
+        }
+        $loadError = false;
+        try {
+            $devices = ba_idf_closet_devices($db, $gid);
+        } catch (Throwable $e) {
+            $devices = [];
+            $loadError = true;
+            @file_put_contents(BA_ROOT . '\\logs\\php-error.log', date('c') . ' idf devices ' . $e->getMessage() . "\n", FILE_APPEND);
+        }
+        $ctx = $loadError ? [
+            'alerts' => [], 'thresholds' => [], 'metrics' => [], 'fields' => [], 'profiles' => [], 'error' => 'devices',
+        ] : ba_idf_closet_context($db, $devices);
+        $counts = ba_idf_counts($devices, $ctx);
+        if ($loadError) {
+            $lead = 'Telemetry could not be loaded.';
+            $leadCls = 'bad';
+        } else {
+            $lead = ba_idf_headline($counts);
+            $leadCls = ba_idf_lead_class($counts);
+        }
         echo '<div class="idf-page">';
         echo '<div class="dash-hero"><div>';
         echo '<p class="muted"><a href="'.h(ba_href('/idfs')).'">Locations</a> / '.h(ba_group_path($db, $gid)).'</p>';
         echo '<h1>'.h($g['name']).'</h1>';
+        echo '<p class="idf-lead' . ($leadCls !== '' ? ' ' . $leadCls : '') . '">' . h($lead) . '</p>';
         echo '<p class="muted">'.(ba_tech_mode()
             ? 'Add a rack, open it, then tap a U to place a device. U1 is the bottom.'
             : 'Click an empty U to place a UPS, switch, or patch panel. U1 is the bottom of the rack.').'</p>';
@@ -321,6 +1215,7 @@ function page_idfs(PDO $db, array $user): void {
             echo '<button type="button" class="btn" data-open-modal="modal-add-rack">Add network rack</button>';
         }
         echo '</div>';
+        ba_render_idf_telemetry($db, $gid, $groups, $devices, $ctx, $counts, $rackMap, $loadError);
 
         if ($racks) {
             echo '<div class="idf-row-shell"><div class="idf-row-viewport" data-idf-pan="1"><div class="idf-row-strip" style="--max-units:'.$maxU.'">';
@@ -496,7 +1391,9 @@ function page_rack(PDO $db, array $user): void {
                 if ($pos < 1 || ($pos + $uh - 1) > (int)$rack['u_height']) {
                     throw new RuntimeException('U range does not fit this rack');
                 }
-                $hit = ba_slot_taken($occupants, $pos, $uh, $face, $did);
+                $placedKind = strtolower(trim((string)($dev['kind'] ?? 'ups')));
+                $slotFace = ($placedKind === '' || $placedKind === 'ups') ? 'both' : $face;
+                $hit = ba_slot_taken($occupants, $pos, $uh, $slotFace, $did);
                 if ($hit) throw new RuntimeException('U overlap with '.($hit['hostname'] ?: $hit['ip']));
                 $db->prepare('UPDATE devices SET rack_id=?, position_u=?, u_height=?, face=?, kind=IFNULL(kind,\'ups\'), updated_at=datetime(\'now\') WHERE id=?')
                     ->execute([$id, $pos, $uh, $face, $did]);
@@ -764,12 +1661,12 @@ function page_rack(PDO $db, array $user): void {
         <label>Height (U)</label><input type="number" name="u_height" min="1" max="8" value="2">
         <label>Face</label>
         <select name="face">
-          <option value="both"<?= $focusFace==='both'?' selected':'' ?>>both (full depth)</option>
-          <option value="front"<?= $focusFace==='front'?' selected':'' ?>>front</option>
-          <option value="rear"<?= $focusFace==='rear'?' selected':'' ?>>rear</option>
+          <option value="both" selected>both (full depth)</option>
+          <option value="front">front</option>
+          <option value="rear">rear</option>
         </select>
         <button>Place UPS</button>
-        <p class="muted">Unplaced UPS in this closet. A 2U UPS at U1 occupies U1–U2.</p>
+        <p class="muted">A UPS fills the rack depth, so the rear view draws it with the rear picture. Unplaced UPS in this closet. A 2U UPS at U1 occupies U1–U2.</p>
       </form>
       <?php ba_users_modal_close(); ?>
       <?php ba_users_modal_open('modal-add-item', 'Add to this rack', false, '', true); ?>
