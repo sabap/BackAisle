@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.5.97] - 2026-11-06
+
+- `sql/maintenance.sql` switches into the database named BackAisle before it creates the maintenance procedure. A query window on master, which is the usual default for sa, no longer stops the script.
+- The collector and the writer do not need a restart.
+
 ## [0.5.96] - 2026-11-06
 
 - The SQL Agent job BackAisle maintenance checks the database, reorganizes or rebuilds fragmented indexes, and updates statistics that have changed. It does not delete rows. Run `sql/maintenance.sql` again if the 0.5.95 procedure is already installed. The existing schedule stays.
