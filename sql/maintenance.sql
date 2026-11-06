@@ -21,10 +21,21 @@
 -- Run this script again to replace dbo.ba_maintain. An existing job and
 -- its schedule are left as they are. The job calls the procedure, so the
 -- next run uses the new body.
+--
+-- A new query window uses the login's default database. For sa that is
+-- master, even when Object Explorer is on BackAisle. This script switches
+-- to the BackAisle database when it finds one.
 
+SET NOEXEC OFF;
+GO
+IF DB_NAME() IN (N'master', N'model', N'msdb', N'tempdb')
+   AND DB_ID(N'BackAisle') IS NOT NULL
+    EXEC(N'USE [BackAisle]');
+GO
 IF DB_NAME() IN (N'master', N'model', N'msdb', N'tempdb')
 BEGIN
-    RAISERROR('Connect to the BackAisle database, then run this script.', 16, 1);
+    DECLARE @here sysname = ISNULL(DB_NAME(), N'(none)');
+    RAISERROR('This query is running in %s. In the SSMS toolbar, open the database dropdown and select BackAisle, then run this script in a new query window.', 16, 1, @here);
     SET NOEXEC ON;
 END
 GO
