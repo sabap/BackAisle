@@ -56,6 +56,15 @@ GO
 IF COL_LENGTH('devices', 'web_credential_id') IS NULL
   ALTER TABLE devices ADD web_credential_id INT NULL;
 GO
+IF COL_LENGTH('devices', 'purchased_from') IS NULL
+  ALTER TABLE devices ADD purchased_from NVARCHAR(128) NULL;
+GO
+IF COL_LENGTH('devices', 'warranty_vendor') IS NULL
+  ALTER TABLE devices ADD warranty_vendor NVARCHAR(128) NULL;
+GO
+IF COL_LENGTH('devices', 'warranty_expires') IS NULL
+  ALTER TABLE devices ADD warranty_expires NVARCHAR(32) NULL;
+GO
 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'poll_state')
 CREATE TABLE poll_state (
   device_id INT NOT NULL PRIMARY KEY,
@@ -217,6 +226,82 @@ CREATE TABLE device_template_outlets (
   label NVARCHAR(128) NULL,
   PRIMARY KEY (template_id, port_no)
 );
+GO
+IF COL_LENGTH('device_templates', 'layout_json') IS NULL
+  ALTER TABLE device_templates ADD layout_json NVARCHAR(MAX) NULL;
+GO
+IF COL_LENGTH('device_templates', 'port_type') IS NULL
+  ALTER TABLE device_templates ADD port_type NVARCHAR(64) NULL;
+GO
+IF COL_LENGTH('device_templates', 'port_speed') IS NULL
+  ALTER TABLE device_templates ADD port_speed NVARCHAR(64) NULL;
+GO
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'part_templates')
+CREATE TABLE part_templates (
+  id INT IDENTITY(1,1) PRIMARY KEY,
+  name NVARCHAR(128) NOT NULL,
+  vendor NVARCHAR(128) NULL,
+  model NVARCHAR(128) NULL,
+  part_kind NVARCHAR(32) NOT NULL,
+  weight_kg FLOAT NULL,
+  picture NVARCHAR(255) NULL,
+  port_count INT NULL,
+  port_type NVARCHAR(64) NULL,
+  port_speed NVARCHAR(64) NULL,
+  mgmt_port_count INT NULL,
+  input_count INT NULL,
+  plug_type NVARCHAR(32) NULL,
+  input_voltage NVARCHAR(32) NULL,
+  watts FLOAT NULL,
+  notes NVARCHAR(MAX) NULL,
+  is_active INT NOT NULL DEFAULT 1,
+  created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+  updated_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+);
+GO
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'device_parts')
+CREATE TABLE device_parts (
+  id INT IDENTITY(1,1) PRIMARY KEY,
+  device_id INT NOT NULL,
+  part_template_id INT NULL,
+  part_kind NVARCHAR(32) NOT NULL,
+  slot_key NVARCHAR(32) NOT NULL,
+  serial NVARCHAR(128) NULL,
+  purchased_from NVARCHAR(128) NULL,
+  install_date NVARCHAR(32) NULL,
+  warranty_vendor NVARCHAR(128) NULL,
+  warranty_expires NVARCHAR(32) NULL,
+  weight_kg FLOAT NULL,
+  port_count INT NULL,
+  port_type NVARCHAR(64) NULL,
+  port_speed NVARCHAR(64) NULL,
+  mgmt_port_count INT NULL,
+  input_count INT NULL,
+  plug_type NVARCHAR(32) NULL,
+  input_voltage NVARCHAR(32) NULL,
+  watts FLOAT NULL,
+  feed_label NVARCHAR(200) NULL,
+  link_label NVARCHAR(200) NULL,
+  stack_label NVARCHAR(200) NULL,
+  notes NVARCHAR(MAX) NULL,
+  created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+  updated_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+);
+GO
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'ux_device_parts_slot' AND object_id = OBJECT_ID('device_parts'))
+  CREATE UNIQUE INDEX ux_device_parts_slot ON device_parts(device_id, slot_key);
+GO
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'template_parts')
+CREATE TABLE template_parts (
+  id INT IDENTITY(1,1) PRIMARY KEY,
+  template_id INT NOT NULL,
+  part_template_id INT NOT NULL,
+  slot_key NVARCHAR(32) NOT NULL,
+  sort_order INT NOT NULL DEFAULT 0
+);
+GO
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'ux_template_parts_slot' AND object_id = OBJECT_ID('template_parts'))
+  CREATE UNIQUE INDEX ux_template_parts_slot ON template_parts(template_id, slot_key);
 GO
 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'snmp_profiles')
 CREATE TABLE snmp_profiles (

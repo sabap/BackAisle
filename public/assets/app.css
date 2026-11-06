@@ -1058,3 +1058,169 @@ body.gs-palette-open { overflow: hidden; }
   .gs-palette { padding: 1rem .6rem 1rem; }
   .find-open { margin-right: .35rem; }
 }
+form.template-form.stack { max-width: none; }
+.template-fields { max-width: 40rem; }
+#switch-parts { margin-top: 1.1rem; padding-top: .75rem; border-top: 1px solid var(--line); }
+#switch-parts h3 { margin: 0 0 .35rem; font-size: 1rem; }
+form.template-form.stack #switch-parts > input { display: block; max-width: 40rem; width: 100%; }
+#slot-protos { display: none !important; }
+.slot-editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(16rem, .7fr);
+  gap: 1rem;
+  align-items: start;
+  margin-top: .6rem;
+}
+.slot-stage, .chassis-stage {
+  position: relative;
+  width: 100%;
+  max-width: 920px;
+}
+.slot-stage { touch-action: none; }
+.slot-stage > img, .chassis-photo {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-width: 920px;
+  border-radius: 8px;
+  background: #0e141c;
+}
+.slot-layer, .chassis-slots { position: absolute; inset: 0; }
+.slot-box {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px solid #d7b48a;
+  background: rgba(28, 59, 90, .35);
+  border-radius: 4px;
+  cursor: move;
+  touch-action: none;
+  z-index: 1;
+  overflow: visible;
+}
+.slot-box.is-on { z-index: 2; box-shadow: 0 0 0 1px #fff8ee; }
+.slot-label {
+  position: absolute;
+  left: .3rem; right: .3rem; top: .15rem;
+  pointer-events: none;
+  color: #fff8ee;
+  font-size: .72rem;
+  font-weight: 700;
+  line-height: 1.2;
+  text-shadow: 0 1px 2px #000;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.slot-box b[data-edge] {
+  position: absolute;
+  z-index: 3;
+  background: #d7b48a;
+  pointer-events: auto;
+  border-radius: 2px;
+}
+.slot-box b[data-edge="n"], .slot-box b[data-edge="s"] {
+  left: 14px; right: 14px; height: 8px; cursor: ns-resize;
+}
+.slot-box b[data-edge="n"] { top: -4px; }
+.slot-box b[data-edge="s"] { bottom: -4px; }
+.slot-box b[data-edge="e"], .slot-box b[data-edge="w"] {
+  top: 14px; bottom: 14px; width: 8px; cursor: ew-resize;
+}
+.slot-box b[data-edge="e"] { right: -4px; }
+.slot-box b[data-edge="w"] { left: -4px; }
+.slot-box b[data-edge="nw"], .slot-box b[data-edge="ne"],
+.slot-box b[data-edge="sw"], .slot-box b[data-edge="se"] { width: 12px; height: 12px; }
+.slot-box b[data-edge="nw"] { top: -5px; left: -5px; cursor: nwse-resize; }
+.slot-box b[data-edge="se"] { bottom: -5px; right: -5px; cursor: nwse-resize; }
+.slot-box b[data-edge="ne"] { top: -5px; right: -5px; cursor: nesw-resize; }
+.slot-box b[data-edge="sw"] { bottom: -5px; left: -5px; cursor: nesw-resize; }
+.slot-side { min-width: 0; }
+.slot-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: .05rem;
+  margin: 0 0 .5rem;
+  padding: .5rem .6rem .6rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel2);
+}
+.slot-row.is-on { border-color: #d7b48a; }
+.slot-row label { margin: .35rem 0 .08rem; }
+.slot-row input, .slot-row select { width: 100%; }
+.slot-actions { margin: .2rem 0 .35rem; }
+.slot-actions .btn-quiet { background: transparent; border-color: transparent; color: var(--muted); }
+button.chassis-slot {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  box-sizing: border-box;
+  display: block;
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  color: #fff8ee;
+  text-align: left;
+  border: 2px solid #8a6a45;
+  border-radius: 4px;
+  background: rgba(12, 16, 22, .45);
+  cursor: pointer;
+  overflow: hidden;
+}
+.chassis-slots > .chassis-slot { position: absolute; }
+.chassis-slot img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+}
+.chassis-cap {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  display: flex;
+  flex-direction: column;
+  gap: .05rem;
+  padding: .35rem .4rem .28rem;
+  background: linear-gradient(transparent, rgba(0, 0, 0, .78));
+  pointer-events: none;
+}
+.chassis-cap b, .chassis-cap small {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chassis-cap b { font-size: .74rem; line-height: 1.15; }
+.chassis-cap small { font-size: .66rem; color: #d7c4a8; }
+.chassis-slot.is-empty .chassis-cap small { color: #8b9aab; }
+.chassis-slot:hover, .chassis-slot:focus-visible { z-index: 3; filter: brightness(1.12); }
+.chassis-slot:focus-visible { outline: 2px solid #d7b48a; outline-offset: 1px; }
+.slot-box.kind-power_supply, button.chassis-slot.kind-power_supply { border-color: #e2b15a; background-color: rgba(226, 177, 90, .32); }
+.slot-box.kind-supervisor, button.chassis-slot.kind-supervisor { border-color: #5b9fd4; background-color: rgba(28, 59, 90, .62); }
+.slot-box.kind-line_card, button.chassis-slot.kind-line_card { border-color: #3ddc97; background-color: rgba(20, 90, 58, .5); }
+.slot-box.kind-network_module, button.chassis-slot.kind-network_module { border-color: #2ec4b6; background-color: rgba(18, 90, 84, .5); }
+.slot-box.kind-stack_port, button.chassis-slot.kind-stack_port { border-color: #c4a3ff; background-color: rgba(72, 42, 110, .5); }
+.slot-box.kind-base_ports, button.chassis-slot.kind-base_ports { border-color: #8b9aab; background-color: rgba(40, 48, 58, .55); }
+.chassis-list { display: flex; flex-wrap: wrap; gap: .5rem; margin: .35rem 0 .8rem; }
+.chassis-list .chassis-slot { width: 11.5rem; min-height: 4.4rem; }
+.chassis-note { margin: 0 0 .7rem; }
+.chassis-card .dev-facts { margin: .35rem 0 .8rem; }
+.chassis-extra { margin: 1rem 0 .4rem; font-size: .95rem; }
+form.chassis-form.stack {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: .65rem .9rem;
+  max-width: none;
+  align-items: end;
+}
+form.chassis-form.stack .chassis-field label { margin: 0 0 .15rem; }
+form.chassis-form.stack .chassis-field input { width: 100%; }
+form.chassis-form.stack > button { grid-column: 1 / -1; justify-self: start; margin: 0; }
+.chassis-read { grid-template-columns: 1fr 1fr; }
+.chassis-read dd { white-space: normal; overflow: visible; }
+@media (max-width: 800px) {
+  .slot-editor { grid-template-columns: 1fr; }
+  .chassis-read { grid-template-columns: 1fr; }
+}

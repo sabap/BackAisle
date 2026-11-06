@@ -1381,7 +1381,7 @@ function page_rack(PDO $db, array $user): void {
             } elseif ($act === 'place_existing') {
                 $did = (int)$_POST['device_id'];
                 $pos = (int)$_POST['position_u'];
-                $uh = max(1, (int)($_POST['u_height'] ?? 2));
+                $uh = max(1, min(60, (int)($_POST['u_height'] ?? 2)));
                 $face = $_POST['face'] ?? 'both';
                 if (!in_array($face, ['front', 'rear', 'both'], true)) $face = 'both';
                 $st = $db->prepare('SELECT * FROM devices WHERE id=?');
@@ -1406,7 +1406,7 @@ function page_rack(PDO $db, array $user): void {
                 $tpl = $tid ? ba_template($db, $tid) : null;
                 $kind = ba_kind_allowed((string)($_POST['kind'] ?? ($tpl['kind'] ?? 'switch')), 'other');
                 $pos = (int)$_POST['position_u'];
-                $uh = max(1, (int)($_POST['u_height'] ?? ($tpl['u_height'] ?? 1)));
+                $uh = max(1, min(60, (int)($_POST['u_height'] ?? ($tpl['u_height'] ?? 1))));
                 $face = $_POST['face'] ?? ($tpl['face'] ?? ($kind === 'patch_panel' ? 'front' : 'both'));
                 if (!in_array($face, ['front', 'rear', 'both'], true)) $face = 'front';
                 $host = trim($_POST['hostname'] ?? '');
@@ -1468,6 +1468,10 @@ function page_rack(PDO $db, array $user): void {
                 $dev = $st->fetch();
                 if (!$dev) throw new RuntimeException('Not on this rack');
                 if (($dev['kind'] ?? 'ups') === 'ups') throw new RuntimeException('Unplace a UPS instead of deleting it');
+                if (function_exists('ba_ensure_parts_schema')) {
+                    ba_ensure_parts_schema($db);
+                    ba_pp_exec($db, 'DELETE FROM device_parts WHERE device_id=?', [$did]);
+                }
                 $db->prepare('DELETE FROM devices WHERE id=?')->execute([$did]);
                 ba_audit($db, 'delete_rack_item', 'device', (string)$did);
                 $msg = 'Removed from inventory';
@@ -1658,7 +1662,7 @@ function page_rack(PDO $db, array $user): void {
           <?php endforeach; ?>
         </select>
         <label>Bottom U</label><input type="number" name="position_u" min="1" max="<?= $units ?>" value="<?= $preU ?>" required>
-        <label>Height (U)</label><input type="number" name="u_height" min="1" max="8" value="2">
+        <label>Height (U)</label><input type="number" name="u_height" min="1" max="60" value="2">
         <label>Face</label>
         <select name="face">
           <option value="both" selected>both (full depth)</option>
@@ -1684,7 +1688,7 @@ function page_rack(PDO $db, array $user): void {
         <label>Manufacturer / model</label>
         <div class="filters"><input name="manufacturer" placeholder="Cisco, Panduit…"><input name="model" placeholder="model"></div>
         <label>Bottom U</label><input type="number" name="position_u" min="1" max="<?= $units ?>" value="<?= $preU ?>" required>
-        <label>Height (U)</label><input type="number" name="u_height" min="1" max="8" value="1">
+        <label>Height (U)</label><input type="number" name="u_height" min="1" max="60" value="1">
         <label>Face</label>
         <select name="face">
           <option value="front"<?= $focusFace==='front'?' selected':'' ?>>front</option>

@@ -1550,6 +1550,9 @@ function ba_render_device_stage(array $r, array $faces, string $deptName): void
 
 function page_device(PDO $db, array $user): void {
     ba_ensure_model_schema($db);
+    if (function_exists('ba_ensure_parts_schema')) {
+        ba_ensure_parts_schema($db);
+    }
     $id = (int)($_GET['id'] ?? 0);
     $st = $db->prepare(ba_latest_join() . ' WHERE d.id=?');
     $st->execute([$id]);
@@ -1585,6 +1588,10 @@ function page_device(PDO $db, array $user): void {
         exit;
     }
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($canEditThis || (isset($_POST['save_owner']) && ba_can($user, 'edit_devices_all')))) {
+        if ($canEditThis && function_exists('ba_parts_device_act') && ba_parts_device_act((string)($_POST['act'] ?? ''))) {
+            ba_parts_handle_device($db, $id, $r);
+            exit;
+        }
         if (isset($_POST['decommission']) && $canEditThis) {
             ba_pp_exec($db, 'UPDATE devices SET enabled=0, decommissioned_at=? WHERE id=?', [gmdate('Y-m-d H:i:s'), $id]);
             ba_audit($db, 'decommission_device', 'device', (string)$id);
@@ -1658,7 +1665,7 @@ function page_device(PDO $db, array $user): void {
             $kind = ba_kind_allowed((string)($_POST['kind'] ?? ($r['kind'] ?? 'ups')), 'ups');
             $rid = ($_POST['rack_id'] ?? '') === '' ? null : (int)$_POST['rack_id'];
             $pos = ($_POST['position_u'] ?? '') === '' ? null : (int)$_POST['position_u'];
-            $uh = max(1, (int)($_POST['u_height'] ?? 1));
+            $uh = max(1, min(60, (int)($_POST['u_height'] ?? 1)));
             $face = $_POST['face'] ?? 'both';
             if (!in_array($face, ['front', 'rear', 'both'], true)) $face = 'both';
             $tid = ($_POST['template_id'] ?? '') === '' ? null : (int)$_POST['template_id'];
@@ -1741,13 +1748,35 @@ function page_device(PDO $db, array $user): void {
         }
         echo '<div class="flash">'.h($savedText).'</div>';
     }
+    $notice = (string)($_GET['notice'] ?? '');
+    if ($notice === 'part') {
+        echo '<div class="flash ok">Component saved.</div>';
+    } elseif ($notice === 'removed') {
+        echo '<div class="flash ok">Component removed.</div>';
+    } elseif ($notice === 'chassis') {
+        echo '<div class="flash ok">Chassis record saved.</div>';
+    } elseif ($notice === 'kit') {
+        $filled = (int)($_GET['parts'] ?? 0);
+        if ($filled > 0) {
+            $word = $filled === 1 ? 'part' : 'parts';
+            echo '<div class="flash ok">Installed '.$filled.' template '.$word.'. Bays that already had a part were left alone.</div>';
+        } else {
+            echo '<div class="flash">No empty bay was filled. The template kit is empty, or every bay already has a part.</div>';
+        }
+    }
     ?>
     <?php
     ba_render_device_stage($r, $faces, $deptName);
+    $kindPage = strtolower(trim((string)ba_col($r, 'kind', 'ups')));
+    if ($kindPage === '') {
+        $kindPage = 'ups';
+    }
+    if ($kindPage === 'switch' && function_exists('ba_render_switch_chassis')) {
+        ba_render_switch_chassis($db, $user, $r, $canEditThis);
+    }
     $canMakeProfile = $canEditThis && ba_editor($user, 'edit_snmp');
     ba_render_device_readings($db, $r, '');
-    $kindPage = strtolower(trim((string)ba_col($r, 'kind', 'ups')));
-    if ($kindPage === '' || $kindPage === 'ups'):
+    if ($kindPage === 'ups'):
     ?>
     <section class="ucard dev-history">
       <div class="ucard-head"><h3>History</h3></div>
@@ -1819,7 +1848,7 @@ function page_device(PDO $db, array $user): void {
           <select name="template_id"><?= ba_template_options($db, isset($r['template_id']) ? (int)$r['template_id'] : null) ?></select>
           <button name="apply_template" value="1">Apply template</button>
         </div>
-        <p class="muted">Apply copies manufacturer, model, kind, U height, face, ports, VA, credentials, and the model profile from the template.</p>
+        <p class="muted">Apply copies manufacturer, model, kind, U height, face, ports, VA, credentials, and the model profile from the template. Installed parts stay as they are.</p>
         <label>Kind</label><select name="kind"><?= ba_kind_options($r['kind'] ?? 'ups') ?></select>
         <label>Network rack</label>
         <select name="rack_id"><option value="">(not placed)</option><?php
@@ -1829,7 +1858,7 @@ function page_device(PDO $db, array $user): void {
           }
         ?></select>
         <label>Bottom U</label><input type="number" name="position_u" min="1" value="<?= h((string)($r['position_u'] ?? '')) ?>">
-        <label>Height (U)</label><input type="number" name="u_height" min="1" max="8" value="<?= h((string)($r['u_height'] ?? 1)) ?>">
+        <label>Height (U)</label><input type="number" name="u_height" min="1" max="60" value="<?= h((string)($r['u_height'] ?? 1)) ?>">
         <label>Face</label><select name="face"><?php
           foreach (['both'=>'both (full depth)','front'=>'front','rear'=>'rear'] as $fv=>$fl) {
               $sel = (($r['face'] ?? 'both') === $fv) ? ' selected' : '';

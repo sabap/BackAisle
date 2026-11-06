@@ -16,6 +16,7 @@ require __DIR__ . '/../app/import_pp.php';
 require __DIR__ . '/../app/org.php';
 require __DIR__ . '/../app/racks.php';
 require __DIR__ . '/../app/templates.php';
+require __DIR__ . '/../app/parts.php';
 require __DIR__ . '/../app/snmp_page.php';
 require __DIR__ . '/../app/backup.php';
 require __DIR__ . '/../app/update.php';

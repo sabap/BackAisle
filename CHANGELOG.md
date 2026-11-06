@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.98] - 2026-11-06
+
+- A switch template stores an empty-chassis picture, bay boxes, and a kit of components. The device page draws those bays. Click a bay for the serial number, warranty, weight, ports, and plug or link text.
+- The same bays cover a chassis switch and a stack switch: power supply, supervisor, line card, network module, stacking port, and the fixed faceplate ports.
+- Install template parts fills empty bays and leaves serials that are already saved. Chassis weight adds the empty chassis to each installed part. A saved 0 is a real weight. A blank weight is left out of the total.
+- Switch height can be set up to 60 U. Component templates are on the Templates page. SNMP does not read these fields yet.
+- Signed-in pages use app.css?v=layout17. The collector and the writer do not need a restart.
+
 ## [0.5.97] - 2026-11-06
 
 - `sql/maintenance.sql` switches into the database named BackAisle before it creates the maintenance procedure. A query window on master, which is the usual default for sa, no longer stops the script.
