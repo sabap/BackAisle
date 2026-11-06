@@ -119,6 +119,9 @@ GO
 IF COL_LENGTH('events', 'source') IS NULL
 ALTER TABLE events ADD source NVARCHAR(16) NULL;
 GO
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'ix_events_ts')
+CREATE INDEX ix_events_ts ON events(ts);
+GO
 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'thresholds')
 CREATE TABLE thresholds (
   id INT IDENTITY(1,1) PRIMARY KEY,
