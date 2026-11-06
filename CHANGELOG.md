@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.5.96] - 2026-11-06
+
+- The SQL Agent job BackAisle maintenance checks the database, reorganizes or rebuilds fragmented indexes, and updates statistics that have changed. It does not delete rows. Run `sql/maintenance.sql` again if the 0.5.95 procedure is already installed. The existing schedule stays.
+- Old readings are removed only by the collector. Samples are kept for 90 days and hourly readings for 370 days.
+- The collector and the writer do not need a restart for this change. Restart the collector if it is still running a build older than 0.5.95.
+
 ## [0.5.95] - 2026-11-06
 
 - `sql/maintenance.sql` creates the SQL Agent job BackAisle maintenance. Run it once in the BackAisle database. The job runs at 2:15 AM and deletes old readings, events, cleared alerts, audit rows, notifications, and finished write jobs. It reorganizes indexes and checks the database on Sunday. It does not back up or shrink the database.
