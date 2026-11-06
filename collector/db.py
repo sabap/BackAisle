@@ -38,6 +38,20 @@ def is_sqlsrv() -> bool:
 def adapt_sql(sql: str) -> str:
     if not is_sqlsrv():
         return sql
+    # Rewrite the offset form first. Replacing datetime('now') inside
+    # datetime('now','-90 days') leaves invalid SQL and the purge never runs.
+    sql = re.sub(
+        r"datetime\(\s*'now'\s*,\s*'-\s*(\d+)\s*days?\s*'\)",
+        lambda m: f"DATEADD(day, -{int(m.group(1))}, SYSUTCDATETIME())",
+        sql,
+        flags=re.I,
+    )
+    sql = re.sub(
+        r"datetime\(\s*'now'\s*,\s*'-\s*(\d+)\s*hours?\s*'\)",
+        lambda m: f"DATEADD(hour, -{int(m.group(1))}, SYSUTCDATETIME())",
+        sql,
+        flags=re.I,
+    )
     sql = sql.replace("datetime('now')", "SYSUTCDATETIME()")
     sql = sql.replace("IFNULL(", "ISNULL(")
     sql = sql.replace("INSERT OR IGNORE INTO", "INSERT INTO")

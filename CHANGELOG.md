@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.5.95] - 2026-11-06
+
+- `sql/maintenance.sql` creates the SQL Agent job BackAisle maintenance. Run it once in the BackAisle database. The job runs at 2:15 AM and deletes old readings, events, cleared alerts, audit rows, notifications, and finished write jobs. It reorganizes indexes and checks the database on Sunday. It does not back up or shrink the database.
+- The collector deletes old UPS readings on SQL Server, 4000 rows at a time. A date expression SQL Server rejected had stopped that purge.
+- Restart the collector. The writer does not need a restart.
+
 ## [0.5.94] - 2026-11-05
 
 - Opening an IDF shows the UPS, router, switch, and patch panel readings for that closet. A low runtime, low capacity, dead poll, on-battery state, climate reading, or open alert is colored. The rack drawing stays under that summary.
