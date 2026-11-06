@@ -286,15 +286,27 @@ function ba_device_faces(PDO $db, array $device): array
 function page_templates(PDO $db, array $user): void {
     ba_ensure_template_links($db);
     ba_ensure_template_ports($db);
+    ba_ensure_parts_schema($db);
     $admin = ba_editor($user, 'edit_templates');
     $id = (int)($_GET['id'] ?? 0);
     $action = $_GET['action'] ?? '';
     $msg = '';
+    $act = (string)($_POST['act'] ?? '');
 
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && $admin) {
-        $act = $_POST['act'] ?? '';
         try {
-            if ($act === 'save') {
+            if ($act === 'save_part_tpl') {
+                $pid = ba_parts_save_component($db, $_POST, $_FILES);
+                header('Location: ' . ba_href('/templates?part=' . $pid));
+                exit;
+            }
+            if ($act === 'deactivate_part') {
+                ba_parts_set_component_active($db, (int)($_POST['id'] ?? 0), false);
+                $msg = 'Component deactivated';
+            } elseif ($act === 'activate_part') {
+                ba_parts_set_component_active($db, (int)($_POST['id'] ?? 0), true);
+                $msg = 'Component activated';
+            } elseif ($act === 'save') {
                 $tid = (int)($_POST['id'] ?? 0);
                 $kind = ba_kind_allowed((string)($_POST['kind'] ?? 'other'), 'other');
                 $face = $_POST['face'] ?? 'both';
@@ -355,6 +367,7 @@ function page_templates(PDO $db, array $user): void {
                         if ($rel) $db->prepare("UPDATE device_templates SET $field=? WHERE id=?")->execute([$rel, $tid]);
                     }
                 }
+                ba_parts_save_template_switch($db, $tid, $kind, $_POST);
                 ba_audit($db, $tid ? 'save_template' : 'add_template', 'device_template', (string)$tid);
                 header('Location: ' . ba_href('/templates?id='.$tid));
                 exit;
@@ -379,6 +392,12 @@ function page_templates(PDO $db, array $user): void {
         }
     }
 
+    $partId = (int)($_GET['part'] ?? 0);
+    if ($action === 'part' || $partId > 0 || $act === 'save_part_tpl') {
+        ba_parts_page_component($db, $user, $admin, $msg);
+        return;
+    }
+
     if ($action === 'new' || $id) {
         $tpl = $id ? ba_template($db, $id) : null;
         if ($id && !$tpl) {
@@ -390,10 +409,10 @@ function page_templates(PDO $db, array $user): void {
         if ($msg) echo '<div class="flash">'.h($msg).'</div>';
         echo '<p class="muted"><a href="/templates.php">All templates</a></p>';
         echo '<h1>'.h($tpl ? $tpl['model'] : 'New device template').'</h1>';
-        echo '<p class="muted">Catalog entry for IDF gear. Apply it to a UPS, switch, or patch panel to fill model, U height, ports, credentials, and the model profile. A UPS template also stores the plug type, output outlets, data ports, and environmental ports.</p>';
+        echo '<p class="muted">Catalog entry for IDF gear. Apply it to a UPS, switch, or patch panel to fill model, U height, ports, credentials, and the model profile. A UPS template also stores the plug type, output outlets, data ports, and environmental ports. A switch template can also draw bays and a kit of components.</p>';
         if ($admin) {
-            echo '<form method="post" enctype="multipart/form-data" class="ucard stack">';
-            echo '<div class="ucard-head"><h3>Template</h3></div><div class="ucard-body">';
+            echo '<form method="post" enctype="multipart/form-data" class="ucard stack template-form">';
+            echo '<div class="ucard-head"><h3>Template</h3></div><div class="ucard-body"><div class="template-fields">';
             echo '<input type="hidden" name="act" value="save">';
             if ($tpl) echo '<input type="hidden" name="id" value="'.(int)$tpl['id'].'">';
             echo '<label>Manufacturer</label><input name="manufacturer" value="'.h($tpl['manufacturer'] ?? '').'" placeholder="CyberPower, Cisco, Panduit">';
@@ -534,6 +553,8 @@ function page_templates(PDO $db, array $user): void {
             if (!empty($tpl['rear_picture'])) {
                 echo '<p><img class="idf-tpl-preview" src="'.h($tpl['rear_picture']).'" alt="rear"> <label><input type="checkbox" name="clear_rear_picture"> clear</label></p>';
             }
+            echo '</div>';
+            ba_render_switch_editor($db, $tpl);
             echo '<button>Save template</button></div></form>';
         } elseif ($tpl && (string)($tpl['kind'] ?? '') === 'ups') {
             $viewOutlets = ba_template_outlets($db, (int)$tpl['id']);
@@ -578,7 +599,7 @@ function page_templates(PDO $db, array $user): void {
     ba_layout_start('Device templates', 'templates');
     if ($msg) echo '<div class="flash">'.h($msg).'</div>';
     echo '<h1>Device templates</h1>';
-    echo '<p class="muted">Reusable models for IDF racks — UPS, switches, and patch panels. Apply a template to fill U height, manufacturer, model, and ports.</p>';
+    echo '<p class="muted">Reusable models for IDF racks. Apply a template to fill U height, manufacturer, model, and ports. Switch components are a separate catalog.</p>';
     ba_card_open('Templates', $admin ? '<a class="btn" href="/templates.php?action=new">New template</a>' : '');
     echo '<table><thead><tr><th>Kind</th><th>Manufacturer</th><th>Model</th><th>U</th><th>Face</th><th>Ports</th><th>Outlets</th><th>VA</th><th></th></tr></thead><tbody>';
     foreach ($rows as $t) {
@@ -608,5 +629,6 @@ function page_templates(PDO $db, array $user): void {
     if (!$rows) echo '<tr><td colspan="9" class="muted">No templates yet.</td></tr>';
     echo '</tbody></table>';
     ba_card_close();
+    ba_render_part_catalog($db, $admin);
     ba_layout_end();
 }
