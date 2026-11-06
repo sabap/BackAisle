@@ -695,8 +695,7 @@ def _run_notify_sweep(force: bool = False) -> None:
 def _housekeep(con, secrets, mail: bool = True) -> None:
     if is_sqlsrv():
         # 4000 stays under SQL Server lock escalation. A full delete of a
-        # backlog would block polls. The nightly job in sql/maintenance.sql
-        # clears the same 90 days in batches.
+        # backlog would block polls. Retention lives here, not in the SQL job.
         con.execute(
             "DELETE TOP (4000) FROM samples WHERE ts < CONVERT(varchar(19), DATEADD(day, -90, SYSUTCDATETIME()), 120)"
         )
