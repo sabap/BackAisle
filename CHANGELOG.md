@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.99] - 2026-11-09
+
+- Saving a component, removing one, or installing a template part builds a front photo of that switch from the empty chassis and the installed part pictures. Update Device Image builds the same photo.
+- The template picture stays as it is. The chassis editor keeps the empty chassis. The device page front and the rack front use the new photo. The rear stays the template rear.
+- Plug lists include IEC-60320-C20. A posted L620 is still stored as L6-20.
+- The collector and the writer do not need a restart.
+
 ## [0.5.98] - 2026-11-06
 
 - A switch template stores an empty-chassis picture, bay boxes, and a kit of components. The device page draws those bays. Click a bay for the serial number, warranty, weight, ports, and plug or link text.

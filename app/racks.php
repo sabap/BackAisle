@@ -19,6 +19,9 @@ function ba_racks_in_group(PDO $db, int $groupId): array {
 }
 
 function ba_rack_devices(PDO $db, int $rackId): array {
+    if (function_exists('ba_ensure_parts_schema')) {
+        ba_ensure_parts_schema($db);
+    }
     $st = $db->prepare(
         'SELECT d.*, p.comm_state, s.temp_f, s.on_battery, s.output_status, s.capacity_pct,
                 t.front_picture AS tpl_front, t.rear_picture AS tpl_rear
@@ -56,6 +59,12 @@ function ba_device_on_face(array $d, string $face): bool {
 function ba_rack_face_picture(array $d, string $face): string {
     $front = ba_tpl_public_picture(ba_col($d, 'tpl_front', ba_col($d, 'front_picture', '')));
     $rear = ba_tpl_public_picture(ba_col($d, 'tpl_rear', ba_col($d, 'rear_picture', '')));
+    if (function_exists('ba_device_picture_src')) {
+        $own = ba_device_picture_src($d);
+        if ($own !== '') {
+            $front = $own;
+        }
+    }
     if ($face === 'rear') {
         return $rear !== '' ? $rear : $front;
     }
@@ -1471,6 +1480,9 @@ function page_rack(PDO $db, array $user): void {
                 if (function_exists('ba_ensure_parts_schema')) {
                     ba_ensure_parts_schema($db);
                     ba_pp_exec($db, 'DELETE FROM device_parts WHERE device_id=?', [$did]);
+                }
+                if (function_exists('ba_parts_clear_device_image')) {
+                    ba_parts_clear_device_image($did);
                 }
                 $db->prepare('DELETE FROM devices WHERE id=?')->execute([$did]);
                 ba_audit($db, 'delete_rack_item', 'device', (string)$did);

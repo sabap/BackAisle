@@ -1749,20 +1749,27 @@ function page_device(PDO $db, array $user): void {
         echo '<div class="flash">'.h($savedText).'</div>';
     }
     $notice = (string)($_GET['notice'] ?? '');
+    $imageErr = trim((string)($_GET['image'] ?? ''));
+    $imageOk = $imageErr === '' ? ' The device image was updated.' : '';
     if ($notice === 'part') {
-        echo '<div class="flash ok">Component saved.</div>';
+        echo '<div class="flash ok">Component saved.' . $imageOk . '</div>';
     } elseif ($notice === 'removed') {
-        echo '<div class="flash ok">Component removed.</div>';
+        echo '<div class="flash ok">Component removed.' . $imageOk . '</div>';
+    } elseif ($notice === 'image') {
+        echo '<div class="flash ok">Device image updated.</div>';
     } elseif ($notice === 'chassis') {
         echo '<div class="flash ok">Chassis record saved.</div>';
     } elseif ($notice === 'kit') {
         $filled = (int)($_GET['parts'] ?? 0);
         if ($filled > 0) {
             $word = $filled === 1 ? 'part' : 'parts';
-            echo '<div class="flash ok">Installed '.$filled.' template '.$word.'. Bays that already had a part were left alone.</div>';
+            echo '<div class="flash ok">Installed '.$filled.' template '.$word.'. Bays that already had a part were left alone.' . $imageOk . '</div>';
         } else {
             echo '<div class="flash">No empty bay was filled. The template kit is empty, or every bay already has a part.</div>';
         }
+    }
+    if ($imageErr !== '') {
+        echo '<div class="flash err">' . h($imageErr) . '</div>';
     }
     ?>
     <?php

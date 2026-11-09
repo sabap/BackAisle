@@ -88,7 +88,7 @@ function Test-PreserveRel([string]$rel) {
         'data/', 'logs/', 'storage/backups/', 'storage/tmp/',
         'php.ini', 'config/config.php', 'config/collector.json', 'config/cacert.pem',
         'config/ldap-ca.pem', 'config/ldap-trust.pem', 'config/ldap.conf',
-        'public/assets/tpl/', 'public/web.config'
+        'public/assets/tpl/', 'public/assets/dev/', 'public/web.config'
     )) {
         if ($n -eq $p.TrimEnd('/') -or ($p.EndsWith('/') -and $n.StartsWith($p))) { return $true }
     }
@@ -343,6 +343,21 @@ if (-not $have) {
 if ($have -lt $want) {
     throw "Overlay left VERSION $nowVer (need $MinVersion or newer). jsDelivr served a stale tree. Re-run after the GitHub tag exists on jsDelivr."
 }
+
+$imageDir = Join-Path $SiteRoot 'public\assets\dev'
+if (-not (Test-Path -LiteralPath $imageDir)) {
+    New-Item -ItemType Directory -Path $imageDir -Force | Out-Null
+}
+$aclPref = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+foreach ($imageId in @("IIS APPPOOL\$PoolName", 'NT AUTHORITY\IUSR', 'IIS_IUSRS')) {
+    & icacls.exe $imageDir /grant "${imageId}:(OI)(CI)M" /C /Q | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "icacls $imageId on public\assets\dev exit $LASTEXITCODE"
+    }
+}
+$ErrorActionPreference = $aclPref
+Write-Ok 'Device image folder is writable by the site'
 
 try {
     Import-Module WebAdministration

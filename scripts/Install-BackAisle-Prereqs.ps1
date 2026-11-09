@@ -554,7 +554,7 @@ function Deploy-AppFiles {
         $dest = Join-Path $SiteRoot $_.Name
         Copy-Item -Path $_.FullName -Destination $dest -Recurse -Force
     }
-    foreach ($d in @('data','logs','storage\backups','storage\tmp','config','public\assets\tpl')) {
+    foreach ($d in @('data','logs','storage\backups','storage\tmp','config','public\assets\tpl','public\assets\dev')) {
         New-Item -ItemType Directory -Path (Join-Path $SiteRoot $d) -Force | Out-Null
     }
     New-Item -ItemType Directory -Path 'C:\ProgramData\BackAisle' -Force | Out-Null
@@ -752,7 +752,7 @@ function Install-BackAisleSite([string]$IniPath) {
         Grant-BaAcl -Path $SiteRoot -Identity $id -Rights 'M'
         Grant-BaAcl -Path 'C:\ProgramData\BackAisle' -Identity $id -Rights 'M'
     }
-    foreach ($p in @('data','logs','storage','config','data\sessions')) {
+    foreach ($p in @('data','logs','storage','config','data\sessions','public\assets\dev')) {
         $full = Join-Path $SiteRoot $p
         if (-not (Test-Path $full)) { New-Item -ItemType Directory -Path $full -Force | Out-Null }
         foreach ($id in $identities) { Grant-BaAcl -Path $full -Identity $id -Rights 'M' }

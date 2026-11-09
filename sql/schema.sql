@@ -65,6 +65,9 @@ GO
 IF COL_LENGTH('devices', 'warranty_expires') IS NULL
   ALTER TABLE devices ADD warranty_expires NVARCHAR(32) NULL;
 GO
+IF COL_LENGTH('devices', 'device_picture') IS NULL
+  ALTER TABLE devices ADD device_picture NVARCHAR(255) NULL;
+GO
 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'poll_state')
 CREATE TABLE poll_state (
   device_id INT NOT NULL PRIMARY KEY,

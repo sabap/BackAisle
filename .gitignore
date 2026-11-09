@@ -19,6 +19,7 @@
 /collector/__pycache__/
 *.pyc
 public/assets/tpl/
+public/assets/dev/
 docs/phase0_walk_live.json
 docs/qc-poll.md
 .idea/

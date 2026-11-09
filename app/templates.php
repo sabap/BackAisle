@@ -4,8 +4,8 @@ declare(strict_types=1);
 /** Device templates (ColdAisle-style catalog). BackAisle-only; no ColdAisle files. */
 
 function ba_plug_types(): array {
-    // Last entry is the locking 6-20. "L620" is accepted as the same plug.
-    return ['NEMA 5-15', 'L5-15', '5-20', 'L5-20', '5-30', 'L5-30', '6-15', 'L6-15', '6-20', 'L6-20'];
+    // "L620" is stored as L6-20.
+    return ['NEMA 5-15', 'L5-15', '5-20', 'L5-20', '5-30', 'L5-30', '6-15', 'L6-15', '6-20', 'L6-20', 'IEC-60320-C20'];
 }
 
 function ba_plug_canon(string $plug): string {
@@ -276,8 +276,15 @@ function ba_device_faces(PDO $db, array $device): array
         return $empty;
     }
     $label = trim(trim((string)ba_col($row, 'manufacturer', '')) . ' ' . trim((string)ba_col($row, 'model', '')));
+    $front = ba_tpl_public_picture(ba_col($row, 'front_picture', ''));
+    if (function_exists('ba_device_picture_src')) {
+        $own = ba_device_picture_src($device);
+        if ($own !== '') {
+            $front = $own;
+        }
+    }
     return [
-        'front' => ba_tpl_public_picture(ba_col($row, 'front_picture', '')),
+        'front' => $front,
         'rear' => ba_tpl_public_picture(ba_col($row, 'rear_picture', '')),
         'template' => $label,
     ];

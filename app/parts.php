@@ -161,6 +161,7 @@ function ba_ensure_parts_schema(PDO $db): void
         ba_ensure_column($db, 'devices', 'purchased_from', 'NVARCHAR(128) NULL');
         ba_ensure_column($db, 'devices', 'warranty_vendor', 'NVARCHAR(128) NULL');
         ba_ensure_column($db, 'devices', 'warranty_expires', 'NVARCHAR(32) NULL');
+        ba_ensure_column($db, 'devices', 'device_picture', 'NVARCHAR(255) NULL');
         ba_ensure_column($db, 'device_templates', 'layout_json', 'NVARCHAR(MAX) NULL');
         ba_ensure_column($db, 'device_templates', 'port_type', 'NVARCHAR(64) NULL');
         ba_ensure_column($db, 'device_templates', 'port_speed', 'NVARCHAR(64) NULL');
@@ -234,6 +235,7 @@ function ba_ensure_parts_schema(PDO $db): void
         ba_ensure_column($db, 'devices', 'purchased_from', 'TEXT');
         ba_ensure_column($db, 'devices', 'warranty_vendor', 'TEXT');
         ba_ensure_column($db, 'devices', 'warranty_expires', 'TEXT');
+        ba_ensure_column($db, 'devices', 'device_picture', 'TEXT');
         ba_ensure_column($db, 'device_templates', 'layout_json', 'TEXT');
         ba_ensure_column($db, 'device_templates', 'port_type', 'TEXT');
         ba_ensure_column($db, 'device_templates', 'port_speed', 'TEXT');
@@ -314,6 +316,218 @@ function ba_part_public_picture(mixed $raw): string
         return '';
     }
     return $path;
+}
+
+function ba_device_picture_public(mixed $raw, int $deviceId): string
+{
+    $path = str_replace('\\', '/', trim((string)$raw));
+    if ($deviceId < 1 || $path === '' || str_contains($path, '..') || str_contains($path, "\0")) {
+        return '';
+    }
+    if (preg_match('#^/assets/dev/([0-9]+)/front\.png$#', $path, $m) !== 1) {
+        return '';
+    }
+    if ((int)$m[1] !== $deviceId) {
+        return '';
+    }
+    return $path;
+}
+
+function ba_device_picture_src(array $device): string
+{
+    $id = (int)ba_col($device, 'id', 0);
+    $path = ba_device_picture_public(ba_col($device, 'device_picture', ''), $id);
+    if ($path === '') {
+        return '';
+    }
+    $full = BA_ROOT . '\\public' . str_replace('/', '\\', $path);
+    if (!is_file($full)) {
+        return '';
+    }
+    return $path . '?v=' . (string)filemtime($full);
+}
+
+function ba_parts_clear_device_image(int $deviceId): void
+{
+    if ($deviceId < 1) {
+        return;
+    }
+    $dir = BA_ROOT . '\\public\\assets\\dev\\' . $deviceId;
+    if (!is_dir($dir)) {
+        return;
+    }
+    foreach (glob($dir . '\\front*.png') ?: [] as $file) {
+        if (is_file($file)) {
+            @unlink($file);
+        }
+    }
+    @rmdir($dir);
+}
+
+function ba_parts_asset_file(string $rel): string
+{
+    $rel = str_replace('\\', '/', $rel);
+    if (!str_starts_with($rel, '/assets/') || str_contains($rel, '..')) {
+        throw new RuntimeException('Could not read a picture.');
+    }
+    $root = realpath(BA_ROOT . '\\public\\assets');
+    $full = realpath(BA_ROOT . '\\public' . str_replace('/', '\\', $rel));
+    if ($root === false || $full === false || !is_file($full)) {
+        throw new RuntimeException('Could not read a picture.');
+    }
+    $rootNorm = strtolower(str_replace('/', '\\', $root));
+    $fullNorm = strtolower(str_replace('/', '\\', $full));
+    if (!str_starts_with($fullNorm, $rootNorm . '\\')) {
+        throw new RuntimeException('Could not read a picture.');
+    }
+    return $full;
+}
+
+function ba_parts_image_load(string $path)
+{
+    $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+    $img = false;
+    if ($ext === 'jpg' || $ext === 'jpeg') {
+        $img = @imagecreatefromjpeg($path);
+    } elseif ($ext === 'png') {
+        $img = @imagecreatefrompng($path);
+    } elseif ($ext === 'webp' && function_exists('imagecreatefromwebp')) {
+        $img = @imagecreatefromwebp($path);
+    }
+    if (!$img) {
+        throw new RuntimeException('Could not read a picture.');
+    }
+    return $img;
+}
+
+function ba_parts_image_fit($img, int $maxWidth)
+{
+    $w = imagesx($img);
+    $h = imagesy($img);
+    if ($w < 1 || $h < 1) {
+        throw new RuntimeException('Could not read a picture.');
+    }
+    if ($w <= $maxWidth) {
+        return $img;
+    }
+    $nw = $maxWidth;
+    $nh = max(1, (int)round($h * ($maxWidth / $w)));
+    $scaled = imagecreatetruecolor($nw, $nh);
+    imagealphablending($scaled, false);
+    imagesavealpha($scaled, true);
+    imagecopyresampled($scaled, $img, 0, 0, 0, 0, $nw, $nh, $w, $h);
+    imagedestroy($img);
+    return $scaled;
+}
+
+/** Build this switch photo from the template chassis and installed part pictures. The template file is not written. */
+function ba_parts_compose_device_image(PDO $db, int $deviceId): string
+{
+    ba_ensure_parts_schema($db);
+    if (!function_exists('imagecreatetruecolor')) {
+        throw new RuntimeException('PHP GD is required to build the device image.');
+    }
+    $device = ba_parts_row($db, 'SELECT * FROM devices WHERE id=?', [$deviceId]);
+    if (!$device) {
+        throw new RuntimeException('Device not found');
+    }
+    ba_parts_require_switch($device);
+    $template = ba_parts_switch_template($db, $device);
+    $rel = ba_tpl_public_picture($template['front_picture'] ?? '');
+    if ($rel === '') {
+        throw new RuntimeException('Add a front picture on the switch template first.');
+    }
+    $templateFile = ba_parts_asset_file($rel);
+    $templateStamp = filemtime($templateFile) . ':' . filesize($templateFile);
+    $canvas = ba_parts_image_fit(ba_parts_image_load($templateFile), 1600);
+    imagealphablending($canvas, true);
+    $dw = imagesx($canvas);
+    $dh = imagesy($canvas);
+    $byKey = [];
+    foreach (ba_device_part_rows($db, $deviceId) as $part) {
+        $byKey[(string)$part['slot_key']] = $part;
+    }
+    foreach (ba_parts_layout_of($template) as $slot) {
+        $part = $byKey[$slot['key']] ?? null;
+        if (!$part) {
+            continue;
+        }
+        $pic = ba_part_public_picture($part['tpl_picture'] ?? '');
+        if ($pic === '') {
+            continue;
+        }
+        $x = (int)round($dw * ((float)$slot['x'] / 100));
+        $y = (int)round($dh * ((float)$slot['y'] / 100));
+        $w = (int)round($dw * ((float)$slot['w'] / 100));
+        $h = (int)round($dh * ((float)$slot['h'] / 100));
+        if ($x < 0) {
+            $x = 0;
+        }
+        if ($y < 0) {
+            $y = 0;
+        }
+        if ($x >= $dw || $y >= $dh) {
+            continue;
+        }
+        if ($x + $w > $dw) {
+            $w = $dw - $x;
+        }
+        if ($y + $h > $dh) {
+            $h = $dh - $y;
+        }
+        if ($w < 1 || $h < 1) {
+            continue;
+        }
+        $partImg = ba_parts_image_load(ba_parts_asset_file($pic));
+        $sw = imagesx($partImg);
+        $sh = imagesy($partImg);
+        if ($sw < 1 || $sh < 1) {
+            imagedestroy($partImg);
+            continue;
+        }
+        $scale = max($w / $sw, $h / $sh);
+        $cropW = max(1, (int)round($w / $scale));
+        $cropH = max(1, (int)round($h / $scale));
+        if ($cropW > $sw) {
+            $cropW = $sw;
+        }
+        if ($cropH > $sh) {
+            $cropH = $sh;
+        }
+        $sx = (int)max(0, ($sw - $cropW) / 2);
+        $sy = (int)max(0, ($sh - $cropH) / 2);
+        imagecopyresampled($canvas, $partImg, $x, $y, $sx, $sy, $w, $h, $cropW, $cropH);
+        imagedestroy($partImg);
+    }
+    $dir = BA_ROOT . '\\public\\assets\\dev\\' . $deviceId;
+    if (!is_dir($dir) && !mkdir($dir, 0770, true) && !is_dir($dir)) {
+        imagedestroy($canvas);
+        throw new RuntimeException('Could not create the device image folder.');
+    }
+    $dest = $dir . '\\front.png';
+    $tmp = $dir . '\\front.tmp.png';
+    $wrote = imagepng($canvas, $tmp, 6);
+    imagedestroy($canvas);
+    if (!$wrote || !is_file($tmp)) {
+        @unlink($tmp);
+        throw new RuntimeException('Could not write the device image.');
+    }
+    if (is_file($dest)) {
+        @unlink($dest);
+    }
+    if (!rename($tmp, $dest)) {
+        @unlink($tmp);
+        throw new RuntimeException('Could not replace the device image.');
+    }
+    $after = filemtime($templateFile) . ':' . filesize($templateFile);
+    if ($after !== $templateStamp) {
+        @unlink($dest);
+        throw new RuntimeException('The template picture was not left as it was.');
+    }
+    $public = '/assets/dev/' . $deviceId . '/front.png';
+    ba_pp_exec($db, 'UPDATE devices SET device_picture=? WHERE id=?', [$public, $deviceId]);
+    ba_audit($db, 'device_image', 'device', (string)$deviceId);
+    return $public;
 }
 
 function ba_part_picture_dir(int $id): string
@@ -751,7 +965,7 @@ function ba_parts_layout_of(?array $template): array
 
 function ba_parts_device_act(string $act): bool
 {
-    return in_array($act, ['save_part', 'delete_part', 'install_kit', 'save_chassis'], true);
+    return in_array($act, ['save_part', 'delete_part', 'install_kit', 'save_chassis', 'refresh_image'], true);
 }
 
 function ba_parts_require_switch(array $device): void
@@ -971,22 +1185,28 @@ function ba_parts_handle_device(PDO $db, int $deviceId, array $device): void
     try {
         if ($act === 'save_part') {
             $key = ba_parts_save_device_part($db, $deviceId, $device, $_POST);
-            header('Location: ' . ba_href('/device?id=' . $deviceId . '&notice=part&bay=' . rawurlencode($key)));
+            header('Location: ' . ba_href('/device?id=' . $deviceId . '&notice=part&bay=' . rawurlencode($key) . ba_parts_image_query($db, $deviceId)));
             return;
         }
         if ($act === 'delete_part') {
             ba_parts_delete_device_part($db, $deviceId, $device, $_POST);
-            header('Location: ' . ba_href('/device?id=' . $deviceId . '&notice=removed'));
+            header('Location: ' . ba_href('/device?id=' . $deviceId . '&notice=removed' . ba_parts_image_query($db, $deviceId)));
             return;
         }
         if ($act === 'install_kit') {
             $n = ba_parts_install_kit($db, $deviceId, $device);
-            header('Location: ' . ba_href('/device?id=' . $deviceId . '&notice=kit&parts=' . $n));
+            $image = $n > 0 ? ba_parts_image_query($db, $deviceId) : '';
+            header('Location: ' . ba_href('/device?id=' . $deviceId . '&notice=kit&parts=' . $n . $image));
             return;
         }
         if ($act === 'save_chassis') {
             ba_parts_save_chassis($db, $deviceId, $device, $_POST);
             header('Location: ' . ba_href('/device?id=' . $deviceId . '&notice=chassis'));
+            return;
+        }
+        if ($act === 'refresh_image') {
+            ba_parts_compose_device_image($db, $deviceId);
+            header('Location: ' . ba_href('/device?id=' . $deviceId . '&notice=image'));
             return;
         }
     } catch (RuntimeException $e) {
@@ -999,6 +1219,16 @@ function ba_parts_handle_device(PDO $db, int $deviceId, array $device): void
         return;
     }
     header('Location: ' . ba_href('/device?id=' . $deviceId));
+}
+
+function ba_parts_image_query(PDO $db, int $deviceId): string
+{
+    try {
+        ba_parts_compose_device_image($db, $deviceId);
+        return '';
+    } catch (RuntimeException $e) {
+        return '&image=' . rawurlencode($e->getMessage());
+    }
 }
 
 function ba_parts_datalists(): void
@@ -1287,17 +1517,20 @@ function ba_render_switch_chassis(PDO $db, array $user, array $device, bool $can
         $kitCount = count(ba_parts_kit($db, (int)$template['id']));
     }
     $front = ba_tpl_public_picture($template['front_picture'] ?? '');
-    $actions = '';
-    if ($canEdit && $kitCount > 0) {
-        $actions = '<form method="post" class="inline"><button name="act" value="install_kit">Install template parts</button></form>';
-    }
     echo '<section class="ucard chassis-card">';
     echo '<div class="ucard-head"><h3>Chassis</h3>';
-    if ($actions !== '') {
-        echo '<div class="head-actions">' . $actions . '</div>';
+    if ($canEdit && ($front !== '' || $kitCount > 0)) {
+        echo '<div class="head-actions">';
+        if ($front !== '') {
+            echo '<form method="post" class="inline"><button name="act" value="refresh_image">Update Device Image</button></form>';
+        }
+        if ($kitCount > 0) {
+            echo '<form method="post" class="inline"><button name="act" value="install_kit">Install template parts</button></form>';
+        }
+        echo '</div>';
     }
     echo '</div><div class="ucard-body">';
-    echo '<p class="chassis-note">Click a bay to open that component. Install template parts fills empty bays from this model and leaves serials already saved. Saved values stay until you edit them.</p>';
+    echo '<p class="chassis-note">Click a bay to open that component. Saving a component builds this switch image from the empty chassis and the part pictures. The template picture stays as it is. Install template parts fills empty bays and leaves serials already saved.</p>';
     echo '<dl class="dev-facts">';
     echo '<div><dt>Rack height</dt><dd>' . (int)ba_col($device, 'u_height', 1) . ' U</dd></div>';
     if ($report['shell'] === null) {
