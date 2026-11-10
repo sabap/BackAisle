@@ -1390,7 +1390,7 @@ function ba_render_part_spec_fields(string $kind, array $values): void
 
 function ba_render_part_modal(string $key, string $title, string $kind, ?array $part, array $catalog, bool $canEdit, bool $open, bool $orphan): void
 {
-    ba_users_modal_open('modal-bay-' . $key, $title, $open);
+    ba_users_modal_open('modal-bay-' . $key, $title, $open, '', false, 'chassis-modal');
     if ($orphan) {
         echo '<p class="muted">This bay was removed from the template. The saved component is still on the switch.</p>';
     }
@@ -1563,22 +1563,27 @@ function ba_render_switch_chassis(PDO $db, array $user, array $device, bool $can
         echo '<p class="muted">' . (int)$report['missing'] . ' ' . $noun . ' no weight, so those parts are left out of the total.</p>';
     }
     if (!$template) {
-        echo '<p class="muted">Assign a switch template to draw the chassis.</p>';
+        echo '<p class="muted chassis-status">Assign a switch template to draw the chassis.</p>';
     } elseif ($layout === []) {
-        echo '<p class="muted">This switch template has no bays yet. Open the template, add a front picture, and draw the bays.</p>';
+        echo '<p class="muted chassis-status">This switch template has no bays yet. Open the template, add a front picture, and draw the bays.</p>';
     } elseif ($front === '') {
-        echo '<p class="muted">This template has bays but no front picture, so they are listed instead of drawn on the chassis.</p>';
-        echo '<div class="chassis-list">';
+        echo '<p class="muted chassis-status">This template has bays but no front picture, so they are listed instead of drawn on the chassis.</p>';
+        echo '<div class="chassis-list chassis-draw">';
         foreach ($layout as $slot) {
             ba_render_bay_button($slot, $byKey[$slot['key']] ?? null, false);
         }
         echo '</div>';
     } else {
-        echo '<div class="chassis-stage"><img class="chassis-photo" src="' . h($front) . '" alt="" draggable="false"><div class="chassis-slots">';
+        echo '<div class="chassis-stage chassis-draw"><img class="chassis-photo" src="' . h($front) . '" alt="" draggable="false"><div class="chassis-slots">';
         foreach ($layout as $slot) {
             ba_render_bay_button($slot, $byKey[$slot['key']] ?? null, true);
         }
         echo '</div></div>';
+        echo '<h4 class="chassis-extra chassis-roster-head">Bays</h4><div class="chassis-roster">';
+        foreach ($layout as $slot) {
+            ba_render_bay_button($slot, $byKey[$slot['key']] ?? null, false);
+        }
+        echo '</div>';
     }
     $openBay = (string)($_GET['bay'] ?? '');
     $notice = (string)($_GET['notice'] ?? '');

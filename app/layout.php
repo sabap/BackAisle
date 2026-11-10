@@ -27,7 +27,7 @@ function ba_layout_start(string $title, string $nav = 'fleet'): void {
   <link rel="icon" href="/assets/logo.svg?v=aisle1" type="image/svg+xml">
   <link rel="icon" href="/assets/favicon-32.png?v=aisle1" type="image/png" sizes="32x32">
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=aisle1">
-  <link rel="stylesheet" href="/assets/app.css?v=layout17">
+  <link rel="stylesheet" href="/assets/app.css?v=layout18">
 </head>
 <body<?= ba_tech_mode() ? ' class="tech"' : '' ?>>
 <header class="top">
@@ -93,10 +93,11 @@ function ba_card_close(): void
     echo '</div></section>';
 }
 
-function ba_users_modal_open(string $id, string $title, bool $open, string $closeHref = '', bool $wide = false): void
+function ba_users_modal_open(string $id, string $title, bool $open, string $closeHref = '', bool $wide = false, string $extraClass = ''): void
 {
     $titleId = $id . '-title';
-    echo '<div id="' . h($id) . '" class="ldaps-modal"' . ($open ? '' : ' hidden') . ' aria-hidden="' . ($open ? 'false' : 'true') . '"';
+    $class = 'ldaps-modal' . ($extraClass !== '' ? ' ' . $extraClass : '');
+    echo '<div id="' . h($id) . '" class="' . h($class) . '"' . ($open ? '' : ' hidden') . ' aria-hidden="' . ($open ? 'false' : 'true') . '"';
     if ($closeHref !== '') {
         echo ' data-close-href="' . h($closeHref) . '"';
     }

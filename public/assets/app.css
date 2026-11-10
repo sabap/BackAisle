@@ -1224,3 +1224,95 @@ form.chassis-form.stack > button { grid-column: 1 / -1; justify-self: start; mar
   .slot-editor { grid-template-columns: 1fr; }
   .chassis-read { grid-template-columns: 1fr; }
 }
+.chassis-roster, .chassis-roster-head { display: none; }
+body.tech main:has(.chassis-card) .dev-stage {
+  grid-template-columns: 148px minmax(0, 1fr);
+}
+body.tech main:has(.chassis-card) .dev-faces {
+  grid-template-columns: 1fr;
+  padding: .65rem .45rem .65rem .85rem;
+}
+body.tech main:has(.chassis-card) .dev-face:nth-child(2),
+body.tech main:has(.chassis-card) .dev-tpl,
+body.tech main:has(.chassis-card) .dev-meters,
+body.tech main:has(.chassis-card) .dev-stage .dev-facts { display: none; }
+body.tech main:has(.chassis-card) .dev-shot { height: 88px; }
+body.tech main:has(.chassis-card) .dev-summary { padding: .7rem .85rem .7rem .15rem; }
+body.tech main:has(.chassis-card) .dev-summary h1 { font-size: 1.35rem; margin-bottom: .15rem; }
+body.tech main:has(.chassis-card) .dev-where { margin-bottom: 0; }
+body.tech .chassis-card .ucard-body { display: flex; flex-direction: column; }
+body.tech .chassis-roster-head { display: block; order: 1; margin: 0 0 .35rem; }
+body.tech .chassis-roster { display: flex; flex-direction: column; gap: .4rem; order: 2; margin: 0 0 .85rem; }
+body.tech .chassis-draw { order: 3; }
+body.tech .chassis-note { order: 4; }
+body.tech .chassis-card .ucard-body > .muted { order: 5; }
+body.tech .chassis-card .ucard-body > .chassis-status { order: 0; margin-top: 0; }
+body.tech .chassis-card .dev-facts,
+body.tech .chassis-card .chassis-extra:not(.chassis-roster-head),
+body.tech .chassis-card .chassis-list:not(.chassis-draw),
+body.tech .chassis-card .chassis-form { order: 6; }
+body.tech .chassis-card .ucard-head .head-actions {
+  flex: 1 1 100%;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: .45rem;
+}
+body.tech .chassis-card .head-actions button {
+  width: 100%;
+  min-height: 48px;
+  white-space: normal;
+  font-size: 1.02rem;
+}
+body.tech .chassis-list .chassis-slot,
+body.tech .chassis-roster .chassis-slot {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 52px;
+  padding: .4rem .75rem;
+}
+body.tech .chassis-list { flex-direction: column; }
+body.tech .chassis-list .chassis-slot img,
+body.tech .chassis-roster .chassis-slot img { display: none; }
+body.tech .chassis-list .chassis-cap,
+body.tech .chassis-roster .chassis-cap {
+  position: static;
+  flex-direction: row;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: .75rem;
+  width: 100%;
+  padding: 0;
+  background: none;
+}
+body.tech .chassis-list .chassis-cap b,
+body.tech .chassis-list .chassis-cap small,
+body.tech .chassis-roster .chassis-cap b,
+body.tech .chassis-roster .chassis-cap small { font-size: 1rem; }
+body.tech .chassis-modal {
+  align-items: flex-end;
+  justify-content: center;
+  padding: 0;
+}
+body.tech .chassis-modal .ldaps-modal-panel {
+  width: min(42rem, 100%);
+  max-height: 92vh;
+  border-radius: 14px 14px 0 0;
+}
+body.tech .chassis-modal .ldaps-modal-head .btn { min-height: 44px; }
+body.tech .chassis-modal form.stack {
+  display: grid;
+  grid-template-columns: minmax(7.5rem, 11rem) minmax(0, 1fr);
+  gap: .55rem .75rem;
+  align-items: center;
+}
+body.tech .chassis-modal form.stack label { margin: 0; }
+body.tech .chassis-modal form.stack input[type=hidden] { display: none; }
+body.tech .chassis-modal form.stack label:has(+ textarea),
+body.tech .chassis-modal form.stack textarea,
+body.tech .chassis-modal form.stack p,
+body.tech .chassis-modal form.stack button { grid-column: 1 / -1; }
+body.tech .chassis-modal .chassis-remove button { min-height: 44px; }
+@media (max-width: 560px) {
+  body.tech .chassis-modal form.stack { grid-template-columns: 1fr; }
+}

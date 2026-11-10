@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.101] - 2026-11-09
+
+- Tech Mode on a chassis device keeps a short front thumbnail, the name, and the location. The rear picture, meters, and identity facts stay on the desktop page.
+- The chassis card leads with a full-width bay list. Each row is at least 52px tall. When the template has a front picture, the drawing follows that list.
+- Update Device Image and Install template parts are full-width buttons. The component dialog opens from the bottom, with the label beside the field.
+- Signed-in pages use app.css?v=layout18. Login stays layout6.
+- The collector and the writer do not need a restart.
+
 ## [0.5.100] - 2026-11-09
 
 - A new install and an overlay enable the PHP extensions the current site uses, including GD, when those DLLs are on disk. SQL Server drivers and com_dotnet are enabled only when their DLLs are present.
