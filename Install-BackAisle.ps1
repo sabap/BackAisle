@@ -58,7 +58,7 @@ param(
     [int]$HttpsPort = 443,
     [string]$SiteName = 'Default Web Site',
     [switch]$SkipHttps,
-    [string]$PhpVersion = '8.3.33',
+    [string]$PhpVersion = '8.3.36',
     [string]$PhpInstallPath = 'C:\PHP',
     [string]$GitHubOwner = 'sabap',
     [string]$GitHubRepo = 'BackAisle',

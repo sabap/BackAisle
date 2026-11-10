@@ -7,7 +7,7 @@ echo 'sapi=' . PHP_SAPI . "\n";
 echo 'ini=' . (string)php_ini_loaded_file() . "\n";
 $drivers = class_exists('PDO') ? PDO::getAvailableDrivers() : [];
 echo 'pdo=' . implode(',', $drivers) . "\n";
-foreach (['curl', 'mbstring', 'openssl', 'ldap', 'zip', 'pdo_sqlite', 'sqlite3'] as $ext) {
+foreach (['curl', 'mbstring', 'openssl', 'ldap', 'zip', 'gd', 'pdo_sqlite', 'sqlite3'] as $ext) {
     echo $ext . '=' . (extension_loaded($ext) ? 'yes' : 'NO') . "\n";
 }
 echo 'root_writable=' . (is_writable(dirname(__DIR__)) ? 'yes' : 'NO') . "\n";

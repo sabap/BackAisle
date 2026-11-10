@@ -2,7 +2,8 @@
 <#
 .SYNOPSIS
     Overlay the latest BackAisle application files onto an existing install.
-    Does not wipe IIS, SQL, SQLite, secrets, or php.ini.
+    Does not wipe IIS, SQL, SQLite, or secrets. Keeps php.ini and enables the
+    extensions the current site needs, including GD, when those DLLs are present.
 #>
 [CmdletBinding()]
 param(
@@ -20,6 +21,93 @@ $ProgressPreference = 'SilentlyContinue'
 function Write-Step([string]$m) { Write-Host "`n==> $m" -ForegroundColor Cyan }
 function Write-Ok([string]$m) { Write-Host "    [OK] $m" -ForegroundColor Green }
 function Write-Warn([string]$m) { Write-Host "    [WARN] $m" -ForegroundColor Yellow }
+
+function Enable-BaIniExtension {
+    param([string]$Text, [string]$Name)
+    $active = '(?m)^[ \t]*extension[ \t]*=[ \t]*"?' + [regex]::Escape($Name) + '"?[ \t]*\r?$'
+    if ($Text -match $active) { return $Text }
+    $legacy = '(?m)^[ \t]*extension[ \t]*=[ \t]*"?php_' + [regex]::Escape($Name) + '(?:\.dll)?"?[ \t]*\r?$'
+    if ($Text -match $legacy) {
+        return [regex]::Replace($Text, $legacy, "extension=$Name", 1)
+    }
+    foreach ($n in @($Name, "php_$Name.dll", "php_$Name")) {
+        $pattern = '(?m)^[ \t]*;[ \t]*extension[ \t]*=[ \t]*"?' + [regex]::Escape($n) + '"?[ \t]*\r?$'
+        if ($Text -match $pattern) {
+            return [regex]::Replace($Text, $pattern, "extension=$Name", 1)
+        }
+    }
+    return $Text.TrimEnd() + "`r`nextension=$Name`r`n"
+}
+
+function Get-BaExtensionDir {
+    param([string]$IniText)
+    $extDir = $null
+    foreach ($line in ($IniText -split "`n")) {
+        $trim = $line.Trim().TrimEnd("`r")
+        if ($trim.StartsWith(';')) { continue }
+        if ($trim -match '^[ \t]*extension_dir[ \t]*=[ \t]*"([^"]+)"') {
+            $extDir = $Matches[1].Trim()
+        } elseif ($trim -match '^[ \t]*extension_dir[ \t]*=[ \t]*([^"#\s]+)') {
+            $extDir = $Matches[1].Trim()
+        }
+    }
+    if (-not $extDir) { return 'C:\PHP\ext' }
+    if (-not [IO.Path]::IsPathRooted($extDir)) { return (Join-Path 'C:\PHP' $extDir) }
+    return $extDir
+}
+
+function Update-BaPhpExtensions {
+    param([string]$IniPath)
+    if (-not (Test-Path -LiteralPath $IniPath)) {
+        Write-Warn "No site php.ini at $IniPath. Extensions were not changed."
+        return
+    }
+    $original = [IO.File]::ReadAllText($IniPath)
+    $extDir = Get-BaExtensionDir $original
+    $required = @('curl','mbstring','openssl','fileinfo','ldap','pdo_sqlite','sqlite3','pdo_odbc','zip','gd')
+    $optional = @('pdo_sqlsrv','sqlsrv','com_dotnet')
+    $updated = $original
+    $enabled = @()
+    foreach ($ext in @($required + $optional)) {
+        $dll = Join-Path $extDir ("php_{0}.dll" -f $ext)
+        if (-not (Test-Path -LiteralPath $dll)) {
+            if ($required -contains $ext) {
+                Write-Warn "php_$ext.dll not found under $extDir"
+            }
+            continue
+        }
+        $next = Enable-BaIniExtension $updated $ext
+        if ($next -ne $updated) { $enabled += $ext }
+        $updated = $next
+    }
+    if ($updated -eq $original) {
+        Write-Ok "PHP extensions already match the current site ($IniPath)"
+        return
+    }
+    $bak = $IniPath + '.bak-extensions'
+    if (-not (Test-Path -LiteralPath $bak)) {
+        Copy-Item -LiteralPath $IniPath -Destination $bak
+    }
+    [IO.File]::WriteAllText($IniPath, $updated)
+    $phpDir = Split-Path -Parent $extDir
+    $php = Join-Path $phpDir 'php.exe'
+    if (-not (Test-Path -LiteralPath $php)) {
+        Write-Warn "Enabled $($enabled -join ', ') in $IniPath. php.exe was not found to verify GD."
+        return
+    }
+    $pref = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $out = & $php -c $IniPath -r "echo function_exists('imagecreatetruecolor') ? 'GD-OK' : 'GD-MISSING';" 2>&1
+    $code = $LASTEXITCODE
+    $ErrorActionPreference = $pref
+    $text = @($(foreach ($item in @($out)) { [string]$item })) -join "`n"
+    if ($code -eq 0 -and $text.Contains('GD-OK') -and -not $text.Contains('GD-MISSING')) {
+        Write-Ok "Enabled $($enabled -join ', ') in $IniPath"
+        return
+    }
+    [IO.File]::WriteAllText($IniPath, $original)
+    Write-Warn "PHP did not load GD from $IniPath. The previous ini was restored."
+}
 
 function Get-BaSemver([string]$s) {
     if (-not $s) { return $null }
@@ -344,20 +432,27 @@ if ($have -lt $want) {
     throw "Overlay left VERSION $nowVer (need $MinVersion or newer). jsDelivr served a stale tree. Re-run after the GitHub tag exists on jsDelivr."
 }
 
-$imageDir = Join-Path $SiteRoot 'public\assets\dev'
-if (-not (Test-Path -LiteralPath $imageDir)) {
-    New-Item -ItemType Directory -Path $imageDir -Force | Out-Null
+try {
+    Update-BaPhpExtensions -IniPath (Join-Path $SiteRoot 'php.ini')
+} catch {
+    Write-Warn "PHP extensions were not updated: $($_.Exception.Message)"
 }
 $aclPref = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
-foreach ($imageId in @("IIS APPPOOL\$PoolName", 'NT AUTHORITY\IUSR', 'IIS_IUSRS')) {
-    & icacls.exe $imageDir /grant "${imageId}:(OI)(CI)M" /C /Q | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warn "icacls $imageId on public\assets\dev exit $LASTEXITCODE"
+foreach ($relDir in @('public\assets\tpl', 'public\assets\dev')) {
+    $assetDir = Join-Path $SiteRoot $relDir
+    if (-not (Test-Path -LiteralPath $assetDir)) {
+        New-Item -ItemType Directory -Path $assetDir -Force | Out-Null
+    }
+    foreach ($imageId in @("IIS APPPOOL\$PoolName", 'NT AUTHORITY\IUSR', 'IIS_IUSRS')) {
+        & icacls.exe $assetDir /grant "${imageId}:(OI)(CI)M" /T /C /Q | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warn "icacls $imageId on $relDir exit $LASTEXITCODE"
+        }
     }
 }
 $ErrorActionPreference = $aclPref
-Write-Ok 'Device image folder is writable by the site'
+Write-Ok 'Template and device image folders are writable by the site'
 
 try {
     Import-Module WebAdministration

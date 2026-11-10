@@ -20,7 +20,7 @@
     Does NOT install SQL Server. Use setup.php to connect SQLite or an existing SQL instance.
 
 .PARAMETER PhpVersion
-    PHP NTS build on windows.php.net. Default 8.3.33 (falls back to the 8.3 latest zip / archives)
+    PHP NTS build on windows.php.net. Default 8.3.36 (falls back to the 8.3 latest zip / archives)
 
 .PARAMETER PhpInstallPath
     Shared PHP binaries. Default C:\PHP
@@ -41,7 +41,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$PhpVersion = '8.3.33',
+    [string]$PhpVersion = '8.3.36',
     [string]$PhpInstallPath = 'C:\PHP',
     [string]$SiteRoot = 'C:\inetpub\BackAisle',
     [int]$HttpPort = 80,
@@ -170,8 +170,16 @@ function Download-File {
 function Set-IniValue {
     param([string]$Content, [string]$Name, [string]$Value, [switch]$IsExtension)
     if ($IsExtension) {
+        # An active line must win. Uncommenting a template line above it leaves two
+        # extension= lines, and IIS FastCGI turns that stderr into HTTP 500.
+        $active = '(?m)^[ \t]*extension[ \t]*=[ \t]*"?' + [regex]::Escape($Name) + '"?[ \t]*\r?$'
+        if ($Content -match $active) { return $Content }
+        $legacy = '(?m)^[ \t]*extension[ \t]*=[ \t]*"?php_' + [regex]::Escape($Name) + '(?:\.dll)?"?[ \t]*\r?$'
+        if ($Content -match $legacy) {
+            return [regex]::Replace($Content, $legacy, "extension=$Name", 1)
+        }
         foreach ($n in @($Name, "php_$Name.dll", "php_$Name")) {
-            $pattern = "(?m)^\s*;?\s*extension\s*=\s*(`"?)$([regex]::Escape($n))(`"?)\s*$"
+            $pattern = '(?m)^[ \t]*;[ \t]*extension[ \t]*=[ \t]*"?' + [regex]::Escape($n) + '"?[ \t]*\r?$'
             if ($Content -match $pattern) {
                 return [regex]::Replace($Content, $pattern, "extension=$Name", 1)
             }
@@ -236,7 +244,7 @@ function Install-VcRedist {
 
 function Get-PhpZipUrls([string]$Version) {
     $v = $Version.Trim()
-    if ($v -notmatch '^(\d+)\.(\d+)') { $v = '8.3.33'; $majmin = '8.3' }
+    if ($v -notmatch '^(\d+)\.(\d+)') { $v = '8.3.36'; $majmin = '8.3' }
     else { $majmin = "$($Matches[1]).$($Matches[2])" }
     $vs = 'vs16'
     try { if ([version]$majmin -ge [version]'8.4') { $vs = 'vs17' } } catch { }
@@ -306,6 +314,23 @@ function Install-Php {
     if (-not (Test-Path $phpCgi)) { throw "php-cgi.exe missing under $PhpInstallPath" }
 }
 
+function Enable-BaPhpExtensions {
+    param([string]$Content, [string]$ExtDir)
+    $required = @('curl','mbstring','openssl','fileinfo','ldap','pdo_sqlite','sqlite3','pdo_odbc','zip','gd')
+    $optional = @('pdo_sqlsrv','sqlsrv','com_dotnet')
+    foreach ($ext in @($required + $optional)) {
+        $dll = Join-Path $ExtDir ("php_{0}.dll" -f $ext)
+        if (-not (Test-Path -LiteralPath $dll)) {
+            if ($required -contains $ext) {
+                Write-Warn "php_$ext.dll not found under $ExtDir"
+            }
+            continue
+        }
+        $Content = Set-IniValue $Content $ext -IsExtension
+    }
+    return $Content
+}
+
 function Write-SitePhpIni {
     Write-Step 'Site-local php.ini for BackAisle (does not change global php.ini)'
     $prod = Join-Path $PhpInstallPath 'php.ini-production'
@@ -330,13 +355,6 @@ function Write-SitePhpIni {
         $c = Set-IniValue $c 'max_execution_time' '180'
         $c = Set-IniValue $c 'session.save_path' "`"$sess`""
         $c = Set-IniValue $c 'sys_temp_dir' "`"$sess`""
-        foreach ($ext in @('curl','mbstring','openssl','fileinfo','ldap','pdo_sqlite','sqlite3','pdo_odbc','zip')) {
-            $c = Set-IniValue $c $ext -IsExtension
-        }
-        foreach ($ext in @('pdo_sqlsrv','sqlsrv','com_dotnet')) {
-            $dll = Join-Path $PhpInstallPath "ext\php_$ext.dll"
-            if (Test-Path $dll) { $c = Set-IniValue $c $ext -IsExtension }
-        }
         Set-Content -Path $ini -Value $c -Encoding ASCII
         Write-Ok "Wrote $ini"
     } else {
@@ -345,6 +363,7 @@ function Write-SitePhpIni {
     $marker = '; BackAisle site overrides'
     $cur = Get-Content -Path $ini -Raw
     $cur = [regex]::Replace($cur, '(?s)\r?\n; BackAisle site overrides.*\z', '')
+    $cur = Enable-BaPhpExtensions $cur (Join-Path $PhpInstallPath 'ext')
     $block = @"
 
 $marker (last value wins; do not repeat extension= -- IIS FastCGI returns 500 on stderr)
@@ -752,7 +771,7 @@ function Install-BackAisleSite([string]$IniPath) {
         Grant-BaAcl -Path $SiteRoot -Identity $id -Rights 'M'
         Grant-BaAcl -Path 'C:\ProgramData\BackAisle' -Identity $id -Rights 'M'
     }
-    foreach ($p in @('data','logs','storage','config','data\sessions','public\assets\dev')) {
+    foreach ($p in @('data','logs','storage','config','data\sessions','public\assets\tpl','public\assets\dev')) {
         $full = Join-Path $SiteRoot $p
         if (-not (Test-Path $full)) { New-Item -ItemType Directory -Path $full -Force | Out-Null }
         foreach ($id in $identities) { Grant-BaAcl -Path $full -Identity $id -Rights 'M' }

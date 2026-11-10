@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.100] - 2026-11-09
+
+- A new install and an overlay enable the PHP extensions the current site uses, including GD, when those DLLs are on disk. SQL Server drivers and com_dotnet are enabled only when their DLLs are present.
+- A machine with no PHP downloads 8.3.36. An existing C:\PHP is left in place.
+- Template pictures and device photos are stored in folders the site can write, including files already there.
+- The health check reports whether GD is loaded.
+- The collector and the writer do not need a restart.
+
 ## [0.5.99] - 2026-11-09
 
 - Saving a component, removing one, or installing a template part builds a front photo of that switch from the empty chassis and the installed part pictures. Update Device Image builds the same photo.
