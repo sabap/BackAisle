@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.102] - 2026-11-17
+
+- Inventory has Add default UPS for people who can edit the organization. It opens the same wide dialog that used to sit on Organization, Config profiles.
+- The dialog adds the UPS and queues the provision job. A bad IP or an address already in inventory is reported on Inventory and does not add a second unit.
+- Organization, Config profiles still lists the profiles and can mark the default. That page no longer has the Add default UPS button.
+- The collector and the writer do not need a restart.
+
 ## [0.5.101] - 2026-11-09
 
 - Tech Mode on a chassis device keeps a short front thumbnail, the name, and the location. The rear picture, meters, and identity facts stay on the desktop page.

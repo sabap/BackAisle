@@ -106,6 +106,48 @@ function ba_group_path_from_map(array $byId, ?int $id): string {
     return $parts ? implode(' / ', $parts) : '—';
 }
 
+/** @return array{job_id:int, message:string} */
+function ba_queue_default_ups(PDO $db, array $user, array $post): array
+{
+    $ip = trim((string)($post['ip'] ?? ''));
+    if (!filter_var($ip, FILTER_VALIDATE_IP)) {
+        throw new RuntimeException('Bad IP');
+    }
+    $exist = $db->prepare('SELECT id FROM devices WHERE ip=?');
+    $exist->execute([$ip]);
+    $taken = (bool)$exist->fetch();
+    $exist->closeCursor();
+    if ($taken) {
+        throw new RuntimeException('IP already in inventory');
+    }
+    $rawGroup = $post['group_id'] ?? '';
+    $gid = ($rawGroup === '' || $rawGroup === null) ? null : (int)$rawGroup;
+    $cfgId = (int)($post['config_id'] ?? 0);
+    $sid = (int)($post['snmp_profile_id'] ?? 0) ?: null;
+    $postedHost = $post['hostname'] ?? $ip;
+    $db->prepare('INSERT INTO devices (ip, hostname, site, group_id, snmp_profile_id, sensor_expected, is_simulated, enabled, va_rating) VALUES (?,?,?,?,?,1,0,1,2000)')
+        ->execute([$ip, trim((string)$postedHost), 'Hospital', $gid, $sid]);
+    $did = ba_last_id($db);
+    if ($did > 0) {
+        ba_pp_exec($db, 'UPDATE devices SET department_id=? WHERE id=?', [ba_device_department_choice($user), $did]);
+        $wid = ba_webcred_posted($db, $post['web_credential_id'] ?? '');
+        if ($wid !== null) {
+            ba_pp_exec($db, 'UPDATE devices SET web_credential_id=? WHERE id=?', [$wid, $did]);
+        }
+    }
+    $factory = ba_rmcard_factory_login();
+    $db->prepare("INSERT INTO write_jobs (kind,status,simulate,stop_on_error,created_by,payload_json) VALUES ('provision','queued',0,1,?,?)")
+        ->execute([$user['username'], json_encode(['device_id'=>$did,'config_id'=>$cfgId,'web_user'=>$factory['user'],'web_pass'=>$factory['pass']])]);
+    $jid = ba_last_id($db);
+    $db->prepare("INSERT INTO write_job_targets (job_id,device_id,ip,hostname,status) VALUES (?,?,?,?,'queued')")
+        ->execute([$jid, $did, $ip, $postedHost]);
+    ba_audit($db, 'add_default_ups', 'device', (string)$did, $ip);
+    return [
+        'job_id' => $jid,
+        'message' => 'Default UPS ' . $ip . ' queued (' . $factory['user'] . '/' . $factory['pass'] . ' card login + config profile). Job #' . $jid,
+    ];
+}
+
 function page_org(PDO $db, array $user): void {
     ba_require_perm('edit_org');
     $tab = $_POST['tab'] ?? $_GET['tab'] ?? 'groups';
@@ -354,32 +396,8 @@ function page_org(PDO $db, array $user): void {
                 $msg = 'Imported ' . json_encode($stats);
                 ba_audit($db, 'import_powerpanel', 'import', null, $msg);
             } elseif ($act === 'add_default') {
-                $ip = trim($_POST['ip'] ?? '');
-                if (!filter_var($ip, FILTER_VALIDATE_IP)) throw new RuntimeException('Bad IP');
-                $exist = $db->prepare('SELECT id FROM devices WHERE ip=?');
-                $exist->execute([$ip]);
-                if ($exist->fetch()) throw new RuntimeException('IP already in inventory');
-                $gid = $_POST['group_id'] === '' ? null : (int)$_POST['group_id'];
-                $cfgId = (int)($_POST['config_id'] ?? 0);
-                $sid = (int)($_POST['snmp_profile_id'] ?? 0) ?: null;
-                $db->prepare('INSERT INTO devices (ip, hostname, site, group_id, snmp_profile_id, sensor_expected, is_simulated, enabled, va_rating) VALUES (?,?,?,?,?,1,0,1,2000)')
-                    ->execute([$ip, trim($_POST['hostname'] ?? $ip), 'Hospital', $gid, $sid]);
-                $did = ba_last_id($db);
-                if ($did > 0) {
-                    ba_pp_exec($db, 'UPDATE devices SET department_id=? WHERE id=?', [ba_device_department_choice($user), $did]);
-                    $wid = ba_webcred_posted($db, $_POST['web_credential_id'] ?? '');
-                    if ($wid !== null) {
-                        ba_pp_exec($db, 'UPDATE devices SET web_credential_id=? WHERE id=?', [$wid, $did]);
-                    }
-                }
-                $factory = ba_rmcard_factory_login();
-                $db->prepare("INSERT INTO write_jobs (kind,status,simulate,stop_on_error,created_by,payload_json) VALUES ('provision','queued',0,1,?,?)")
-                    ->execute([$user['username'], json_encode(['device_id'=>$did,'config_id'=>$cfgId,'web_user'=>$factory['user'],'web_pass'=>$factory['pass']])]);
-                $jid = ba_last_id($db);
-                $db->prepare("INSERT INTO write_job_targets (job_id,device_id,ip,hostname,status) VALUES (?,?,?,?,'queued')")
-                    ->execute([$jid, $did, $ip, $_POST['hostname'] ?? $ip]);
-                ba_audit($db, 'add_default_ups', 'device', (string)$did, $ip);
-                $msg = 'Default UPS ' . $ip . ' queued (' . $factory['user'] . '/' . $factory['pass'] . ' card login + config profile). Job #' . $jid;
+                $queued = ba_queue_default_ups($db, $user, $_POST);
+                $msg = $queued['message'];
             } elseif ($act === 'ldap_save') {
                 ba_save_ldap_settings($db, $_POST);
                 if (isset($_POST['alert_hold_sec'])) {
@@ -783,8 +801,8 @@ JS;
     }
 
     if ($tab === 'configs') {
-        ba_card_open('Config profiles', '<button type="button" class="btn" data-open-modal="modal-add-default">Add default UPS</button>');
-        echo '<p class="muted">Pulled RMCARD YYYY_MM_DD_HHMM.txt files. Clone more from Fleet writes.</p><table><thead><tr><th>Name</th><th>Source</th><th>When</th><th></th></tr></thead><tbody>';
+        ba_card_open('Config profiles');
+        echo '<p class="muted">Pulled RMCARD YYYY_MM_DD_HHMM.txt files. Clone more from Fleet writes. Add a factory-default UPS from Inventory.</p><table><thead><tr><th>Name</th><th>Source</th><th>When</th><th></th></tr></thead><tbody>';
         foreach ($db->query('SELECT * FROM config_templates ORDER BY id DESC') as $t) {
             echo '<tr><td>'.h($t['name']).($t['is_default']?' <span class="muted">default</span>':'').'</td><td>'.h($t['source_ip']).'</td><td>'.h($t['pulled_at']).'</td><td>';
             echo '<a href="'.h(ba_href('/writes/template?id='.(int)$t['id'])).'">preview</a> ';
@@ -792,25 +810,6 @@ JS;
         }
         echo '</tbody></table>';
         ba_card_close();
-        ba_users_modal_open('modal-add-default', 'Add default UPS', false, '', true);
-        echo '<p class="muted">Connects with factory <code>cyber</code>/<code>cyber</code>, applies a config profile, then polls with the selected SNMPv3 credentials. A Web/SSH/FTP login saved here is for later jobs. The first connection still uses the factory login.</p>';
-        echo '<form method="post" class="stack">';
-        echo '<input name="ip" placeholder="IP" required>';
-        echo '<input name="hostname" placeholder="hostname">';
-        echo '<select name="group_id"><option value="">group</option>'.ba_group_options($groups).'</select>';
-        echo '<select name="config_id"><option value="0">config profile</option>';
-        foreach ($db->query('SELECT id,name,is_default FROM config_templates') as $t) {
-            echo '<option value="'.(int)$t['id'].'" '.($t['is_default']?'selected':'').'>'.h($t['name']).'</option>';
-        }
-        echo '</select><label>Web/SSH/FTP login</label><select name="web_credential_id"><option value="">(site default)</option>'.ba_webcred_options($db, null).'</select>';
-        echo '<label>SNMPv3 credentials</label><select name="snmp_profile_id"><option value="">SNMPv3 after apply</option>';
-        foreach (ba_snmp_card_profiles($db) as $p) {
-            echo '<option value="'.(int)$p['id'].'">'.h($p['name']).'</option>';
-        }
-        echo '</select>';
-        ba_department_field($db, $user, null);
-        echo '<input type="hidden" name="act" value="add_default"><button>Add default UPS</button></form>';
-        ba_users_modal_close();
     }
 
     if ($tab === 'import') {

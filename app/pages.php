@@ -964,6 +964,7 @@ function page_api_search(PDO $db): void
 function page_devices(PDO $db, array $user): void {
     $canEditDevices = ba_can_edit_device($user, null);
     $canAssign = ba_can($user, 'edit_devices_all');
+    $canDefaultUps = ba_editor($user, 'edit_org');
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $act = (string)($_POST['act'] ?? 'add');
         if ($act === 'card_settings') {
@@ -1069,6 +1070,21 @@ function page_devices(PDO $db, array $user): void {
             header('Location: ' . ba_href('/devices?msg=' . rawurlencode($msg)));
             exit;
         }
+        if ($act === 'add_default') {
+            if (!$canDefaultUps) {
+                http_response_code(403);
+                echo 'Not allowed';
+                return;
+            }
+            try {
+                $queued = ba_queue_default_ups($db, $user, $_POST);
+                $jobId = (int)$queued['job_id'];
+                header('Location: ' . ba_href('/devices?job=' . $jobId . '&job_kind=provision&msg=' . rawurlencode((string)$queued['message'])));
+            } catch (Throwable $e) {
+                header('Location: ' . ba_href('/devices?bad=1&msg=' . rawurlencode($e->getMessage())));
+            }
+            exit;
+        }
         if ($canEditDevices && $act === 'add') {
             $ip = trim($_POST['ip'] ?? '');
             if (filter_var($ip, FILTER_VALIDATE_IP)) {
@@ -1164,7 +1180,8 @@ function page_devices(PDO $db, array $user): void {
     echo '<h1>Inventory</h1>';
     if (!empty($_GET['job'])) {
         $jobId = (int)$_GET['job'];
-        echo '<div class="flash ok"><a href="'.h(ba_href('/writes/job?id='.$jobId)).'">Card settings job '.$jobId.'</a>';
+        $jobLabel = ((string)($_GET['job_kind'] ?? '') === 'provision') ? 'Provision job' : 'Card settings job';
+        echo '<div class="flash ok"><a href="'.h(ba_href('/writes/job?id='.$jobId)).'">'.h($jobLabel).' '.$jobId.'</a>';
         if (!empty($_GET['msg'])) {
             echo ' · '.h((string)$_GET['msg']);
         }
@@ -1223,6 +1240,9 @@ function page_devices(PDO $db, array $user): void {
     }
     if ($canEditDevices) {
         $head .= '<button type="button" class="btn" data-open-modal="modal-add-device">Add device</button>';
+    }
+    if ($canDefaultUps) {
+        $head .= '<button type="button" class="btn" data-open-modal="modal-add-default">Add default UPS</button>';
     }
     ba_card_open('Devices', $head, 'inventory');
     echo '<table><thead><tr>';
@@ -1379,6 +1399,28 @@ JS;
         echo '<label class="muted"><input type="checkbox" name="sensor_expected" checked> sensor expected</label>';
         echo '<button>Add device</button></form>';
         echo '<p class="muted">Leave the template empty to enter this unit by hand. You can save it as a template afterward. Model, serial, and firmware fill in on the next poll.</p>';
+        ba_users_modal_close();
+    }
+    if ($canDefaultUps) {
+        $groups = ba_groups($db);
+        ba_users_modal_open('modal-add-default', 'Add default UPS', false, '', true);
+        echo '<p class="muted">Connects with factory <code>cyber</code>/<code>cyber</code>, applies a config profile, then polls with the selected SNMPv3 credentials. A Web/SSH/FTP login saved here is for later jobs. The first connection still uses the factory login.</p>';
+        echo '<form method="post" class="stack" action="'.h(ba_href('/devices')).'">';
+        echo '<label>IP</label><input name="ip" placeholder="IP" required>';
+        echo '<label>Hostname</label><input name="hostname" placeholder="hostname">';
+        echo '<label>Group</label><select name="group_id"><option value="">group</option>'.ba_group_options($groups).'</select>';
+        echo '<label>Config profile</label><select name="config_id"><option value="0">config profile</option>';
+        foreach ($db->query('SELECT id,name,is_default FROM config_templates') as $t) {
+            echo '<option value="'.(int)$t['id'].'" '.($t['is_default']?'selected':'').'>'.h($t['name']).'</option>';
+        }
+        echo '</select><label>Web/SSH/FTP login</label><select name="web_credential_id"><option value="">(site default)</option>'.ba_webcred_options($db, null).'</select>';
+        echo '<label>SNMPv3 credentials</label><select name="snmp_profile_id"><option value="">SNMPv3 after apply</option>';
+        foreach (ba_snmp_card_profiles($db) as $p) {
+            echo '<option value="'.(int)$p['id'].'">'.h($p['name']).'</option>';
+        }
+        echo '</select>';
+        ba_department_field($db, $user, null);
+        echo '<input type="hidden" name="act" value="add_default"><button>Add default UPS</button></form>';
         ba_users_modal_close();
     }
     ba_layout_end();
