@@ -80,6 +80,85 @@ function ba_create_job(PDO $db, string $kind, array $deviceIds, array $extra, st
     return $jid;
 }
 
+function ba_device_can_pull_config(array $row): bool
+{
+    if ((int)($row['is_simulated'] ?? 0) === 1) {
+        return false;
+    }
+    if ((int)($row['enabled'] ?? 0) !== 1) {
+        return false;
+    }
+    if (trim((string)($row['decommissioned_at'] ?? '')) !== '') {
+        return false;
+    }
+    $kind = strtolower(trim((string)($row['kind'] ?? 'ups')));
+    if ($kind === '') {
+        $kind = 'ups';
+    }
+    if ($kind !== 'ups') {
+        return false;
+    }
+    return (bool)filter_var(trim((string)($row['ip'] ?? '')), FILTER_VALIDATE_IP);
+}
+
+/** @return array{job_id:int, job_ids:list<int>, message:string} */
+function ba_queue_config_profiles(PDO $db, array $user, array $deviceIds, string $name): array
+{
+    $ids = [];
+    foreach ($deviceIds as $raw) {
+        $id = (int)$raw;
+        if ($id > 0) {
+            $ids[$id] = $id;
+        }
+    }
+    if (!$ids) {
+        throw new RuntimeException('Select at least one UPS');
+    }
+    if (count($ids) > 100) {
+        throw new RuntimeException('Select 100 UPS units or fewer');
+    }
+    $name = trim($name);
+    if (strlen($name) > 128) {
+        $name = substr($name, 0, 128);
+    }
+    $rows = [];
+    foreach ($ids as $id) {
+        $st = $db->prepare('SELECT * FROM devices WHERE id=?');
+        $st->execute([$id]);
+        $row = $st->fetch();
+        $st->closeCursor();
+        if (!$row || !ba_device_can_pull_config($row)) {
+            $label = trim((string)($row['hostname'] ?? ''));
+            if ($label === '' && is_array($row)) {
+                $label = trim((string)($row['ip'] ?? ''));
+            }
+            if ($label === '') {
+                $label = 'That device';
+            }
+            throw new RuntimeException($label . ' is not an enabled UPS. A config profile is pulled from a UPS card.');
+        }
+        $rows[] = $row;
+    }
+    $jobs = [];
+    $single = count($rows) === 1;
+    foreach ($rows as $row) {
+        $id = (int)$row['id'];
+        $host = trim((string)($row['hostname'] ?? ''));
+        if ($host === '') {
+            $host = trim((string)$row['ip']);
+        }
+        $templateName = ($single && $name !== '') ? $name : $host;
+        $jobs[] = ba_create_job($db, 'pull_config', [$id], [
+            'device_id' => $id,
+            'template_name' => $templateName,
+        ], (string)($user['username'] ?? ''), false, false);
+    }
+    $message = count($jobs) === 1
+        ? 'Config profile queued. Job #' . $jobs[0]
+        : 'Queued ' . count($jobs) . ' config profiles.';
+    return ['job_id' => $jobs[0], 'job_ids' => $jobs, 'message' => $message];
+}
+
 /** Stop a queued or running job. Units already ok or fail are left as they are. */
 function ba_cancel_write_job(PDO $db, int $id, string $by): array
 {
@@ -220,7 +299,7 @@ function page_fleet_writes(PDO $db, array $user): void {
         <input name="template_name" placeholder="lab-baseline">
         <input type="hidden" name="act" value="pull">
         <button>Pull config from card</button>
-        <p class="muted">FTP GET (fw ≥ 1.4.0) or web Save. File is stored outside the web root. UI shows a redacted copy only.</p>
+        <p class="muted">FTP GET (fw ≥ 1.4.0) or web Save. File is stored outside the web root. UI shows a redacted copy only. A UPS device page, and checked UPS rows on Inventory, can pull any enabled UPS. A push still uses the lab unit until AllowMultiWrite is on.</p>
       </form>
     <?php ba_users_modal_close(); ba_users_modal_open('modal-push', 'Push config', false, '', true); ?>
       <form method="post" class="stack">

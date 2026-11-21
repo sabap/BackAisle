@@ -539,7 +539,7 @@ def run_pull(con, job: dict, secrets: dict) -> None:
     device_id = int(payload["device_id"])
     row = con.execute("SELECT * FROM devices WHERE id=?", (device_id,)).fetchone()
     ip = row["ip"]
-    assert_lab_only(ip, secrets)
+    # A profile pull only reads the card. Config and firmware pushes stay lab-gated.
     tgt = con.execute("SELECT id FROM write_job_targets WHERE job_id=?", (job["id"],)).fetchone()
     tid = tgt["id"]
     step(con, tid, 1, "pull_config", "running", f"from {ip}")

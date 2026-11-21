@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.103] - 2026-11-21
+
+- A UPS device page has Create config profile. Inventory has the same button for the checked UPS rows. Each pull reads that card and stores a profile. The file stays outside the website.
+- The profile is named from the hostname on Inventory. The device page asks for a name. It appears on Organization, Config profiles when the job succeeds.
+- People who can open Fleet Writes see the button. A switch, router, or patch panel cannot be used. Pushing a profile still uses the lab unit until AllowMultiWrite is on.
+- The writer reloads when writer.py is newer than the running process. The collector does not need a restart.
+
 ## [0.5.102] - 2026-11-17
 
 - Inventory has Add default UPS for people who can edit the organization. It opens the same wide dialog that used to sit on Organization, Config profiles.

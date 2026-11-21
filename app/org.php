@@ -802,7 +802,7 @@ JS;
 
     if ($tab === 'configs') {
         ba_card_open('Config profiles');
-        echo '<p class="muted">Pulled RMCARD YYYY_MM_DD_HHMM.txt files. Clone more from Fleet writes. Add a factory-default UPS from Inventory.</p><table><thead><tr><th>Name</th><th>Source</th><th>When</th><th></th></tr></thead><tbody>';
+        echo '<p class="muted">Pulled RMCARD YYYY_MM_DD_HHMM.txt files. Create one from a UPS device page, or check UPS rows on Inventory and choose Create config profile. Add a factory-default UPS from Inventory.</p><table><thead><tr><th>Name</th><th>Source</th><th>When</th><th></th></tr></thead><tbody>';
         foreach ($db->query('SELECT * FROM config_templates ORDER BY id DESC') as $t) {
             echo '<tr><td>'.h($t['name']).($t['is_default']?' <span class="muted">default</span>':'').'</td><td>'.h($t['source_ip']).'</td><td>'.h($t['pulled_at']).'</td><td>';
             echo '<a href="'.h(ba_href('/writes/template?id='.(int)$t['id'])).'">preview</a> ';
