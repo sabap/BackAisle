@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.5.104] - 2026-11-21
+
+- A new UPS provision signs out of the card before each web login and again when the job ends. The card allows one web session, so a second sign-in from the same job was refused even when no browser was open.
+- The profile is still applied over SCP. That step does not keep the web session.
+- The writer reloads when writer.py is newer than the running process. The collector does not need a restart.
+
 ## [0.5.103] - 2026-11-21
 
 - A UPS device page has Create config profile. Inventory has the same button for the checked UPS rows. Each pull reads that card and stores a profile. The file stays outside the website.

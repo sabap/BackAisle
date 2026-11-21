@@ -99,7 +99,16 @@ class RmcardSession:
 
     @staticmethod
     def _logged_in(url: str, raw: bytes) -> bool:
-        return "summary.html" in (url or "") or b"summary.html" in (raw or b"")
+        text = url or ""
+        body = raw or b""
+        low = body.lower()
+        if b"someone is currently logged" in low or b"login_pass.cgi" in low:
+            return False
+        if "summary.html" in text or b"summary.html" in body:
+            return True
+        if b"logout.html" in low or b"logout.cgi" in low:
+            return True
+        return False
 
     @staticmethod
     def _busy_session(url: str, raw: bytes) -> bool:
@@ -121,40 +130,45 @@ class RmcardSession:
             time.sleep(0.4)
         return self.fetch("login.cgi?action=LOGIN")
 
-    def _click_login_again(self) -> None:
-        """error.html: 'Please click here to login again' is href='/'."""
-        for path in ("/", "login.html", "error.html"):
-            try:
-                self.fetch(path, timeout=8)
-            except Exception:
-                pass
+    def _confirm_home(self) -> bool:
+        """The login reply is sometimes not summary.html even after this process took the slot."""
+        try:
+            url, _st, _hd, raw = self.fetch("summary.html", timeout=8)
+        except Exception:
+            return False
+        if self._busy_session(url, raw):
+            return False
+        low = (raw or b"").lower()
+        if b"login_pass.cgi" in low or b"someone is currently logged" in low:
+            return False
+        if b"summary.html" in low or b"logout.html" in low or b"logout.cgi" in low:
+            self._home = raw
+            return True
+        return False
 
     def login(self) -> None:
+        # The card allows one web session. A second login from this same job
+        # looks like "someone is currently logged in" even when no browser is open.
+        # Log out with this process's cookies before every attempt, and again at the end.
+        last_url, last_status, last_raw = "", 0, b""
+        for attempt in range(3):
+            self.logout()
+            time.sleep(0.4 if attempt == 0 else 0.8)
+            url, status, _hd, raw = self._login_once()
+            last_url, last_status, last_raw = url, status, raw
+            if self._logged_in(url, raw):
+                self._home = raw
+                return
+            if self._confirm_home():
+                return
         self.logout()
-        time.sleep(0.4)
-        url, st, hd, raw = self._login_once()
-        if self._logged_in(url, raw):
-            self._home = raw
-            return
-        # Card holds one web login. Do not logout() here — that is a different cookie jar
-        # than the session already on the card. Click "here to login again" and retry.
-        self._click_login_again()
-        time.sleep(1.0)
-        url, st, hd, raw = self._login_once()
-        if self._logged_in(url, raw):
-            self._home = raw
-            return
-        self.logout()
-        time.sleep(1.2)
-        url, st, hd, raw = self._login_once()
-        if not self._logged_in(url, raw):
-            if self._busy_session(url, raw):
-                raise RuntimeError(
-                    "web login failed: RMCARD already has a web session "
-                    "(close the UPS browser tab that says 'Someone is currently logged in', then retry)"
-                )
-            raise RuntimeError(f"web login failed: {url} status={st} bytes={len(raw)}")
-        self._home = raw
+        if self._busy_session(last_url, last_raw):
+            raise RuntimeError(
+                "web login failed: the card already has one web session. "
+                "BackAisle releases its own session at the end of the job. "
+                "Run the job again. Close a browser tab on this card only when one is open."
+            )
+        raise RuntimeError(f"web login failed: {last_url} status={last_status} bytes={len(last_raw)}")
 
     def download_config(self) -> tuple[bytes, str]:
         """Click System → About Save Configuration. Returns (bytes, filename)."""

@@ -726,8 +726,15 @@ def run_provision(con, job: dict, secrets: dict) -> None:
     web_pass = payload.get("web_pass") or RMCARD_FACTORY_PASS
     step(con, tid, 1, "web_login", "running", web_user)
     sess = RmcardSession(device["ip"], web_user, web_pass)
-    sess.login()
-    step(con, tid, 1, "web_login", "ok", "factory " + RMCARD_FACTORY_USER + "/" + RMCARD_FACTORY_PASS)
+    try:
+        sess.login()
+        step(con, tid, 1, "web_login", "ok", "factory " + RMCARD_FACTORY_USER + "/" + RMCARD_FACTORY_PASS)
+    finally:
+        # Provision applies the profile over SCP. Holding the web slot blocks the retry.
+        try:
+            sess.logout()
+        except Exception:
+            pass
     cfg_id = int(payload.get("config_id") or 0)
     if cfg_id:
         tmpl = con.execute("SELECT * FROM config_templates WHERE id=?", (cfg_id,)).fetchone()
