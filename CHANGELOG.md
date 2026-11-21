@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.5.106] - 2026-11-21
+
+- An in-app update stops the writer before it copies a new writer.py. The previous reload copied the file while the program still had it open, so the copy failed and the old program started again.
+- Apply config profile from 0.5.105 runs after that new program is loaded. The line writer starting version= reads the version file. A file named writer.py.backaisle-new means the new program has not replaced the old one yet.
+- The collector restarts only when collector.py is newer. The writer reloads when writer.py is newer, or when an update asks for a restart.
+
 ## [0.5.105] - 2026-11-21
 
 - Inventory and a UPS device page have Apply config profile. Check the UPS rows, or open that UPS, and choose the profile.

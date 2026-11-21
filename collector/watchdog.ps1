@@ -102,9 +102,19 @@ function Ensure-Proc([string]$script, [string]$pidFile, [string]$stdoutLog, [str
     Start-Process -FilePath $py -ArgumentList "`"$script`"" -WorkingDirectory $SiteRoot -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog
 }
 
-$pendingOk = Promote-BaPending -Dir $CollectorDir
+# Stop the writer before copying a pending writer.py. A running process keeps
+# the file locked, the copy fails, and the restart then loads the old program.
+$writerPending = Join-Path $CollectorDir 'writer.py.backaisle-new'
+$writerPid = Join-Path $LogDir 'writer.pid'
+$flagPresent = Test-Path -LiteralPath $Flag
+if ($flagPresent -or (Test-Path -LiteralPath $writerPending)) {
+    Stop-BaPythonScript -ScriptLeaf 'writer.py' -PidFile $writerPid
+    # The file stays locked until the process exits. Copy only after that.
+    Start-Sleep -Seconds 2
+}
+Promote-BaPending -Dir $CollectorDir | Out-Null
 Ensure-Proc (Join-Path $CollectorDir 'collector.py') (Join-Path $LogDir 'collector.pid') (Join-Path $LogDir 'collector.stdout.log') (Join-Path $LogDir 'collector.stderr.log') -RecycleIfNewer
 Ensure-Proc (Join-Path $CollectorDir 'writer.py') (Join-Path $LogDir 'writer.pid') (Join-Path $LogDir 'writer.stdout.log') (Join-Path $LogDir 'writer.stderr.log') -RecycleIfStale
-if (-not $pendingOk -and -not (Test-Path -LiteralPath $Flag)) {
+if ((Test-Path -LiteralPath $writerPending) -and -not (Test-Path -LiteralPath $Flag)) {
     New-Item -ItemType File -Force -Path $Flag | Out-Null
 }
