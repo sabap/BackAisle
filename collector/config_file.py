@@ -87,6 +87,62 @@ class ConfigDoc:
         return "\n".join(out)
 
 
+# Address and name on this card. A profile apply must not copy these from the source UPS.
+# SNMP, trap, DNS, and syslog addresses stay in the profile.
+_CARD_NETWORK_KEYS = {
+    "mac_address": "mac",
+    "system_ip_address": "ip",
+    "system_gateway_address": "gateway",
+    "system_submask_address": "mask",
+    "system_ipv6_address": "ipv6",
+    "system_host_name": "host",
+    "system_name": "name",
+}
+
+
+def _card_network_slot(key: str | None) -> str | None:
+    if not key:
+        return None
+    return _CARD_NETWORK_KEYS.get(key.strip().lower())
+
+
+def apply_profile_keep_network(template: str, current: str, ip: str, hostname: str) -> str:
+    """Write a profile onto one card without taking another card's address or MAC.
+
+    The inventory IP and hostname replace the profile address and name.
+    Gateway, mask, IPv6, and MAC stay as they are on this card. A line the
+    card does not already have is left out, so the source card's gateway
+    and MAC are not copied. SNMP and trap addresses in the profile stay.
+    """
+    ip = (ip or "").strip()
+    hostname = (hostname or "").strip()
+    current_vals: dict[str, str] = {}
+    for _i, _orig, key, val in parse_config(current or "").pairs:
+        slot = _card_network_slot(key)
+        if slot:
+            current_vals[slot] = val
+    out: list[str] = []
+    for line in parse_config(template).lines:
+        key, _val, sep = _split_kv(line)
+        slot = _card_network_slot(key)
+        if not slot:
+            out.append(line)
+            continue
+        if slot == "ip" and ip:
+            out.append(key + sep + ip)
+            continue
+        if slot in ("host", "name") and hostname:
+            out.append(key + sep + hostname)
+            continue
+        kept = current_vals.get(slot)
+        if kept is not None and str(kept) != "":
+            out.append(key + sep + kept)
+    text = "\n".join(out)
+    if text and not text.endswith("\n"):
+        text += "\n"
+    return text
+
+
 def parse_config(text: str) -> ConfigDoc:
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     lines = text.split("\n")

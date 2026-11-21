@@ -159,6 +159,106 @@ function ba_queue_config_profiles(PDO $db, array $user, array $deviceIds, string
     return ['job_id' => $jobs[0], 'job_ids' => $jobs, 'message' => $message];
 }
 
+function ba_config_template_options(PDO $db): string
+{
+    $html = '';
+    foreach ($db->query('SELECT id, name, is_default FROM config_templates ORDER BY id DESC') as $t) {
+        $html .= '<option value="' . (int)$t['id'] . '"' . ($t['is_default'] ? ' selected' : '') . '>' . h($t['name']) . '</option>';
+    }
+    return $html;
+}
+
+/** @return array{job_id:int, message:string} */
+function ba_queue_apply_config(PDO $db, array $user, array $deviceIds, int $configId, bool $factoryLogin, string $confirm): array
+{
+    if (trim($confirm) !== 'APPLY CONFIG') {
+        throw new RuntimeException('Type APPLY CONFIG to apply the profile');
+    }
+    if ($configId < 1) {
+        throw new RuntimeException('Choose a config profile');
+    }
+    $st = $db->prepare('SELECT id, name FROM config_templates WHERE id=?');
+    $st->execute([$configId]);
+    $tmpl = $st->fetch();
+    $st->closeCursor();
+    if (!$tmpl) {
+        throw new RuntimeException('That config profile is not on this site');
+    }
+    $ids = [];
+    foreach ($deviceIds as $raw) {
+        $id = (int)$raw;
+        if ($id > 0) {
+            $ids[$id] = $id;
+        }
+    }
+    if (!$ids) {
+        throw new RuntimeException('Select at least one UPS');
+    }
+    if (count($ids) > 20) {
+        throw new RuntimeException('Select 20 UPS units or fewer');
+    }
+    $rows = [];
+    foreach ($ids as $id) {
+        $dst = $db->prepare('SELECT * FROM devices WHERE id=?');
+        $dst->execute([$id]);
+        $row = $dst->fetch();
+        $dst->closeCursor();
+        if (!$row || !ba_device_can_pull_config($row)) {
+            $label = trim((string)($row['hostname'] ?? ''));
+            if ($label === '' && is_array($row)) {
+                $label = trim((string)($row['ip'] ?? ''));
+            }
+            if ($label === '') {
+                $label = 'That device';
+            }
+            throw new RuntimeException($label . ' is not an enabled UPS. A config profile is applied to a UPS card.');
+        }
+        $rows[] = $row;
+    }
+    $targetIds = [];
+    foreach ($rows as $row) {
+        $targetIds[] = (int)$row['id'];
+    }
+    $jobId = ba_create_job($db, 'push_config', $targetIds, [
+        'template_id' => $configId,
+        'overlays' => [],
+        'identity_maps' => [],
+        'keep_target_identity' => true,
+        'factory_login' => $factoryLogin,
+    ], (string)($user['username'] ?? ''), false, false);
+    $name = (string)$tmpl['name'];
+    $n = count($rows);
+    $message = $n === 1
+        ? 'Config apply queued for ' . $name . '. Job #' . $jobId
+        : 'Queued a config apply of ' . $name . ' for ' . $n . ' UPS units. Job #' . $jobId;
+    return ['job_id' => $jobId, 'message' => $message];
+}
+
+function ba_apply_config_modal(PDO $db, string $action, bool $bulk, int $deviceId = 0): void
+{
+    ba_users_modal_open('modal-apply-config', 'Apply config profile', false);
+    $options = ba_config_template_options($db);
+    echo '<form method="post" class="stack"' . ($bulk ? ' data-copy-devices="1"' : '') . ' action="' . h($action) . '">';
+    echo '<input type="hidden" name="act" value="apply_config">';
+    if (!$bulk && $deviceId > 0) {
+        echo '<input type="hidden" name="device_ids[]" value="' . $deviceId . '">';
+    }
+    if ($bulk) {
+        echo '<p class="muted" data-need-devices hidden>Select at least one UPS in the list.</p>';
+    }
+    if ($options === '') {
+        echo '<p class="muted">No config profile yet. Create one from a UPS device page, or check a UPS on Inventory and choose Create config profile.</p>';
+    } else {
+        echo '<label>Config profile</label><select name="config_id">' . $options . '</select>';
+        echo '<label><input type="checkbox" name="factory_login" value="1" checked> Use the factory card login</label>';
+        echo '<p class="muted">Writes this profile to the UPS. The card reboots. The card keeps its own IP address, gateway, subnet mask, hostname, and MAC address. Leave the factory login on when the card has not been changed yet. Turn it off to sign in with the Web/SSH/FTP login saved on the device.</p>';
+        echo '<label>Type APPLY CONFIG</label><input name="confirm" autocomplete="off">';
+        echo '<button>Apply config profile</button>';
+    }
+    echo '</form>';
+    ba_users_modal_close();
+}
+
 /** Stop a queued or running job. Units already ok or fail are left as they are. */
 function ba_cancel_write_job(PDO $db, int $id, string $by): array
 {
@@ -299,7 +399,7 @@ function page_fleet_writes(PDO $db, array $user): void {
         <input name="template_name" placeholder="lab-baseline">
         <input type="hidden" name="act" value="pull">
         <button>Pull config from card</button>
-        <p class="muted">FTP GET (fw ≥ 1.4.0) or web Save. File is stored outside the web root. UI shows a redacted copy only. A UPS device page, and checked UPS rows on Inventory, can pull any enabled UPS. A push still uses the lab unit until AllowMultiWrite is on.</p>
+        <p class="muted">FTP GET (fw ≥ 1.4.0) or web Save. File is stored outside the web root. UI shows a redacted copy only. A UPS device page, and checked UPS rows on Inventory, can pull any enabled UPS and can apply a profile to that UPS. The card keeps its own address. A push from this page still uses the lab unit until AllowMultiWrite is on.</p>
       </form>
     <?php ba_users_modal_close(); ba_users_modal_open('modal-push', 'Push config', false, '', true); ?>
       <form method="post" class="stack">

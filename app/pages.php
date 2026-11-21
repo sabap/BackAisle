@@ -1100,6 +1100,28 @@ function page_devices(PDO $db, array $user): void {
             }
             exit;
         }
+        if ($act === 'apply_config') {
+            if (!ba_editor($user, 'edit_writes') && !ba_editor($user, 'edit_org')) {
+                http_response_code(403);
+                echo 'Not allowed';
+                return;
+            }
+            try {
+                $queued = ba_queue_apply_config(
+                    $db,
+                    $user,
+                    (array)($_POST['device_ids'] ?? []),
+                    (int)($_POST['config_id'] ?? 0),
+                    isset($_POST['factory_login']),
+                    (string)($_POST['confirm'] ?? '')
+                );
+                $jobId = (int)$queued['job_id'];
+                header('Location: ' . ba_href('/devices?job=' . $jobId . '&job_kind=apply&msg=' . rawurlencode((string)$queued['message'])));
+            } catch (Throwable $e) {
+                header('Location: ' . ba_href('/devices?bad=1&msg=' . rawurlencode($e->getMessage())));
+            }
+            exit;
+        }
         if ($canEditDevices && $act === 'add') {
             $ip = trim($_POST['ip'] ?? '');
             if (filter_var($ip, FILTER_VALIDATE_IP)) {
@@ -1196,7 +1218,7 @@ function page_devices(PDO $db, array $user): void {
     if (!empty($_GET['job'])) {
         $jobId = (int)$_GET['job'];
         $jobKind = (string)($_GET['job_kind'] ?? '');
-        $jobLabel = $jobKind === 'provision' ? 'Provision job' : ($jobKind === 'pull' ? 'Config profile job' : 'Card settings job');
+        $jobLabel = $jobKind === 'provision' ? 'Provision job' : ($jobKind === 'pull' ? 'Config profile job' : ($jobKind === 'apply' ? 'Config apply job' : 'Card settings job'));
         echo '<div class="flash ok"><a href="'.h(ba_href('/writes/job?id='.$jobId)).'">'.h($jobLabel).' '.$jobId.'</a>';
         if (!empty($_GET['msg'])) {
             echo ' · '.h((string)$_GET['msg']);
@@ -1213,7 +1235,8 @@ function page_devices(PDO $db, array $user): void {
     }
     $canCard = ba_card_settings_available($db, $user);
     $canProfile = ba_editor($user, 'edit_writes');
-    $showPick = $canAssign || $canCard || $canProfile;
+    $canApply = $canProfile || $canDefaultUps;
+    $showPick = $canAssign || $canCard || $canProfile || $canApply;
     $keep = [];
     if ($filterDept > 0) {
         $keep['dept'] = (string)$filterDept;
@@ -1258,6 +1281,9 @@ function page_devices(PDO $db, array $user): void {
     if ($canProfile) {
         $head .= '<button type="button" class="btn" data-open-modal="modal-pull-config">Create config profile</button>';
     }
+    if ($canApply) {
+        $head .= '<button type="button" class="btn" data-open-modal="modal-apply-config">Apply config profile</button>';
+    }
     if ($canEditDevices) {
         $head .= '<button type="button" class="btn" data-open-modal="modal-add-device">Add device</button>';
     }
@@ -1279,7 +1305,7 @@ function page_devices(PDO $db, array $user): void {
         $retired = trim((string)ba_col($r, 'decommissioned_at', '')) !== '';
         echo '<tr>';
         if ($showPick) {
-            $pickThis = $canAssign || ($canCard && ba_device_is_cyberpower($r) && ba_can_edit_device($user, $r)) || ($canProfile && ba_device_can_pull_config($r));
+            $pickThis = $canAssign || ($canCard && ba_device_is_cyberpower($r) && ba_can_edit_device($user, $r)) || (($canProfile || $canApply) && ba_device_can_pull_config($r));
             echo '<td>';
             if ($pickThis) {
                 echo '<input type="checkbox" name="device_ids[]" value="'.(int)$r['id'].'">';
@@ -1397,6 +1423,9 @@ JS;
         echo '<p class="muted">Reads the saved configuration from each checked UPS and stores a config profile. The file stays outside the website. Each profile is named from the hostname. A switch, router, or patch panel is not a UPS card.</p>';
         echo '<button>Create config profile</button></form>';
         ba_users_modal_close();
+    }
+    if ($canApply) {
+        ba_apply_config_modal($db, ba_href('/devices'), true);
     }
     if ($canCard) {
         ba_card_settings_modal(true);
@@ -1670,6 +1699,25 @@ function page_device(PDO $db, array $user): void {
         }
         exit;
     }
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && (string)($_POST['act'] ?? '') === 'apply_config') {
+        try {
+            if (!ba_editor($user, 'edit_writes') && !ba_editor($user, 'edit_org')) {
+                throw new RuntimeException('Not allowed');
+            }
+            $queued = ba_queue_apply_config(
+                $db,
+                $user,
+                [$id],
+                (int)($_POST['config_id'] ?? 0),
+                isset($_POST['factory_login']),
+                (string)($_POST['confirm'] ?? '')
+            );
+            header('Location: ' . ba_href('/device?id='.$id.'&job='.(int)$queued['job_id'].'&job_kind=apply&msg='.rawurlencode((string)$queued['message'])));
+        } catch (Throwable $e) {
+            header('Location: ' . ba_href('/device?id='.$id.'&err='.rawurlencode($e->getMessage())));
+        }
+        exit;
+    }
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($canEditThis || (isset($_POST['save_owner']) && ba_can($user, 'edit_devices_all')))) {
         if ($canEditThis && function_exists('ba_parts_device_act') && ba_parts_device_act((string)($_POST['act'] ?? ''))) {
             ba_parts_handle_device($db, $id, $r);
@@ -1817,7 +1865,7 @@ function page_device(PDO $db, array $user): void {
     if (!empty($_GET['job'])) {
         $jobId = (int)$_GET['job'];
         $jobKind = (string)($_GET['job_kind'] ?? '');
-        $jobLabel = $jobKind === 'pull' ? 'Config profile job' : 'Card settings job';
+        $jobLabel = $jobKind === 'pull' ? 'Config profile job' : ($jobKind === 'apply' ? 'Config apply job' : 'Card settings job');
         echo '<div class="flash ok"><a href="'.h(ba_href('/writes/job?id='.$jobId)).'">'.h($jobLabel).' '.$jobId.'</a> is queued.';
         if (!empty($_GET['msg'])) {
             echo ' '.h((string)$_GET['msg']);
@@ -1891,8 +1939,11 @@ function page_device(PDO $db, array $user): void {
       <?php if (ba_device_is_cyberpower($r)): ?>
         <button type="button" class="btn" data-open-modal="modal-card-settings">Card settings</button>
       <?php endif; ?>
-      <?php if (ba_editor($user, 'edit_writes') && ba_device_can_pull_config($r)): ?>
+      <?php if (ba_device_can_pull_config($r) && (ba_editor($user, 'edit_writes') || ba_editor($user, 'edit_org'))): ?>
+        <?php if (ba_editor($user, 'edit_writes')): ?>
         <button type="button" class="btn" data-open-modal="modal-pull-config">Create config profile</button>
+        <?php endif; ?>
+        <button type="button" class="btn" data-open-modal="modal-apply-config">Apply config profile</button>
       <?php endif; ?>
     </div>
     <div class="card-board">
@@ -2030,6 +2081,7 @@ function page_device(PDO $db, array $user): void {
     if ($canEditThis && ba_device_is_cyberpower($r)) {
         ba_card_settings_modal(false, $id);
     }
+    $canApplyThis = ba_device_can_pull_config($r) && (ba_editor($user, 'edit_writes') || ba_editor($user, 'edit_org'));
     if (ba_editor($user, 'edit_writes') && ba_device_can_pull_config($r)) {
         $profileName = trim((string)($r['hostname'] ?? ''));
         if ($profileName === '') {
@@ -2042,6 +2094,9 @@ function page_device(PDO $db, array $user): void {
         echo '<p class="muted">Reads the saved configuration from this card and stores a config profile. The file stays outside the website. The profile appears on Organization, Config profiles when the job succeeds.</p>';
         echo '<button>Create config profile</button></form>';
         ba_users_modal_close();
+    }
+    if ($canApplyThis) {
+        ba_apply_config_modal($db, ba_href('/device?id=' . $id), false, $id);
     }
     ba_layout_end();
 }

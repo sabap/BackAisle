@@ -28,6 +28,7 @@ def writer_version() -> str:
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from config_file import (  # noqa: E402
+    apply_profile_keep_network,
     looks_like_rmcard_config,
     parse_config,
     parse_snmpv3_slots,
@@ -74,6 +75,15 @@ def job_truthy(job: dict, key: str) -> bool:
 
 def job_is_simulate(job: dict) -> bool:
     return job_truthy(job, "simulate")
+
+
+def payload_flag(payload: dict, key: str) -> bool:
+    v = payload.get(key) if isinstance(payload, dict) else None
+    if v is True or v == 1:
+        return True
+    if v is False or v == 0 or v is None:
+        return False
+    return str(v).strip().lower() in ("1", "true", "yes", "on")
 
 
 def _password_profile(prof, sec: dict) -> bool:
@@ -574,15 +584,28 @@ def run_push_config(con, job: dict, secrets: dict) -> None:
     targets = con.execute("SELECT * FROM write_job_targets WHERE job_id=? ORDER BY id", (job["id"],)).fetchall()
 
     def one(con, t) -> None:
-        assert_lab_only(t["ip"], secrets)
-        user, pw = target_card_login(con, t, secrets)
+        # Inventory apply names the UPS on purpose. Fleet Writes stays lab-gated.
+        keep_network = payload_flag(payload, "keep_target_identity")
+        if not keep_network:
+            assert_lab_only(t["ip"], secrets)
+        if payload_flag(payload, "factory_login"):
+            user, pw = RMCARD_FACTORY_USER, RMCARD_FACTORY_PASS
+        else:
+            user, pw = target_card_login(con, t, secrets)
         tid = t["id"]
         ident_map = (payload.get("identity_maps") or {}).get(str(t["device_id"])) or {}
-        rewritten = doc.rewrite(overlays, strip_identity=True, identity_map=ident_map)
+        if keep_network:
+            step(con, tid, 1, "read_config", "running", "keep this card address")
+            current, _cur_name = pull_config_bytes(t["ip"], secrets, user, pw)
+            host = str(t.get("hostname") or "").strip()
+            rewritten = apply_profile_keep_network(raw, current.decode("latin1", "replace"), t["ip"], host)
+            step(con, tid, 1, "read_config", "ok", "kept this card address and name")
+        else:
+            rewritten = doc.rewrite(overlays, strip_identity=True, identity_map=ident_map)
+            step(con, tid, 1, "rewrite", "ok", f"overlays={list(overlays)} identity={list(ident_map)}")
         fname = datetime.now().strftime("%Y_%m_%d_%H%M.txt")
         tmp = CONFIG_DIR / f"push_{t['ip'].replace('.', '_')}_{fname}"
         tmp.write_text(rewritten, encoding="latin1")
-        step(con, tid, 1, "rewrite", "ok", f"overlays={list(overlays)} identity={list(ident_map)}")
         step(con, tid, 2, "restore", "running", fname)
         if simulate:
             detail = f"SIMULATE scp {fname} {user}@{t['ip']}:"

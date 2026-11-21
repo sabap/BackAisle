@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.5.105] - 2026-11-21
+
+- Inventory and a UPS device page have Apply config profile. Check the UPS rows, or open that UPS, and choose the profile.
+- Add default UPS still adds a new address. An address already in inventory is left as it is. Open that UPS and apply a profile there.
+- The card reboots. It keeps its own IP address, gateway, subnet mask, hostname, and MAC address. SNMP and trap addresses in the profile are written.
+- The factory card login stays on when the card has not been changed. Turn it off to sign in with the Web/SSH/FTP login saved on the device. Type APPLY CONFIG to queue the job.
+- People who can edit the organization or open Fleet Writes see the button. A switch, router, or patch panel cannot be used. A push from Fleet Writes still uses the lab unit until AllowMultiWrite is on.
+- The writer reloads when writer.py is newer than the running process. The collector does not need a restart.
+
 ## [0.5.104] - 2026-11-21
 
 - A new UPS provision signs out of the card before each web login and again when the job ends. The card allows one web session, so a second sign-in from the same job was refused even when no browser was open.
