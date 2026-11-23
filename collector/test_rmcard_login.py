@@ -358,7 +358,7 @@ def test_first_login_answers_new_user_name() -> None:
         "next-secret",
     )
     cli._reach_prompt()
-    if sent != ["\r", "ops\r", "next-secret\r", "next-secret\r"]:
+    if sent != ["ops\r", "next-secret\r", "next-secret\r"]:
         raise AssertionError(repr(sent))
     if not cli.account_changed:
         raise AssertionError("account was not marked changed")
@@ -376,7 +376,7 @@ def test_first_login_without_a_saved_name_does_not_send_the_factory_user() -> No
         raise AssertionError("expected a refusal")
     if "Assign a Web/SSH/FTP login on this UPS first." not in text:
         raise AssertionError(text)
-    if sent != ["\r"]:
+    if sent != []:
         raise AssertionError(repr(sent))
 
 
@@ -392,7 +392,7 @@ def test_first_login_accepts_a_plain_password_prompt() -> None:
         "next-secret",
     )
     cli._reach_prompt()
-    if sent != ["\r", "ops\r", "next-secret\r", "next-secret\r"] or not cli.account_changed:
+    if sent != ["ops\r", "next-secret\r", "next-secret\r"] or not cli.account_changed:
         raise AssertionError(repr(sent))
 
 
@@ -403,7 +403,7 @@ def test_shell_login_keeps_the_session_account() -> None:
         "next-secret",
     )
     cli._reach_prompt()
-    if cli.account_changed or sent != ["\r", "card\r", "secret\r"]:
+    if cli.account_changed or sent != ["card\r", "secret\r"]:
         raise AssertionError(repr((cli.account_changed, sent)))
 
 
@@ -414,7 +414,7 @@ def test_plain_prompt_does_not_change_the_account() -> None:
         "next-secret",
     )
     cli._reach_prompt()
-    if cli.account_changed or sent != ["\r"]:
+    if cli.account_changed or sent != []:
         raise AssertionError(repr((cli.account_changed, sent)))
 
 
@@ -430,7 +430,7 @@ def test_second_password_prompt_is_the_confirmation() -> None:
         "next-secret",
     )
     cli._reach_prompt()
-    if sent != ["\r", "ops\r", "next-secret\r", "next-secret\r"] or not cli.account_changed:
+    if sent != ["ops\r", "next-secret\r", "next-secret\r"] or not cli.account_changed:
         raise AssertionError(repr(sent))
 
 
@@ -446,7 +446,7 @@ def test_echoed_password_prompt_is_not_a_rejection() -> None:
         "next-secret",
     )
     cli._reach_prompt()
-    if sent != ["\r", "ops\r", "next-secret\r", "next-secret\r"]:
+    if sent != ["ops\r", "next-secret\r", "next-secret\r"]:
         raise AssertionError(repr(sent))
 
 
@@ -500,8 +500,72 @@ def test_second_new_user_prompt_stops() -> None:
         raise AssertionError("expected a refusal")
     if "rejected the new administrator name" not in text:
         raise AssertionError(text)
-    if sent != ["\r", "ops\r"]:
+    if sent != ["ops\r"]:
         raise AssertionError(repr(sent))
+
+
+def test_password_lines_are_not_sent_in_one_burst() -> None:
+    events: list[str] = []
+    cli, sent = _scripted_cli(
+        [
+            "New User Name:\r\nNew Password:\r\nAdmin Confirm Password:\r\n",
+            "",
+            "",
+            "CyberPower > ",
+        ],
+        "ops",
+        "next-secret",
+    )
+    original_recv = cli._recv
+    original_send = cli._chan.send
+
+    def recv(wait):
+        events.append("recv")
+        return original_recv(wait)
+
+    def send(data):
+        events.append("send:" + data)
+        original_send(data)
+
+    cli._recv = recv
+    cli._chan.send = send
+    cli._reach_prompt()
+    if sent != ["ops\r", "next-secret\r", "next-secret\r"]:
+        raise AssertionError(repr(sent))
+    first = events.index("send:next-secret\r")
+    second = events.index("send:next-secret\r", first + 1)
+    if "recv" not in events[first + 1 : second]:
+        raise AssertionError(repr(events))
+
+
+def test_confirm_mismatch_does_not_send_another_password() -> None:
+    cli, sent = _scripted_cli(
+        [
+            "New User Name:",
+            "New Password:",
+            "Admin Confirm Password:",
+            "Admin Confirm Password has been entered incorrectly. New Password:",
+        ],
+        "ops",
+        "next-secret",
+    )
+    try:
+        cli._reach_prompt()
+    except RuntimeError as exc:
+        text = str(exc)
+    else:
+        raise AssertionError("expected a refusal")
+    if "entered incorrectly" not in text or "next-secret" in text:
+        raise AssertionError(text)
+    if sent != ["ops\r", "next-secret\r", "next-secret\r"]:
+        raise AssertionError(repr(sent))
+
+
+def test_silent_shell_presses_enter_once() -> None:
+    cli, sent = _scripted_cli(["", "CyberPower > "], "ops", "next-secret")
+    cli._reach_prompt()
+    if cli.account_changed or sent != ["\r"]:
+        raise AssertionError(repr((cli.account_changed, sent)))
 
 
 def test_read_failure_is_not_retried() -> None:
@@ -539,6 +603,9 @@ if __name__ == "__main__":
     test_password_error_quotes_the_card_and_hides_the_secret()
     test_rejected_administrator_password_is_not_retried()
     test_second_new_user_prompt_stops()
+    test_password_lines_are_not_sent_in_one_burst()
+    test_confirm_mismatch_does_not_send_another_password()
+    test_silent_shell_presses_enter_once()
     test_ftp_lists_real_text_names_only()
     test_read_failure_is_not_retried()
     print("ok")

@@ -26,8 +26,8 @@ _PASS_ASK = re.compile(r"pass(?:word)?\b[^\r\n:]{0,40}:", re.I)
 _CONFIRM = re.compile(r"(?i)input\s+admin\s+password\s*:")
 _ACCOUNT_FAIL = re.compile(r"(?im)^fail\s*$|password error")
 _PASSWORD_REJECT = re.compile(
-    r"password error|invalid password|does not match|do not match|not match|"
-    r"too short|too long|not accepted|^fail\b",
+    r"password error|invalid password|entered incorrectly|does not match|do not match|"
+    r"not match|too short|too long|not accepted|^fail\b",
     re.I | re.M,
 )
 _PROMPT_KINDS = (
@@ -214,13 +214,23 @@ class RmcardCli:
         sent_new_user = False
         password_answers = 0
         just_sent = ""
+        # A factory card is already waiting at New User Name. Enter before
+        # that question is a blank name, and the saved password then lands
+        # in the wrong field. Press Enter only when the card has said nothing.
+        started = False
+        woke = False
+        first_read = True
         deadline = time.time() + self.timeout
         buf = ""
-        chan.send("\r")
         while time.time() < deadline:
-            chunk = self._recv(0.6)
+            chunk = self._recv(2.0 if first_read else 0.6)
+            first_read = False
             if chunk:
                 buf += chunk
+            elif not started and not woke and not _prompt_hits(buf):
+                chan.send("\r")
+                woke = True
+                continue
             if sent_new_user and password_answers and _PASSWORD_REJECT.search(buf):
                 raise RuntimeError(self._rejected_password(buf))
             while True:
@@ -243,32 +253,39 @@ class RmcardCli:
                         )
                     chan.send(self.new_user + "\r")
                     sent_new_user = True
+                    started = True
                     self.account_changed = True
                     just_sent = self.new_user
                     buf = buf[end:]
-                    continue
+                    break
                 if sent_new_user and kind in ("confirm", "new_pass", "pass", "pass_ask"):
                     # The second prompt is the confirmation. It often says
                     # "New Password" again, without the word confirm.
+                    # One answer, then read again. The next question may
+                    # already be in this buffer, and a second line in the
+                    # same burst is read into the first field.
                     if password_answers >= 2:
                         raise RuntimeError(self._rejected_password(buf))
                     chan.send(self.new_password + "\r")
                     password_answers += 1
+                    started = True
                     just_sent = self.new_password
                     buf = buf[end:]
-                    continue
+                    break
                 if kind == "user" and not sent_user:
                     chan.send(self.username + "\r")
                     sent_user = True
+                    started = True
                     just_sent = self.username
                     buf = buf[end:]
-                    continue
+                    break
                 if kind in ("pass", "pass_ask") and not sent_pass:
                     chan.send(self.password + "\r")
                     sent_pass = True
+                    started = True
                     just_sent = self.password
                     buf = buf[end:]
-                    continue
+                    break
                 buf = buf[end:]
         raise TimeoutError("timed out waiting for the card prompt")
 

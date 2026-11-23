@@ -251,7 +251,7 @@ function ba_apply_config_modal(PDO $db, string $action, bool $bulk, int $deviceI
     } else {
         echo '<label>Config profile</label><select name="config_id">' . $options . '</select>';
         echo '<label><input type="checkbox" name="factory_login" value="1" checked> Use the factory card login</label>';
-        echo '<p class="muted">Writes this profile to the UPS. The card reboots. The card keeps its own IP address, gateway, subnet mask, hostname, and MAC address. Leave this checked when the card is still at the factory login. Assign a Web/SSH/FTP login on the UPS first. BackAisle signs in over SSH with the factory account, answers the new administrator name with that saved login, sends that password again when the card asks a second time, enables FTP, signs out, and then reads the card over FTP. Turn this off when the card already has its own login.</p>';
+        echo '<p class="muted">Writes this profile to the UPS. The card reboots. The card keeps its own IP address, gateway, subnet mask, hostname, and MAC address. Leave this checked when the card is still at the factory login. Assign a Web/SSH/FTP login on the UPS first. BackAisle signs in over SSH with the factory account, waits until the card asks for a new administrator name, answers with that saved login, waits, and sends that password again when the card asks a second time. It does not press Enter before the card asks. It then enables FTP, signs out, and reads the card over FTP. Turn this off when the card already has its own login.</p>';
         echo '<label>Type APPLY CONFIG</label><input name="confirm" autocomplete="off">';
         echo '<button>Apply config profile</button>';
     }
