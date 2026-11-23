@@ -256,27 +256,187 @@ def test_factory_login_enables_ftp_then_signs_out() -> None:
     seen: list[str] = []
 
     class Fake:
-        def __init__(self, ip, user, password, timeout=20):
+        def __init__(self, ip, user, password, timeout=20, new_user=None, new_password=None):
             if ip != "10.1.1.1" or not user or not password:
                 raise AssertionError("missing login")
+            self.account_changed = False
+
         def __enter__(self):
             return self
+
         def __exit__(self, exc_type, exc, tb):
             return None
+
         def run(self, command):
             seen.append(command)
             return "ok"
+
         def sign_out(self):
             seen.append("exit")
 
     def waited(ip, user, password, timeout_s=45):
         seen.append("wait")
-        if timeout_s != 45:
-            raise AssertionError(timeout_s)
+        if user != "card" or timeout_s != 45:
+            raise AssertionError(user)
 
-    writer.enable_factory_ftp("10.1.1.1", "card", "secret", opener=Fake, wait=waited)
-    if seen != ["ftp access enable", "exit", "wait"]:
+    changed = writer.enable_factory_ftp("10.1.1.1", "card", "secret", opener=Fake, wait=waited)
+    if changed or seen != ["ftp access enable", "exit", "wait"]:
         raise AssertionError(repr(seen))
+
+
+def test_factory_login_reads_with_the_new_account() -> None:
+    import writer
+
+    seen: list[str] = []
+
+    class Fake:
+        def __init__(self, ip, user, password, timeout=20, new_user=None, new_password=None):
+            self.account_changed = True
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def run(self, command):
+            seen.append(command)
+            return "ok"
+
+        def sign_out(self):
+            seen.append("exit")
+
+    def waited(ip, user, password, timeout_s=45):
+        seen.append("ftp:" + user)
+        if password != "next-secret" or timeout_s != 45:
+            raise AssertionError("ftp login")
+
+    changed = writer.enable_factory_ftp(
+        "10.1.1.1", "card", "secret", "ops", "next-secret", opener=Fake, wait=waited
+    )
+    if not changed or seen != ["ftp access enable", "exit", "ftp:ops"]:
+        raise AssertionError(repr(seen))
+
+
+def _scripted_cli(chunks: list[str], new_user: str = "", new_password: str = ""):
+    from rmcard_cli import RmcardCli
+
+    sent: list[str] = []
+    pending = list(chunks)
+
+    class Chan:
+        def send(self, data):
+            sent.append(data)
+
+    cli = RmcardCli(
+        "10.1.1.1",
+        "card",
+        "secret",
+        new_user=new_user or None,
+        new_password=new_password or None,
+    )
+    cli._chan = Chan()
+
+    def recv(_wait):
+        if not pending:
+            return ""
+        return pending.pop(0)
+
+    cli._recv = recv
+    return cli, sent
+
+
+def test_first_login_answers_new_user_name() -> None:
+    cli, sent = _scripted_cli(
+        [
+            "CyberPower SystemsCommand Shell v1.0\r\nNew User Name:",
+            "New Password:",
+            "Confirm Password:",
+            "CyberPower > ",
+        ],
+        "ops",
+        "next-secret",
+    )
+    cli._reach_prompt()
+    if sent != ["\r", "ops\r", "next-secret\r", "next-secret\r"]:
+        raise AssertionError(repr(sent))
+    if not cli.account_changed:
+        raise AssertionError("account was not marked changed")
+
+
+def test_first_login_without_a_saved_name_does_not_send_the_factory_user() -> None:
+    cli, sent = _scripted_cli(
+        ["CyberPower SystemsCommand Shell v1.0\r\nNew User Name:"],
+    )
+    try:
+        cli._reach_prompt()
+    except RuntimeError as exc:
+        text = str(exc)
+    else:
+        raise AssertionError("expected a refusal")
+    if "Assign a Web/SSH/FTP login on this UPS first." not in text:
+        raise AssertionError(text)
+    if sent != ["\r"]:
+        raise AssertionError(repr(sent))
+
+
+def test_first_login_accepts_a_plain_password_prompt() -> None:
+    cli, sent = _scripted_cli(
+        [
+            "New User Name:",
+            "Password:",
+            "Password:",
+            "CyberPower > ",
+        ],
+        "ops",
+        "next-secret",
+    )
+    cli._reach_prompt()
+    if sent != ["\r", "ops\r", "next-secret\r", "next-secret\r"] or not cli.account_changed:
+        raise AssertionError(repr(sent))
+
+
+def test_shell_login_keeps_the_session_account() -> None:
+    cli, sent = _scripted_cli(
+        ["User Name:", "Password:", "CyberPower > "],
+        "ops",
+        "next-secret",
+    )
+    cli._reach_prompt()
+    if cli.account_changed or sent != ["\r", "card\r", "secret\r"]:
+        raise AssertionError(repr((cli.account_changed, sent)))
+
+
+def test_plain_prompt_does_not_change_the_account() -> None:
+    cli, sent = _scripted_cli(
+        ["CyberPower SystemsCommand Shell v1.0\r\nCyberPower > "],
+        "ops",
+        "next-secret",
+    )
+    cli._reach_prompt()
+    if cli.account_changed or sent != ["\r"]:
+        raise AssertionError(repr((cli.account_changed, sent)))
+
+
+def test_second_new_user_prompt_stops() -> None:
+    cli, sent = _scripted_cli(
+        [
+            "New User Name:",
+            "New User Name:",
+        ],
+        "ops",
+        "next-secret",
+    )
+    try:
+        cli._reach_prompt()
+    except RuntimeError as exc:
+        text = str(exc)
+    else:
+        raise AssertionError("expected a refusal")
+    if "rejected the new administrator name" not in text:
+        raise AssertionError(text)
+    if sent != ["\r", "ops\r"]:
+        raise AssertionError(repr(sent))
 
 
 def test_read_failure_is_not_retried() -> None:
@@ -303,6 +463,13 @@ if __name__ == "__main__":
     test_config_name_uses_the_card_minute_first()
     test_ftp_timeout_tries_the_next_clock()
     test_factory_login_enables_ftp_then_signs_out()
+    test_factory_login_reads_with_the_new_account()
+    test_first_login_answers_new_user_name()
+    test_first_login_accepts_a_plain_password_prompt()
+    test_first_login_without_a_saved_name_does_not_send_the_factory_user()
+    test_shell_login_keeps_the_session_account()
+    test_plain_prompt_does_not_change_the_account()
+    test_second_new_user_prompt_stops()
     test_ftp_lists_real_text_names_only()
     test_read_failure_is_not_retried()
     print("ok")

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.110] - 2026-11-23
+
+- Apply config profile with the factory login checked answers the first SSH prompt for a new administrator name. That name and password are the Web/SSH/FTP login saved on the UPS. Assign that login before the job. The saved login must not be the factory account.
+- The writer then enables FTP, signs out, and reads the card over FTP. The later read uses the new login when the card asked for a new name. A card that opens at the command prompt keeps the factory login for that read.
+- Turn the factory login off when the card already has its own login. That path does not change the FTP service or the administrator name.
+- The card still keeps its own IP address, gateway, subnet mask, hostname, and MAC address. The card reboots after the profile is written.
+- The writer reloads when writer.py is newer than the running process, or when an update asks for a restart. The collector does not need a restart.
+
 ## [0.5.109] - 2026-11-23
 
 - Apply config profile with the factory login checked signs in over SSH, enables FTP, signs out, and then reads the card over FTP. A new card leaves FTP disabled until that step.

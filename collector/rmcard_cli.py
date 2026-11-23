@@ -12,6 +12,9 @@ from paramiko.rsakey import RSAKey
 from card_commands import IDENTITY_SHOW_LIMIT, _LINE
 
 _PROMPT = re.compile(r"(?m)^CyberPower >\s*$")
+_NEW_USER = re.compile(r"new\s+user\s*name\s*:", re.I)
+_NEW_PASS = re.compile(r"new\s+pass(?:word)?\s*:", re.I)
+_NEW_CONFIRM = re.compile(r"(?:confirm|retype)\s+(?:new\s+)?pass(?:word)?\s*:", re.I)
 _USER = re.compile(r"user\s*name\s*:", re.I)
 _PASS = re.compile(r"password\s*:", re.I)
 _CONFIRM = re.compile(r"(?i)input\s+admin\s+password\s*:")
@@ -32,12 +35,25 @@ def _allow_ssh_rsa_host_key(transport: paramiko.Transport) -> None:
 
 
 class RmcardCli:
-    def __init__(self, host: str, username: str, password: str, timeout: float = 20):
+    def __init__(
+        self,
+        host: str,
+        username: str,
+        password: str,
+        timeout: float = 20,
+        new_user: str | None = None,
+        new_password: str | None = None,
+    ):
         self.host = host
         self.username = username
         self.password = password
+        self.new_user = (new_user or "").strip()
+        self.new_password = new_password or ""
+        self.account_changed = False
         self._confirm_password = password
         self._secrets = [password] if password else []
+        if self.new_password:
+            self._remember(self.new_password)
         self.timeout = timeout
         self._transport: paramiko.Transport | None = None
         self._chan = None
@@ -148,6 +164,9 @@ class RmcardCli:
         assert chan is not None
         sent_user = False
         sent_pass = False
+        sent_new_user = False
+        sent_new_pass = False
+        sent_confirm = False
         deadline = time.time() + self.timeout
         buf = ""
         chan.send("\r")
@@ -157,16 +176,55 @@ class RmcardCli:
                 buf += chunk
             if _PROMPT.search(buf):
                 return
+            if _NEW_USER.search(buf):
+                if sent_new_user:
+                    raise RuntimeError("the card rejected the new administrator name")
+                if not self.new_user or not self.new_password:
+                    raise RuntimeError(
+                        "the card requires a new administrator name. "
+                        "Assign a Web/SSH/FTP login on this UPS first."
+                    )
+                chan.send(self.new_user + "\r")
+                sent_new_user = True
+                self.account_changed = True
+                buf = ""
+                continue
+            if _NEW_CONFIRM.search(buf):
+                if sent_confirm:
+                    raise RuntimeError("the card rejected the new administrator password")
+                chan.send(self.new_password + "\r")
+                sent_confirm = True
+                buf = ""
+                continue
+            if _NEW_PASS.search(buf):
+                if sent_new_pass:
+                    raise RuntimeError("the card rejected the new administrator password")
+                chan.send(self.new_password + "\r")
+                sent_new_pass = True
+                buf = ""
+                continue
             if _USER.search(buf) and not sent_user:
                 chan.send(self.username + "\r")
                 sent_user = True
                 buf = ""
                 continue
-            if _PASS.search(buf) and not sent_pass:
-                chan.send(self.password + "\r")
-                sent_pass = True
-                buf = ""
-                continue
+            if _PASS.search(buf):
+                # After New User Name, every password prompt is the new account.
+                # The card may say "Password:" rather than "New Password:".
+                if sent_new_user:
+                    if sent_confirm:
+                        raise RuntimeError("the card rejected the new administrator password")
+                    chan.send(self.new_password + "\r")
+                    if sent_new_pass:
+                        sent_confirm = True
+                    sent_new_pass = True
+                    buf = ""
+                    continue
+                if not sent_pass:
+                    chan.send(self.password + "\r")
+                    sent_pass = True
+                    buf = ""
+                    continue
         raise TimeoutError("timed out waiting for the card prompt")
 
     def _read(self, done, timeout: float) -> str:

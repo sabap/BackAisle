@@ -635,21 +635,38 @@ def run_pull(con, job: dict, secrets: dict) -> None:
     )
 
 
-def enable_factory_ftp(ip: str, user: str, password: str, opener=None, wait=None) -> None:
-    """A factory card has FTP off. SSH enables it, then exit makes that change active."""
+def enable_factory_ftp(
+    ip: str,
+    user: str,
+    password: str,
+    new_user: str | None = None,
+    new_password: str | None = None,
+    opener=None,
+    wait=None,
+) -> bool:
+    """A factory card has FTP off. The first SSH login may demand a new account.
+
+    The saved Web/SSH/FTP login is that new account. exit makes FTP active.
+    Returns True when the card accepted the new account, so later FTP uses it.
+    """
     from rmcard_cli import RmcardCli
 
     Cli = opener or RmcardCli
+    changed = False
     try:
-        with Cli(ip, user, password) as cli:
+        with Cli(ip, user, password, new_user=new_user, new_password=new_password) as cli:
+            changed = bool(getattr(cli, "account_changed", False))
             cli.run("ftp access enable")
             cli.sign_out()
     except Exception as exc:
         raise RuntimeError("could not enable FTP over SSH: " + str(exc)) from exc
+    ftp_user = new_user if changed and new_user else user
+    ftp_pass = new_password if changed and new_password else password
     try:
-        (wait or wait_ftp_alive)(ip, user, password, timeout_s=45)
+        (wait or wait_ftp_alive)(ip, ftp_user, ftp_pass, timeout_s=45)
     except Exception as exc:
         raise RuntimeError("FTP did not answer after SSH enabled it: " + str(exc)) from exc
+    return changed
 
 
 def run_push_config(con, job: dict, secrets: dict) -> None:
@@ -678,12 +695,29 @@ def run_push_config(con, job: dict, secrets: dict) -> None:
         ident_map = (payload.get("identity_maps") or {}).get(str(t["device_id"])) or {}
         read_seq = 1
         if keep_network and payload_flag(payload, "factory_login"):
+            saved = assigned_card_login(con, t)
+            if saved is None:
+                raise RuntimeError(
+                    "Assign a Web/SSH/FTP login on this UPS before applying a profile "
+                    "with the factory login. The card requires a new administrator name."
+                )
+            new_user, new_pw = saved
+            if new_user.strip().lower() == RMCARD_FACTORY_USER.lower() or new_pw == RMCARD_FACTORY_PASS:
+                raise RuntimeError(
+                    "Choose a Web/SSH/FTP login that is not the factory account. "
+                    "The card rejects that name and password."
+                )
             step(con, tid, 1, "enable_ftp", "running", "SSH factory login")
             if simulate:
                 step(con, tid, 1, "enable_ftp", "ok", "SIMULATE ftp access enable")
             else:
-                enable_factory_ftp(t["ip"], user, pw)
-                step(con, tid, 1, "enable_ftp", "ok", "FTP enabled over SSH")
+                changed = enable_factory_ftp(t["ip"], user, pw, new_user, new_pw)
+                if changed:
+                    user, pw = new_user, new_pw
+                detail = "FTP enabled over SSH"
+                if changed:
+                    detail += ". Administrator name updated."
+                step(con, tid, 1, "enable_ftp", "ok", detail)
             read_seq = 2
         if keep_network:
             step(con, tid, read_seq, "read_config", "running", "reading this card over FTP")
