@@ -68,7 +68,163 @@ def test_failed_login_logs_out() -> None:
     assert "logout.html" in events[last_login + 1 :]
 
 
+def test_save_does_not_walk_the_card_site() -> None:
+    sess = _session()
+    calls = []
+    body = b"CyberPowerSystems, RMCARD205\nSYSTEM_IP_ADDRESS, 10.1.1.1\nNTP_ENABLE, Enabled\n"
+
+    def fetch(path, data=None, timeout=30):
+        calls.append(path)
+        if path == "get_set.cgi?getset=Save":
+            return (
+                "https://card/save",
+                200,
+                {"content-disposition": "attachment; filename=2026_11_23_0000.txt"},
+                body,
+            )
+        raise AssertionError(path)
+
+    sess.fetch = fetch
+    _data, name = sess.download_config()
+    if calls != ["get_set.cgi?getset=Save"]:
+        raise AssertionError(repr(calls))
+    if not name.endswith(".txt"):
+        raise AssertionError(name)
+
+
+def test_save_stops_after_known_urls() -> None:
+    sess = _session()
+    calls = []
+
+    def fetch(path, data=None, timeout=30):
+        calls.append(path)
+        return ("https://card/x", 200, {}, b"<html href='summary.cgi'></html>")
+
+    sess.fetch = fetch
+    try:
+        sess.download_config()
+        raise AssertionError("save should fail")
+    except RuntimeError as exc:
+        if "Save Configuration" not in str(exc):
+            raise
+    if "about.html" in calls or len(calls) > 4:
+        raise AssertionError(repr(calls))
+
+
+def test_deadline_stops_before_login() -> None:
+    sess = _session()
+    calls: list[str] = []
+
+    def fetch(path, data=None, timeout=30):
+        calls.append(path)
+        return ("https://card/" + path, 200, {}, b"ok")
+
+    sess.fetch = fetch
+    try:
+        sess.login(tries=1, deadline=rmcard_http.time.monotonic() - 1)
+        raise AssertionError("login should stop")
+    except rmcard_http.CardReadDeadline:
+        pass
+    if calls:
+        raise AssertionError(repr(calls))
+
+
+def test_deadline_stops_before_save() -> None:
+    sess = _session()
+    calls: list[str] = []
+
+    def fetch(path, data=None, timeout=30):
+        calls.append(path)
+        return ("https://card/save", 200, {}, b"CyberPowerSystems, RMCARD205\n")
+
+    sess.fetch = fetch
+    try:
+        sess.download_config(deadline=rmcard_http.time.monotonic() - 1)
+        raise AssertionError("save should stop")
+    except rmcard_http.CardReadDeadline:
+        pass
+    if calls:
+        raise AssertionError(repr(calls))
+
+
+def test_timed_login_tries_one_logout() -> None:
+    sess = _session()
+    calls: list[str] = []
+
+    def fetch(path, data=None, timeout=30):
+        calls.append(path)
+        if path == "logout.html":
+            raise OSError("down")
+        if path == "login.cgi?action=LOGIN":
+            return ("https://card/summary.html", 200, {}, b"summary.html")
+        return ("https://card/" + path, 200, {}, b"ok")
+
+    sess.fetch = fetch
+    sess.login(tries=1, deadline=rmcard_http.time.monotonic() + 30)
+    if "logout.cgi" in calls or "login.cgi?action=LOGOUT" in calls:
+        raise AssertionError(repr(calls))
+    if "logout.html" not in calls:
+        raise AssertionError(repr(calls))
+
+
+def test_config_name_uses_the_card_minute_first() -> None:
+    from datetime import datetime, timezone
+    from rmcard_ftp import config_pull_names, parse_snmp_date
+
+    card = datetime(2026, 11, 23, 14, 46)
+    local = datetime(2026, 11, 23, 9, 10)
+    utc = datetime(2026, 11, 23, 19, 46, tzinfo=timezone.utc)
+    names = config_pull_names(card, local, utc)
+    if names[0] != "2026_11_23_1446.txt":
+        raise AssertionError(repr(names))
+    if "2026_11_23_1445.txt" not in names or "2026_11_23_1447.txt" not in names:
+        raise AssertionError(repr(names))
+    if "2026_11_23_0910.txt" not in names or "2026_11_23_1946.txt" not in names:
+        raise AssertionError(repr(names))
+    found = parse_snmp_date("0x07ea0b170e2e0000")
+    if found != card:
+        raise AssertionError(repr(found))
+    text = parse_snmp_date("2026-11-23,14:46:13.0,-5:0")
+    if text != card:
+        raise AssertionError(repr(text))
+
+
+def test_ftp_lists_real_text_names_only() -> None:
+    from rmcard_ftp import ftp_text_names
+
+    names = ftp_text_names([
+        "cpsrm2scfw.bin",
+        "folder/2026_11_23_0101.txt",
+        "../secret.txt",
+        "notes.TXT",
+        "2026_11_23_0101.txt",
+    ])
+    if names != ["2026_11_23_0101.txt", "notes.TXT"]:
+        raise AssertionError(repr(names))
+
+
+def test_read_failure_is_not_retried() -> None:
+    import writer
+
+    samples = (
+        "could not read the card config: timed out",
+        "card read deadline",
+        "job cancelled",
+    )
+    for text in samples:
+        if writer.is_retryable(RuntimeError(text)):
+            raise AssertionError(text)
+
+
 if __name__ == "__main__":
     test_retry_logs_out_before_the_next_login()
     test_failed_login_logs_out()
+    test_save_does_not_walk_the_card_site()
+    test_save_stops_after_known_urls()
+    test_deadline_stops_before_login()
+    test_deadline_stops_before_save()
+    test_timed_login_tries_one_logout()
+    test_config_name_uses_the_card_minute_first()
+    test_ftp_lists_real_text_names_only()
+    test_read_failure_is_not_retried()
     print("ok")

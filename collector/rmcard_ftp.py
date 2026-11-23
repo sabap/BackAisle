@@ -2,9 +2,73 @@
 from __future__ import annotations
 
 import io
+import re
 import time
-from ftplib import FTP, error_perm
+from datetime import datetime, timedelta
+from ftplib import FTP, error_perm, error_temp
 from pathlib import Path
+
+# The card builds this file when the name matches its current minute. NLST stays empty.
+CONFIG_STAMP = re.compile(r"^\d{4}_\d{2}_\d{2}_\d{4}\.txt$")
+
+
+def config_stamp(moment: datetime) -> str:
+    """YYYY_MM_DD_HHMM.txt from a clock. The card uses its own local time."""
+    return moment.strftime("%Y_%m_%d_%H%M.txt")
+
+
+def config_pull_names(card: datetime | None, local: datetime, utc: datetime) -> list[str]:
+    """Likely save-file names. The card minute comes first, then one minute either side."""
+    ordered: list[str] = []
+
+    def add(moment: datetime | None, span: int) -> None:
+        if moment is None:
+            return
+        deltas = [0]
+        for step in range(1, span + 1):
+            deltas.extend((-step, step))
+        for delta in deltas:
+            name = config_stamp(moment + timedelta(minutes=delta))
+            if name not in ordered:
+                ordered.append(name)
+
+    add(card, 1)
+    add(local.replace(tzinfo=None) if local.tzinfo else local, 1)
+    add(utc.replace(tzinfo=None) if utc.tzinfo else utc, 1)
+    return ordered[:9]
+
+
+def parse_snmp_date(text: str | None) -> datetime | None:
+    """HOST-RESOURCES hrSystemDate. The octets are the card's local clock."""
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    matched = re.match(
+        r"(\d{4})-(\d{2})-(\d{2})[ T,](\d{2}):(\d{2})",
+        raw,
+    )
+    if matched:
+        year, month, day, hour, minute = (int(part) for part in matched.groups())
+        try:
+            return datetime(year, month, day, hour, minute)
+        except ValueError:
+            return None
+    hex_text = raw[2:] if raw.lower().startswith("0x") else raw
+    hex_text = re.sub(r"[^0-9A-Fa-f]", "", hex_text)
+    if len(hex_text) < 16 or len(hex_text) % 2:
+        return None
+    try:
+        blob = bytes.fromhex(hex_text[:22] if len(hex_text) >= 22 else hex_text[:16])
+    except ValueError:
+        return None
+    if len(blob) < 7:
+        return None
+    year = (blob[0] << 8) | blob[1]
+    month, day, hour, minute = blob[2], blob[3], blob[4], blob[5]
+    try:
+        return datetime(year, month, day, hour, minute)
+    except ValueError:
+        return None
 
 
 def ftp_connect(host: str, user: str, password: str, timeout: int = 20) -> FTP:
@@ -13,6 +77,78 @@ def ftp_connect(host: str, user: str, password: str, timeout: int = 20) -> FTP:
     ftp.login(user, password)
     ftp.set_pasv(True)
     return ftp
+
+
+def ftp_text_names(names: list[str]) -> list[str]:
+    """Basenames of .txt files on the card. A guessed timestamp is not a real file."""
+    found: list[str] = []
+    for name in names:
+        raw = str(name or "").replace("\\", "/").strip()
+        if not raw or ".." in raw:
+            continue
+        base = raw.split("/")[-1].strip()
+        if not base or "/" in base:
+            continue
+        if not base.lower().endswith(".txt"):
+            continue
+        if base not in found:
+            found.append(base)
+        if len(found) >= 4:
+            break
+    return found
+
+
+def ftp_read_text_files(host: str, user: str, password: str, timeout: int = 4) -> list[tuple[str, bytes]]:
+    """Read up to four .txt files already stored on the card."""
+    timeout = 2 if timeout < 2 else min(int(timeout), 8)
+    ftp = ftp_connect(host, user, password, timeout)
+    out: list[tuple[str, bytes]] = []
+    try:
+        listed = ftp.nlst()
+        for base in ftp_text_names(list(listed or [])):
+            buf = io.BytesIO()
+            try:
+                ftp.retrbinary(f"RETR {base}", buf.write)
+            except error_perm:
+                continue
+            data = buf.getvalue()
+            if len(data) > 1_000_000:
+                continue
+            out.append((base, data))
+        return out
+    finally:
+        _close(ftp)
+
+
+def ftp_get_named_config(host: str, user: str, password: str, names: list[str], timeout: int = 6) -> tuple[bytes, str]:
+    """One FTP login. RETR each clock name until the card returns a file.
+
+    A wrong minute is a quick refusal. The directory listing is empty, so the
+    name has to be the card's current YYYY_MM_DD_HHMM.txt.
+    """
+    allowed = [name for name in names if CONFIG_STAMP.match(name)]
+    if not allowed:
+        raise RuntimeError("ftp config name missing")
+    timeout = 3 if timeout < 3 else min(int(timeout), 12)
+    ftp = ftp_connect(host, user, password, timeout)
+    try:
+        last = "ftp did not return a config file"
+        for name in allowed:
+            buf = io.BytesIO()
+            try:
+                ftp.retrbinary(f"RETR {name}", buf.write)
+            except (error_perm, error_temp) as exc:
+                last = str(exc)
+                continue
+            data = buf.getvalue()
+            if len(data) > 1_000_000:
+                last = "ftp file too large"
+                continue
+            if data:
+                return data, name
+        raise RuntimeError(last)
+    finally:
+        _close(ftp)
 
 
 def ftp_get_config(host: str, user: str, password: str, filename: str, timeout: int = 30) -> bytes:

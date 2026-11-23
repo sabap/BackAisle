@@ -50,6 +50,10 @@ class _StayOnHttpRedirect(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+class CardReadDeadline(TimeoutError):
+    """The card read used its time budget. The socket may still be open."""
+
+
 class RmcardSession:
     def __init__(self, host: str, user: str, password: str, scheme: str | None = None):
         self.host = host
@@ -70,7 +74,16 @@ class RmcardSession:
             handlers.insert(0, _StayOnHttpRedirect())
         self.opener = urllib.request.build_opener(*handlers)
 
-    def fetch(self, path: str, data: dict | bytes | None = None, timeout: int = 30):
+    def _timeout_for(self, timeout: int, deadline: float | None) -> int:
+        """Seconds for the next request. A passed deadline aborts before the socket opens."""
+        if deadline is None:
+            return timeout
+        left = deadline - time.monotonic()
+        if left < 1:
+            raise CardReadDeadline("card read deadline")
+        return max(1, min(int(timeout), int(left)))
+
+    def fetch(self, path: str, data: dict | bytes | None = None, timeout: int = 8):
         url = path if path.startswith("http") else self.base + path.lstrip("/")
         body = None
         if isinstance(data, dict):
@@ -83,17 +96,23 @@ class RmcardSession:
             hdr = {k.lower(): v for k, v in resp.headers.items()}
             return resp.geturl(), resp.status, hdr, raw
 
-    def logout(self) -> None:
-        for path in (
+    def logout(self, deadline: float | None = None) -> None:
+        # A timed read tries one logout. Walking every logout URL at a few
+        # seconds each is what held a job open after the card had stopped answering.
+        paths = ("logout.html",) if deadline is not None else (
             "logout.html",
             "logout.cgi",
             "logout.cgi?action=LOGOUT",
             "login.cgi?action=LOGOUT",
             "login.html?action=LOGOUT",
             "log_out.html",
-        ):
+        )
+        for path in paths:
             try:
-                self.fetch(path, timeout=8)
+                self.fetch(path, timeout=self._timeout_for(3 if deadline is not None else 4, deadline))
+                return
+            except CardReadDeadline:
+                raise
             except Exception:
                 pass
 
@@ -121,19 +140,33 @@ class RmcardSession:
             return True
         return False
 
-    def _login_once(self):
-        """Full login_pass + counter dance. Stopping the counter early lands on error.html."""
-        self.fetch("login.html")
-        self.fetch("login_pass.cgi", {"username": self.user, "password": self.password, "action": "LOGIN"})
-        for step in (0, 1, 2, 2, 2, 2, 2):
-            self.fetch(f"login_counter.html?stap={step}")
-            time.sleep(0.4)
-        return self.fetch("login.cgi?action=LOGIN")
+    def _pause(self, seconds: float, deadline: float | None) -> None:
+        if deadline is not None and (deadline - time.monotonic()) < seconds + 1:
+            return
+        time.sleep(seconds)
 
-    def _confirm_home(self) -> bool:
+    def _login_once(self, deadline: float | None = None):
+        """Full login_pass + counter dance. Stopping the counter early lands on error.html."""
+        self.fetch("login.html", timeout=self._timeout_for(8, deadline))
+        self.fetch(
+            "login_pass.cgi",
+            {"username": self.user, "password": self.password, "action": "LOGIN"},
+            timeout=self._timeout_for(8, deadline),
+        )
+        for step in (0, 1, 2, 2, 2, 2, 2):
+            self.fetch(
+                f"login_counter.html?stap={step}",
+                timeout=self._timeout_for(8, deadline),
+            )
+            self._pause(0.4, deadline)
+        return self.fetch("login.cgi?action=LOGIN", timeout=self._timeout_for(8, deadline))
+
+    def _confirm_home(self, deadline: float | None = None) -> bool:
         """The login reply is sometimes not summary.html even after this process took the slot."""
         try:
-            url, _st, _hd, raw = self.fetch("summary.html", timeout=8)
+            url, _st, _hd, raw = self.fetch("summary.html", timeout=self._timeout_for(8, deadline))
+        except CardReadDeadline:
+            raise
         except Exception:
             return False
         if self._busy_session(url, raw):
@@ -146,22 +179,23 @@ class RmcardSession:
             return True
         return False
 
-    def login(self) -> None:
+    def login(self, tries: int = 3, deadline: float | None = None) -> None:
         # The card allows one web session. A second login from this same job
         # looks like "someone is currently logged in" even when no browser is open.
         # Log out with this process's cookies before every attempt, and again at the end.
         last_url, last_status, last_raw = "", 0, b""
-        for attempt in range(3):
-            self.logout()
-            time.sleep(0.4 if attempt == 0 else 0.8)
-            url, status, _hd, raw = self._login_once()
+        tries = 1 if tries < 1 else min(int(tries), 3)
+        for attempt in range(tries):
+            self.logout(deadline=deadline)
+            self._pause(0.4 if attempt == 0 else 0.8, deadline)
+            url, status, _hd, raw = self._login_once(deadline)
             last_url, last_status, last_raw = url, status, raw
             if self._logged_in(url, raw):
                 self._home = raw
                 return
-            if self._confirm_home():
+            if self._confirm_home(deadline):
                 return
-        self.logout()
+        self.logout(deadline=deadline)
         if self._busy_session(last_url, last_raw):
             raise RuntimeError(
                 "web login failed: the card already has one web session. "
@@ -170,43 +204,30 @@ class RmcardSession:
             )
         raise RuntimeError(f"web login failed: {last_url} status={last_status} bytes={len(last_raw)}")
 
-    def download_config(self) -> tuple[bytes, str]:
-        """Click System → About Save Configuration. Returns (bytes, filename)."""
-        url, st, hd, body = self.fetch("get_set.cgi?getset=Save")
-        if _looks_like_rmcard_config(body):
-            return body, _filename_from_headers(hd, body)
-        url, st, hd, about = self.fetch("about.html")
-        if _looks_like_rmcard_config(about):
-            return about, _filename_from_headers(hd, about)
-        endpoints = ["get_set.cgi?getset=Save"]
-        for m in re.finditer(rb'(?:href|action|src)=["\']([^"\']+)["\']', about, re.I):
-            endpoints.append(m.group(1).decode("latin1", "replace"))
-        endpoints += [
-            "save_file.cgi", "save_file.cgi?action=saveconfig", "save_config.cgi",
-            "saveconfig.cgi", "config_save.cgi", "about.cgi?action=Save",
-            "save.cgi", "download.cgi?type=config", "sys_about.cgi?action=save",
-            "save_setting.cgi", "NMS_saveconfig.cgi",
-        ]
-        seen = set()
-        for target in endpoints:
-            if not target or target.startswith("JavaScript") or target in seen:
-                continue
-            seen.add(target)
-            if not re.search(r"save|config|download|about|file|\.cgi|\.txt", target, re.I):
-                continue
+    def download_config(self, timeout: int = 8, deadline: float | None = None) -> tuple[bytes, str]:
+        """System → About Save Configuration. One known URL, then a few alternates.
+
+        Do not walk every link on the card. A full page scrape waits on each
+        address and can hold a write job for half an hour.
+        """
+        candidates = (
+            "get_set.cgi?getset=Save",
+            "save_file.cgi",
+            "save_config.cgi",
+            "about.cgi?action=Save",
+        )
+        timeout = 4 if timeout < 4 else min(int(timeout), 12)
+        for target in candidates:
             try:
-                u2, st2, hd2, b2 = self.fetch(target)
+                budget = self._timeout_for(timeout, deadline)
+            except CardReadDeadline:
+                raise
+            try:
+                _url, _st, hd, body = self.fetch(target, timeout=budget)
             except Exception:
                 continue
-            if _looks_like_rmcard_config(b2):
-                return b2, _filename_from_headers(hd2, b2)
-            if ".cgi" in target:
-                try:
-                    u3, st3, hd3, b3 = self.fetch(target.split("?")[0], {"action": "Save"})
-                    if _looks_like_rmcard_config(b3):
-                        return b3, _filename_from_headers(hd3, b3)
-                except Exception:
-                    continue
+            if _looks_like_rmcard_config(body):
+                return body, _filename_from_headers(hd, body)
         raise RuntimeError("could not find RMCARD Save Configuration download")
 
     def restore_config_http(self, content: bytes, filename: str) -> str:

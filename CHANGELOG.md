@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.107] - 2026-11-23
+
+- The writer reads a UPS config over FTP. Firmware 1.4.0 and later builds a file named for the current minute. The website Save is used only when FTP does not return that file.
+- The read stops at 30 seconds. A failed read is not tried again. Nothing is written while that step is still running.
+- A writer start closes a job left Running. That job is marked failed. Run Apply config profile again after the new writer is loaded.
+- SCP still uploads the config. An SCP download of the save file is not used.
+- The writer reloads when writer.py is newer than the running process, or when an update asks for a restart. The collector does not need a restart.
+
 ## [0.5.106] - 2026-11-21
 
 - An in-app update stops the writer before it copies a new writer.py. The previous reload copied the file while the program still had it open, so the copy failed and the old program started again.

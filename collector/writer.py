@@ -38,8 +38,20 @@ from config_file import (  # noqa: E402
 )
 from profiles import get_secret  # noqa: E402
 from db import connect, init_db  # noqa: E402
-from rmcard_ftp import ftp_get_config, ftp_put_config, ftp_put_firmware_bin, wait_ftp_alive  # noqa: E402
-from rmcard_http import RmcardSession, _looks_like_rmcard_config, wait_http_alive  # noqa: E402
+from rmcard_ftp import (  # noqa: E402
+    config_pull_names,
+    ftp_get_named_config,
+    ftp_put_config,
+    ftp_put_firmware_bin,
+    parse_snmp_date,
+    wait_ftp_alive,
+)
+from rmcard_http import (  # noqa: E402
+    CardReadDeadline,
+    RmcardSession,
+    _looks_like_rmcard_config,
+    wait_http_alive,
+)
 from rmcard_scp import scp_put_config  # noqa: E402
 from secrets import load_secrets  # noqa: E402
 from snmp_client import SET_OIDS, snmp_get, snmp_get_one, snmp_set  # noqa: E402
@@ -130,6 +142,10 @@ def write_retries(secrets: dict) -> int:
     return _secret_int(secrets, "WRITE_RETRIES", 2, 0, 5)
 
 
+# A card read stops here. The old save walk waited on every link and held a job for half an hour.
+CARD_READ_DEADLINE_S = 30
+
+
 def is_retryable(exc: BaseException) -> bool:
     msg = str(exc).lower()
     hard = (
@@ -162,6 +178,9 @@ def is_retryable(exc: BaseException) -> bool:
         "enter at least one",
         "password error",
         "web/ssh/ftp credential",
+        "could not read the card config",
+        "card read deadline",
+        "job cancelled",
     )
     if any(h in msg for h in hard):
         return False
@@ -282,6 +301,14 @@ def _run_target_attempts(con, job: dict, secrets: dict, t: dict, fn, retries: in
             return
         except Exception as e:
             last = e
+            if job_is_cancelled(con, int(job.get("id") or 0)):
+                stop.set()
+                con.execute(
+                    "UPDATE write_job_targets SET status='cancelled', ended_at=?, error=? WHERE id=? AND status='running'",
+                    (now(), "stopped", tid),
+                )
+                con.commit()
+                return
             log(f"{t.get('ip')} attempt {attempt}/{attempts} failed: {e}")
             if attempt < attempts and is_retryable(e) and not stop.is_set():
                 step(con, tid, 80 + attempt, "retry", "ok", f"will retry: {e}"[:2000])
@@ -500,38 +527,86 @@ async def poll_after(ip: str, secrets: dict) -> dict:
     return sample
 
 
-def pull_config_bytes(ip: str, secrets: dict, web_user: str | None = None, web_pass: str | None = None) -> tuple[bytes, str]:
+def card_clock(ip: str, secrets: dict) -> datetime | None:
+    """The card's local time. The save-file name is that minute."""
+    try:
+        user, auth, priv = snmp_creds(secrets)
+        text = asyncio.run(snmp_get_one(
+            ip, user, auth, priv, (1, 3, 6, 1, 2, 1, 25, 1, 2, 0), timeout=3.0,
+        ))
+    except Exception as exc:
+        log(f"card clock skipped: {exc}")
+        return None
+    found = parse_snmp_date(None if text is None else str(text))
+    if found is None:
+        log("card clock unreadable")
+    return found
+
+
+def pull_config_bytes(
+    ip: str,
+    secrets: dict,
+    web_user: str | None = None,
+    web_pass: str | None = None,
+    attempts: int = 2,
+    deadline_s: float | None = None,
+    stop=None,
+) -> tuple[bytes, str]:
+    """Read the card save file over FTP. The website is only the fallback.
+
+    Firmware 1.4.0 and later builds YYYY_MM_DD_HHMM.txt for the card's current
+    minute. The FTP listing is empty. An SCP download of that name is refused
+    by the card, so SCP stays the upload path.
+    """
     du, dp = web_creds(secrets)
     user = (web_user or "").strip() or du
     pw = dp if web_pass in (None, "") else web_pass
-    last = None
-    for attempt in range(3):
+    if deadline_s is None:
+        deadline_s = CARD_READ_DEADLINE_S
+    deadline_s = max(0.0, min(float(deadline_s), 60.0))
+    end = time.monotonic() + deadline_s
+    last: BaseException | None = None
+
+    def halted() -> bool:
+        if stop is not None and stop():
+            raise RuntimeError("job cancelled")
+        return time.monotonic() >= end
+
+    if halted():
+        raise RuntimeError("could not read the card config: card read deadline")
+    clock = card_clock(ip, secrets) if time.monotonic() + 12 < end else None
+    names = config_pull_names(clock, datetime.now(), datetime.now(timezone.utc))
+    log("config file " + names[0] + (" from card clock" if clock is not None else " from this server clock"))
+    if not halted():
+        try:
+            data, name = ftp_get_named_config(ip, user, pw, names, timeout=6)
+            if _looks_like_rmcard_config(data):
+                return data, name
+            last = RuntimeError("ftp file is not an RMCARD config")
+        except Exception as exc:
+            last = exc
+            log(f"ftp get failed: {exc}")
+    if not halted() and time.monotonic() + 8 < end:
         try:
             sess = RmcardSession(ip, user, pw)
             log(f"web session {sess.base}")
             try:
-                sess.login()
-                data, name = sess.download_config()
+                sess.login(tries=1, deadline=end)
+                data, name = sess.download_config(timeout=8, deadline=end)
                 if _looks_like_rmcard_config(data):
                     return data, name
+                last = RuntimeError("could not find RMCARD Save Configuration download")
             finally:
                 try:
-                    sess.logout()
+                    sess.logout(deadline=end)
                 except Exception:
                     pass
-        except Exception as e:
-            last = e
-            log(f"web save failed ({attempt + 1}/3): {e}")
-        ts_name = datetime.now().strftime("%Y_%m_%d_%H%M.txt")
-        try:
-            data = ftp_get_config(ip, user, pw, ts_name)
-            if _looks_like_rmcard_config(data):
-                return data, ts_name
-        except Exception as e:
-            last = e
-            log(f"ftp get {ts_name} failed ({attempt + 1}/3): {e}")
-        time.sleep(8)
-    raise RuntimeError(f"could not pull RMCARD config via web Save or FTP GET: {last}")
+        except Exception as exc:
+            last = exc
+            log(f"web save failed: {exc}")
+    if last is None:
+        last = CardReadDeadline("card read deadline")
+    raise RuntimeError(f"could not read the card config: {last}")
 
 
 def save_config_file(ip: str, data: bytes, name: str) -> Path:
@@ -554,7 +629,9 @@ def run_pull(con, job: dict, secrets: dict) -> None:
     tid = tgt["id"]
     step(con, tid, 1, "pull_config", "running", f"from {ip}")
     user, pw = target_card_login(con, device_id, secrets)
-    data, name = pull_config_bytes(ip, secrets, user, pw)
+    data, name = pull_config_bytes(
+        ip, secrets, user, pw, stop=lambda: job_is_cancelled(con, int(job["id"]))
+    )
     text = data.decode("latin1", "replace")
     if not looks_like_rmcard_config(text):
         raise RuntimeError("file does not look like an RMCARD text config")
@@ -595,8 +672,14 @@ def run_push_config(con, job: dict, secrets: dict) -> None:
         tid = t["id"]
         ident_map = (payload.get("identity_maps") or {}).get(str(t["device_id"])) or {}
         if keep_network:
-            step(con, tid, 1, "read_config", "running", "keep this card address")
-            current, _cur_name = pull_config_bytes(t["ip"], secrets, user, pw)
+            step(con, tid, 1, "read_config", "running", "reading this card over FTP")
+            current, _cur_name = pull_config_bytes(
+                t["ip"],
+                secrets,
+                user,
+                pw,
+                stop=lambda: job_is_cancelled(con, int(job["id"])),
+            )
             host = str(t.get("hostname") or "").strip()
             rewritten = apply_profile_keep_network(raw, current.decode("latin1", "replace"), t["ip"], host)
             step(con, tid, 1, "read_config", "ok", "kept this card address and name")
@@ -750,7 +833,7 @@ def run_provision(con, job: dict, secrets: dict) -> None:
     step(con, tid, 1, "web_login", "running", web_user)
     sess = RmcardSession(device["ip"], web_user, web_pass)
     try:
-        sess.login()
+        sess.login(tries=1, deadline=time.monotonic() + CARD_READ_DEADLINE_S)
         step(con, tid, 1, "web_login", "ok", "factory " + RMCARD_FACTORY_USER + "/" + RMCARD_FACTORY_PASS)
     finally:
         # Provision applies the profile over SCP. Holding the web slot blocks the retry.
@@ -798,7 +881,7 @@ def run_push_cert(con, job: dict, secrets: dict) -> None:
                 step(con, tid, 1, "push_cert", "ok", f"SIMULATE upload {cert['cert_path']} to {t['ip']} RMCARD SSL")
             else:
                 sess = RmcardSession(t["ip"], user, pw)
-                sess.login()
+                sess.login(tries=1, deadline=time.monotonic() + CARD_READ_DEADLINE_S)
                 # Best-effort: POST common SSL CGI names. Card UI remains the fallback.
                 posted = False
                 for path in ("ssl.cgi", "cert.cgi", "https.cgi", "upload_cert.cgi"):
@@ -851,18 +934,14 @@ def run_push_snmpv3(con, job: dict, secrets: dict) -> None:
         try:
             wu, wp = target_card_login(con, t, secrets, prof, sec)
             step(con, tid, 1, "pull_config", "running", f"{t['ip']} writer={writer_version()}")
-            sess = RmcardSession(t["ip"], wu, wp)
-            try:
-                sess.login()
-                data, name = sess.download_config()
-            except Exception:
-                if sess is not None:
-                    try:
-                        sess.logout()
-                    except Exception:
-                        pass
-                    sess = None
-                data, name = pull_config_bytes(t["ip"], secrets, wu, wp)
+            sess = None
+            data, name = pull_config_bytes(
+                t["ip"],
+                secrets,
+                wu,
+                wp,
+                stop=lambda: job_is_cancelled(con, int(job["id"])),
+            )
             text = data.decode("latin1", "replace")
             if not looks_like_rmcard_config(text):
                 raise RuntimeError("pulled file is not an RMCARD text config")
@@ -925,7 +1004,7 @@ def run_push_snmpv3(con, job: dict, secrets: dict) -> None:
                             log(f"ftp restore failed {t['ip']}: {e2}")
                             if sess is None:
                                 sess = RmcardSession(t["ip"], wu, wp)
-                                sess.login()
+                                sess.login(tries=1, deadline=time.monotonic() + CARD_READ_DEADLINE_S)
                             detail = sess.restore_config_http(content, fname)
                 if errors:
                     detail = f"{detail} (after {'; '.join(errors)})"
@@ -986,18 +1065,14 @@ def run_push_traps(con, job: dict, secrets: dict) -> None:
             wu, wp = target_card_login(con, t, secrets, prof, sec)
             dest = dest_arg or local_ip_toward(t["ip"])
             step(con, tid, 1, "pull_config", "running", f"{t['ip']} writer={writer_version()}")
-            sess = RmcardSession(t["ip"], wu, wp)
-            try:
-                sess.login()
-                data, name = sess.download_config()
-            except Exception:
-                if sess is not None:
-                    try:
-                        sess.logout()
-                    except Exception:
-                        pass
-                    sess = None
-                data, name = pull_config_bytes(t["ip"], secrets, wu, wp)
+            sess = None
+            data, name = pull_config_bytes(
+                t["ip"],
+                secrets,
+                wu,
+                wp,
+                stop=lambda: job_is_cancelled(con, int(job["id"])),
+            )
             text = data.decode("latin1", "replace")
             if not looks_like_rmcard_config(text):
                 raise RuntimeError("pulled file is not an RMCARD text config")
@@ -1040,7 +1115,7 @@ def run_push_traps(con, job: dict, secrets: dict) -> None:
                             log(f"ftp restore failed {t['ip']}: {e2}")
                             if sess is None:
                                 sess = RmcardSession(t["ip"], wu, wp)
-                                sess.login()
+                                sess.login(tries=1, deadline=time.monotonic() + CARD_READ_DEADLINE_S)
                             detail = sess.restore_config_http(content, fname)
                 if errors:
                     detail = f"{detail} (after {'; '.join(errors)})"
@@ -1310,12 +1385,51 @@ def process_job(job_id: int) -> None:
         con.close()
 
 
+def fail_orphaned_jobs(con) -> None:
+    """A writer that was stopped mid-job leaves that job Running forever."""
+    msg = "writer stopped while this job was running"
+    waiting = "writer stopped before this UPS was started"
+    rows = con.execute("SELECT id FROM write_jobs WHERE status='running'").fetchall() or []
+    for row in rows:
+        jid = int(row["id"])
+        con.execute(
+            """UPDATE write_job_steps SET status='fail', detail=?
+               WHERE status='running' AND target_id IN (
+                 SELECT id FROM write_job_targets WHERE job_id=? AND status='running'
+               )""",
+            (msg, jid),
+        )
+        con.execute(
+            "UPDATE write_job_targets SET status='fail', ended_at=?, error=? WHERE job_id=? AND status='running'",
+            (now(), msg, jid),
+        )
+        con.execute(
+            "UPDATE write_job_targets SET status='fail', ended_at=?, error=? WHERE job_id=? AND status='queued'",
+            (now(), waiting, jid),
+        )
+        con.execute(
+            "UPDATE write_jobs SET status='fail', ended_at=?, error=? WHERE id=? AND status='running'",
+            (now(), msg, jid),
+        )
+        log(f"job {jid} closed: {msg}")
+    if rows:
+        con.commit()
+
+
 def daemon() -> None:
     PID.write_text(str(__import__("os").getpid()), encoding="utf-8")
     log(f"writer starting version={writer_version()} (poller is separate)")
     init_db()
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     FIRMWARE_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        boot = connect()
+        try:
+            fail_orphaned_jobs(boot)
+        finally:
+            boot.close()
+    except Exception as e:
+        log(f"could not close leftover jobs: {e}")
     while True:
         con = connect()
         row = con.execute(

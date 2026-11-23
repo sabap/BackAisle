@@ -4,6 +4,20 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
+_SSH_OPTIONS = [
+    "-O",
+    "-o", "StrictHostKeyChecking=no",
+    "-o", "UserKnownHostsFile=NUL",
+    "-o", "PreferredAuthentications=keyboard-interactive,password",
+    "-o", "NumberOfPasswordPrompts=1",
+    "-o", "HostKeyAlgorithms=+ssh-rsa,ssh-ed25519",
+    "-o", "PubkeyAcceptedAlgorithms=+ssh-rsa",
+    "-o", "PubkeyAcceptedKeyTypes=+ssh-rsa",
+    "-o", "KexAlgorithms=+diffie-hellman-group-exchange-sha256,diffie-hellman-group14-sha256,diffie-hellman-group14-sha1,diffie-hellman-group1-sha1",
+    "-o", "Ciphers=aes128-ctr,aes256-ctr,aes128-cbc,aes256-cbc",
+    "-o", "MACs=hmac-sha2-256,hmac-sha2-512",
+]
+
 
 def scp_put_config(host: str, user: str, password: str, local_path: Path, remote_name: str, simulate: bool = False) -> str:
     if simulate:
@@ -29,17 +43,7 @@ def scp_put_config(host: str, user: str, password: str, local_path: Path, remote
     env["SSH_ASKPASS_REQUIRE"] = "force"
     cmd = [
         r"C:\Windows\System32\OpenSSH\scp.exe",
-        "-O",
-        "-o", "StrictHostKeyChecking=no",
-        "-o", "UserKnownHostsFile=NUL",
-        "-o", "PreferredAuthentications=keyboard-interactive,password",
-        "-o", "NumberOfPasswordPrompts=1",
-        "-o", "HostKeyAlgorithms=+ssh-rsa,ssh-ed25519",
-        "-o", "PubkeyAcceptedAlgorithms=+ssh-rsa",
-        "-o", "PubkeyAcceptedKeyTypes=+ssh-rsa",
-        "-o", "KexAlgorithms=+diffie-hellman-group-exchange-sha256,diffie-hellman-group14-sha256,diffie-hellman-group14-sha1,diffie-hellman-group1-sha1",
-        "-o", "Ciphers=aes128-ctr,aes256-ctr,aes128-cbc,aes256-cbc",
-        "-o", "MACs=hmac-sha2-256,hmac-sha2-512",
+        *_SSH_OPTIONS,
         str(staged),
         f"{user}@{host}:",
     ]
