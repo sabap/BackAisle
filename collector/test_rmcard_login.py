@@ -418,6 +418,71 @@ def test_plain_prompt_does_not_change_the_account() -> None:
         raise AssertionError(repr((cli.account_changed, sent)))
 
 
+def test_second_password_prompt_is_the_confirmation() -> None:
+    cli, sent = _scripted_cli(
+        [
+            "New User Name:\r\n",
+            "New Password:\r\n",
+            "Enter new password again:\r\n",
+            "CyberPower > \r\n",
+        ],
+        "ops",
+        "next-secret",
+    )
+    cli._reach_prompt()
+    if sent != ["\r", "ops\r", "next-secret\r", "next-secret\r"] or not cli.account_changed:
+        raise AssertionError(repr(sent))
+
+
+def test_echoed_password_prompt_is_not_a_rejection() -> None:
+    cli, sent = _scripted_cli(
+        [
+            "New User Name:",
+            "New Password:",
+            "New Password: next-secret\r\nConfirm Password:",
+            "CyberPower > ",
+        ],
+        "ops",
+        "next-secret",
+    )
+    cli._reach_prompt()
+    if sent != ["\r", "ops\r", "next-secret\r", "next-secret\r"]:
+        raise AssertionError(repr(sent))
+
+
+def test_password_error_quotes_the_card_and_hides_the_secret() -> None:
+    cli, _sent = _scripted_cli(
+        [
+            "New User Name:",
+            "New Password:",
+            "Password Error\r\nNew Password:",
+        ],
+        "ops",
+        "next-secret",
+    )
+    try:
+        cli._reach_prompt()
+    except RuntimeError as exc:
+        text = str(exc)
+    else:
+        raise AssertionError("expected a refusal")
+    if "rejected the new administrator password" not in text or "Password Error" not in text:
+        raise AssertionError(text)
+    if "next-secret" in text:
+        raise AssertionError("secret leaked")
+
+
+def test_rejected_administrator_password_is_not_retried() -> None:
+    import writer
+
+    text = (
+        "could not enable FTP over SSH: the card rejected the new "
+        "administrator password. Card said: Password Error"
+    )
+    if writer.is_retryable(RuntimeError(text)):
+        raise AssertionError(text)
+
+
 def test_second_new_user_prompt_stops() -> None:
     cli, sent = _scripted_cli(
         [
@@ -469,6 +534,10 @@ if __name__ == "__main__":
     test_first_login_without_a_saved_name_does_not_send_the_factory_user()
     test_shell_login_keeps_the_session_account()
     test_plain_prompt_does_not_change_the_account()
+    test_second_password_prompt_is_the_confirmation()
+    test_echoed_password_prompt_is_not_a_rejection()
+    test_password_error_quotes_the_card_and_hides_the_secret()
+    test_rejected_administrator_password_is_not_retried()
     test_second_new_user_prompt_stops()
     test_ftp_lists_real_text_names_only()
     test_read_failure_is_not_retried()

@@ -177,6 +177,7 @@ def is_retryable(exc: BaseException) -> bool:
         "unknown card setting",
         "enter at least one",
         "password error",
+        "rejected the new administrator",
         "web/ssh/ftp credential",
         "could not read the card config",
         "card read deadline",

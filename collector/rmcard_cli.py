@@ -14,12 +14,59 @@ from card_commands import IDENTITY_SHOW_LIMIT, _LINE
 _PROMPT = re.compile(r"(?m)^CyberPower >\s*$")
 _NEW_USER = re.compile(r"new\s+user\s*name\s*:", re.I)
 _NEW_PASS = re.compile(r"new\s+pass(?:word)?\s*:", re.I)
-_NEW_CONFIRM = re.compile(r"(?:confirm|retype)\s+(?:new\s+)?pass(?:word)?\s*:", re.I)
+_NEW_CONFIRM = re.compile(
+    r"(?:confirm|retype|re-enter|reenter|repeat|verify|again)\s+(?:new\s+)?pass(?:word)?\s*:|"
+    r"(?:confirm|retype|re-enter|reenter)\s*:",
+    re.I,
+)
 _USER = re.compile(r"user\s*name\s*:", re.I)
 _PASS = re.compile(r"password\s*:", re.I)
+# "Enter new password again:" keeps words between the noun and the colon.
+_PASS_ASK = re.compile(r"pass(?:word)?\b[^\r\n:]{0,40}:", re.I)
 _CONFIRM = re.compile(r"(?i)input\s+admin\s+password\s*:")
 _ACCOUNT_FAIL = re.compile(r"(?im)^fail\s*$|password error")
+_PASSWORD_REJECT = re.compile(
+    r"password error|invalid password|does not match|do not match|not match|"
+    r"too short|too long|not accepted|^fail\b",
+    re.I | re.M,
+)
+_PROMPT_KINDS = (
+    ("prompt", _PROMPT),
+    ("new_user", _NEW_USER),
+    ("confirm", _NEW_CONFIRM),
+    ("new_pass", _NEW_PASS),
+    ("user", _USER),
+    ("pass", _PASS),
+    ("pass_ask", _PASS_ASK),
+)
 _ADMIN_PASSWD = re.compile(r"^admin passwd (\S+)$")
+
+
+def _prompt_hits(buf: str) -> list[tuple[int, int, str]]:
+    """Earliest prompt wins. A label inside that prompt is not a second question."""
+    found: list[tuple[int, int, str]] = []
+    for kind, pattern in _PROMPT_KINDS:
+        for match in pattern.finditer(buf):
+            found.append((match.start(), match.end(), kind))
+    found.sort()
+    kept: list[tuple[int, int, str]] = []
+    covered = -1
+    for start, end, kind in found:
+        if start < covered:
+            continue
+        kept.append((start, end, kind))
+        covered = end
+    return kept
+
+
+def _answer_was_echoed(buf: str, start: int, end: int, sent: str) -> bool:
+    """A terminal repeats the prompt plus the text just typed. That is not a new question."""
+    newline = buf.find("\n", start)
+    line = buf[start:] if newline < 0 else buf[start:newline]
+    tail = line[end - start:]
+    if sent and sent in tail:
+        return True
+    return bool(re.search(r"\*{2,}", tail))
 
 
 def _allow_ssh_rsa_host_key(transport: paramiko.Transport) -> None:
@@ -165,8 +212,8 @@ class RmcardCli:
         sent_user = False
         sent_pass = False
         sent_new_user = False
-        sent_new_pass = False
-        sent_confirm = False
+        password_answers = 0
+        just_sent = ""
         deadline = time.time() + self.timeout
         buf = ""
         chan.send("\r")
@@ -174,58 +221,68 @@ class RmcardCli:
             chunk = self._recv(0.6)
             if chunk:
                 buf += chunk
-            if _PROMPT.search(buf):
-                return
-            if _NEW_USER.search(buf):
-                if sent_new_user:
-                    raise RuntimeError("the card rejected the new administrator name")
-                if not self.new_user or not self.new_password:
-                    raise RuntimeError(
-                        "the card requires a new administrator name. "
-                        "Assign a Web/SSH/FTP login on this UPS first."
-                    )
-                chan.send(self.new_user + "\r")
-                sent_new_user = True
-                self.account_changed = True
-                buf = ""
-                continue
-            if _NEW_CONFIRM.search(buf):
-                if sent_confirm:
-                    raise RuntimeError("the card rejected the new administrator password")
-                chan.send(self.new_password + "\r")
-                sent_confirm = True
-                buf = ""
-                continue
-            if _NEW_PASS.search(buf):
-                if sent_new_pass:
-                    raise RuntimeError("the card rejected the new administrator password")
-                chan.send(self.new_password + "\r")
-                sent_new_pass = True
-                buf = ""
-                continue
-            if _USER.search(buf) and not sent_user:
-                chan.send(self.username + "\r")
-                sent_user = True
-                buf = ""
-                continue
-            if _PASS.search(buf):
-                # After New User Name, every password prompt is the new account.
-                # The card may say "Password:" rather than "New Password:".
-                if sent_new_user:
-                    if sent_confirm:
-                        raise RuntimeError("the card rejected the new administrator password")
-                    chan.send(self.new_password + "\r")
-                    if sent_new_pass:
-                        sent_confirm = True
-                    sent_new_pass = True
-                    buf = ""
+            if sent_new_user and password_answers and _PASSWORD_REJECT.search(buf):
+                raise RuntimeError(self._rejected_password(buf))
+            while True:
+                hits = _prompt_hits(buf)
+                if not hits:
+                    break
+                start, end, kind = hits[0]
+                if kind != "prompt" and _answer_was_echoed(buf, start, end, just_sent):
+                    buf = buf[end:]
                     continue
-                if not sent_pass:
+                if kind == "prompt":
+                    return
+                if kind == "new_user" or (kind == "user" and sent_new_user):
+                    if sent_new_user:
+                        raise RuntimeError(self._rejected_name(buf))
+                    if not self.new_user or not self.new_password:
+                        raise RuntimeError(
+                            "the card requires a new administrator name. "
+                            "Assign a Web/SSH/FTP login on this UPS first."
+                        )
+                    chan.send(self.new_user + "\r")
+                    sent_new_user = True
+                    self.account_changed = True
+                    just_sent = self.new_user
+                    buf = buf[end:]
+                    continue
+                if sent_new_user and kind in ("confirm", "new_pass", "pass", "pass_ask"):
+                    # The second prompt is the confirmation. It often says
+                    # "New Password" again, without the word confirm.
+                    if password_answers >= 2:
+                        raise RuntimeError(self._rejected_password(buf))
+                    chan.send(self.new_password + "\r")
+                    password_answers += 1
+                    just_sent = self.new_password
+                    buf = buf[end:]
+                    continue
+                if kind == "user" and not sent_user:
+                    chan.send(self.username + "\r")
+                    sent_user = True
+                    just_sent = self.username
+                    buf = buf[end:]
+                    continue
+                if kind in ("pass", "pass_ask") and not sent_pass:
                     chan.send(self.password + "\r")
                     sent_pass = True
-                    buf = ""
+                    just_sent = self.password
+                    buf = buf[end:]
                     continue
+                buf = buf[end:]
         raise TimeoutError("timed out waiting for the card prompt")
+
+    def _rejected_name(self, buf: str) -> str:
+        return "the card rejected the new administrator name. Card said: " + self._card_said(buf)
+
+    def _rejected_password(self, buf: str) -> str:
+        return "the card rejected the new administrator password. Card said: " + self._card_said(buf)
+
+    def _card_said(self, buf: str) -> str:
+        shown = " ".join(self._safe(buf).split())
+        if len(shown) > 180:
+            shown = shown[:180]
+        return shown or "the prompt returned"
 
     def _read(self, done, timeout: float) -> str:
         deadline = time.time() + timeout

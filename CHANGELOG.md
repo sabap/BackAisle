@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.111] - 2026-11-23
+
+- Apply config profile with the factory login checked sends the saved Web/SSH/FTP password again when the card asks for it a second time. That second prompt is the confirmation. The card may say New Password again.
+- A real refusal fails once. The job quotes what the card printed, such as Password Error. The password is left out of that quote. The failure is not tried again.
+- Assign a Web/SSH/FTP login on the UPS before the job. The saved login must not be the factory account.
+- The card still keeps its own IP address, gateway, subnet mask, hostname, and MAC address. The card reboots after the profile is written.
+- The writer reloads when writer.py is newer than the running process, or when an update asks for a restart. The collector does not need a restart.
+
 ## [0.5.110] - 2026-11-23
 
 - Apply config profile with the factory login checked answers the first SSH prompt for a new administrator name. That name and password are the Web/SSH/FTP login saved on the UPS. Assign that login before the job. The saved login must not be the factory account.
