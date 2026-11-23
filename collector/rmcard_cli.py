@@ -117,6 +117,16 @@ class RmcardCli:
             self._confirm_password = pending
         return self._safe(text)
 
+    def sign_out(self) -> None:
+        """Send the card's exit command, then close. exit commits a service change."""
+        chan = self._chan
+        if chan is not None:
+            try:
+                chan.send("exit\r")
+            except Exception:
+                pass
+        self.close()
+
     def _login(self, transport: paramiko.Transport) -> None:
         def handler(title, instructions, prompts):
             return [self.password for _prompt in prompts]

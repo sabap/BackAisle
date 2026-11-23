@@ -42,6 +42,8 @@ _LINE = re.compile(
     r"|(?:admin|device) passwd [A-Za-z0-9][A-Za-z0-9.,_/#()+=!@%-]{3,62}"
     r"|device access (?:enable|disable)"
     r"|(?:admin|device) show"
+    r"|ftp show"
+    r"|ftp access enable"
     r")$"
 )
 

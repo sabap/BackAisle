@@ -28,6 +28,8 @@ Web session (HTTPS, form login → `login_pass.cgi` → `login_counter.html?stap
 
 FTP GET of `YYYY_MM_DD_HHMM.txt` is the 1.4.0+ path. The name is the card's current local minute, and the card builds the file for that request. A different minute waits until the FTP timeout. The writer tries the card clock, then UTC, then this server's clock. NLST is empty. Login as the RMCARD **web** admin, not the SNMPv3 user. An SCP download of that remote name is refused during key exchange. SCP remains the upload (`user@host:`). This read does not use the website.
 
+Apply config profile with the factory login checked is the new-card path. The card leaves FTP disabled. BackAisle signs in over SSH with the factory account, sends `ftp access enable`, then sends `exit` so that change becomes active. The config read runs after FTP answers. Turn the factory login off when the card already has a Web/SSH/FTP login. That path does not change the FTP service.
+
 ### Push / restore
 
 1. **Web Restore** on About: `POST /about.cgi` multipart field `upfile` (filename must look like `YYYY_MM_DD_HHMM.txt`). Card is expected to reboot.

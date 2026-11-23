@@ -635,6 +635,23 @@ def run_pull(con, job: dict, secrets: dict) -> None:
     )
 
 
+def enable_factory_ftp(ip: str, user: str, password: str, opener=None, wait=None) -> None:
+    """A factory card has FTP off. SSH enables it, then exit makes that change active."""
+    from rmcard_cli import RmcardCli
+
+    Cli = opener or RmcardCli
+    try:
+        with Cli(ip, user, password) as cli:
+            cli.run("ftp access enable")
+            cli.sign_out()
+    except Exception as exc:
+        raise RuntimeError("could not enable FTP over SSH: " + str(exc)) from exc
+    try:
+        (wait or wait_ftp_alive)(ip, user, password, timeout_s=45)
+    except Exception as exc:
+        raise RuntimeError("FTP did not answer after SSH enabled it: " + str(exc)) from exc
+
+
 def run_push_config(con, job: dict, secrets: dict) -> None:
     payload = json.loads(job["payload_json"] or "{}")
     tmpl = con.execute("SELECT * FROM config_templates WHERE id=?", (job["template_id"],)).fetchone()
@@ -659,8 +676,17 @@ def run_push_config(con, job: dict, secrets: dict) -> None:
             user, pw = target_card_login(con, t, secrets)
         tid = t["id"]
         ident_map = (payload.get("identity_maps") or {}).get(str(t["device_id"])) or {}
+        read_seq = 1
+        if keep_network and payload_flag(payload, "factory_login"):
+            step(con, tid, 1, "enable_ftp", "running", "SSH factory login")
+            if simulate:
+                step(con, tid, 1, "enable_ftp", "ok", "SIMULATE ftp access enable")
+            else:
+                enable_factory_ftp(t["ip"], user, pw)
+                step(con, tid, 1, "enable_ftp", "ok", "FTP enabled over SSH")
+            read_seq = 2
         if keep_network:
-            step(con, tid, 1, "read_config", "running", "reading this card over FTP")
+            step(con, tid, read_seq, "read_config", "running", "reading this card over FTP")
             current, _cur_name = pull_config_bytes(
                 t["ip"],
                 secrets,
@@ -670,27 +696,28 @@ def run_push_config(con, job: dict, secrets: dict) -> None:
             )
             host = str(t.get("hostname") or "").strip()
             rewritten = apply_profile_keep_network(raw, current.decode("latin1", "replace"), t["ip"], host)
-            step(con, tid, 1, "read_config", "ok", "kept this card address and name")
+            step(con, tid, read_seq, "read_config", "ok", "kept this card address and name")
         else:
             rewritten = doc.rewrite(overlays, strip_identity=True, identity_map=ident_map)
             step(con, tid, 1, "rewrite", "ok", f"overlays={list(overlays)} identity={list(ident_map)}")
+        restore_seq = read_seq + 1
         fname = datetime.now().strftime("%Y_%m_%d_%H%M.txt")
         tmp = CONFIG_DIR / f"push_{t['ip'].replace('.', '_')}_{fname}"
         tmp.write_text(rewritten, encoding="latin1")
-        step(con, tid, 2, "restore", "running", fname)
+        step(con, tid, restore_seq, "restore", "running", fname)
         if simulate:
             detail = f"SIMULATE scp {fname} {user}@{t['ip']}:"
         else:
             detail = scp_put_config(t["ip"], user, pw, tmp, fname, simulate=False)
-        step(con, tid, 2, "restore", "ok", detail)
-        step(con, tid, 3, "wait_reboot", "running", "")
+        step(con, tid, restore_seq, "restore", "ok", detail)
+        step(con, tid, restore_seq + 1, "wait_reboot", "running", "")
         if not simulate:
             time.sleep(8)
             wait_ftp_alive(t["ip"], user, pw, timeout_s=180, simulate=False)
-        step(con, tid, 3, "wait_reboot", "ok", "")
-        step(con, tid, 4, "snmp_poll", "running", "")
+        step(con, tid, restore_seq + 1, "wait_reboot", "ok", "")
+        step(con, tid, restore_seq + 2, "snmp_poll", "running", "")
         sample = asyncio.run(poll_after(t["ip"], secrets))
-        step(con, tid, 4, "snmp_poll", "ok", json.dumps({
+        step(con, tid, restore_seq + 2, "snmp_poll", "ok", json.dumps({
             "model": sample.get("model"),
             "firmware": sample.get("firmware"),
             "agent_firmware": sample.get("agent_firmware"),

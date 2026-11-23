@@ -250,6 +250,35 @@ def test_ftp_timeout_tries_the_next_clock() -> None:
         raise AssertionError(repr(name))
 
 
+def test_factory_login_enables_ftp_then_signs_out() -> None:
+    import writer
+
+    seen: list[str] = []
+
+    class Fake:
+        def __init__(self, ip, user, password, timeout=20):
+            if ip != "10.1.1.1" or not user or not password:
+                raise AssertionError("missing login")
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            return None
+        def run(self, command):
+            seen.append(command)
+            return "ok"
+        def sign_out(self):
+            seen.append("exit")
+
+    def waited(ip, user, password, timeout_s=45):
+        seen.append("wait")
+        if timeout_s != 45:
+            raise AssertionError(timeout_s)
+
+    writer.enable_factory_ftp("10.1.1.1", "card", "secret", opener=Fake, wait=waited)
+    if seen != ["ftp access enable", "exit", "wait"]:
+        raise AssertionError(repr(seen))
+
+
 def test_read_failure_is_not_retried() -> None:
     import writer
 
@@ -273,6 +302,7 @@ if __name__ == "__main__":
     test_timed_login_tries_one_logout()
     test_config_name_uses_the_card_minute_first()
     test_ftp_timeout_tries_the_next_clock()
+    test_factory_login_enables_ftp_then_signs_out()
     test_ftp_lists_real_text_names_only()
     test_read_failure_is_not_retried()
     print("ok")

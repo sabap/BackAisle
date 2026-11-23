@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.109] - 2026-11-23
+
+- Apply config profile with the factory login checked signs in over SSH, enables FTP, signs out, and then reads the card over FTP. A new card leaves FTP disabled until that step.
+- The factory login stays on by default. Turn it off to sign in with the Web/SSH/FTP login saved on the device. That path does not change the FTP service.
+- The card still keeps its own IP address, gateway, subnet mask, hostname, and MAC address. The card reboots after the profile is written.
+- The writer reloads when writer.py is newer than the running process, or when an update asks for a restart. The collector does not need a restart.
+
 ## [0.5.108] - 2026-11-23
 
 - The writer tries the card clock, then UTC, then this server's clock when it reads a UPS config over FTP. A file name that is not the card's current minute waits out the FTP timeout. That timeout no longer skips the later names.

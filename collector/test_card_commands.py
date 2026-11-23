@@ -98,6 +98,11 @@ expect("account", {"role": "device", "name": "123456789012345"}, [
 ])
 
 rejects("account", {"role": "admin"})
+
+if not _LINE.match("ftp access enable") or not _LINE.match("ftp show"):
+    raise SystemExit("ftp enable was refused")
+if _LINE.match("ftp access disable") or _LINE.match("ftp port 2121") or _LINE.match("exit"):
+    raise SystemExit("ftp command was too broad")
 rejects("account", {"role": "admin", "access": "enable"})
 rejects("account", {"role": "device", "name": "this name is too long"})
 rejects("account", {"role": "admin", "password": "bad pass"})
