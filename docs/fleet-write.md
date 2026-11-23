@@ -26,7 +26,7 @@ Web session (HTTPS, form login → `login_pass.cgi` → `login_counter.html?stap
 3. Response is `Content-Disposition: attachment; filename=YYYY_MM_DD_HHMM.txt` (`text/plain`).
 4. File starts with `CyberPowerSystems, RMCARD205` then `KEY, value` lines (not `key=value`).
 
-FTP GET of `YYYY_MM_DD_HHMM.txt` is the 1.4.0+ path. The name is the card's current local minute, and the card builds the file for that request. NLST is empty. Login as the RMCARD **web** admin, not the SNMPv3 user. An SCP download of that remote name is refused during key exchange. SCP remains the upload (`user@host:`). The website Save is the fallback when FTP does not return the file.
+FTP GET of `YYYY_MM_DD_HHMM.txt` is the 1.4.0+ path. The name is the card's current local minute, and the card builds the file for that request. A different minute waits until the FTP timeout. The writer tries the card clock, then UTC, then this server's clock. NLST is empty. Login as the RMCARD **web** admin, not the SNMPv3 user. An SCP download of that remote name is refused during key exchange. SCP remains the upload (`user@host:`). This read does not use the website.
 
 ### Push / restore
 

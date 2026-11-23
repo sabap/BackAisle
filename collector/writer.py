@@ -552,11 +552,12 @@ def pull_config_bytes(
     deadline_s: float | None = None,
     stop=None,
 ) -> tuple[bytes, str]:
-    """Read the card save file over FTP. The website is only the fallback.
+    """Read the card save file over FTP.
 
     Firmware 1.4.0 and later builds YYYY_MM_DD_HHMM.txt for the card's current
-    minute. The FTP listing is empty. An SCP download of that name is refused
-    by the card, so SCP stays the upload path.
+    minute. The FTP listing is empty. A different minute waits out the FTP
+    timeout, so one miss does not skip the later names. An SCP download of
+    that name is refused by the card, so SCP stays the upload path.
     """
     du, dp = web_creds(secrets)
     user = (web_user or "").strip() or du
@@ -576,34 +577,21 @@ def pull_config_bytes(
         raise RuntimeError("could not read the card config: card read deadline")
     clock = card_clock(ip, secrets) if time.monotonic() + 12 < end else None
     names = config_pull_names(clock, datetime.now(), datetime.now(timezone.utc))
-    log("config file " + names[0] + (" from card clock" if clock is not None else " from this server clock"))
-    if not halted():
+    origin = "card clock" if clock is not None else "UTC"
+    log("config file " + names[0] + " from " + origin)
+    for name in names:
+        if halted():
+            break
+        if last is not None and time.monotonic() + 7 >= end:
+            break
         try:
-            data, name = ftp_get_named_config(ip, user, pw, names, timeout=6)
+            data, got = ftp_get_named_config(ip, user, pw, [name], timeout=6)
             if _looks_like_rmcard_config(data):
-                return data, name
-            last = RuntimeError("ftp file is not an RMCARD config")
+                return data, got
+            last = RuntimeError(f"ftp {name} is not an RMCARD config")
         except Exception as exc:
-            last = exc
-            log(f"ftp get failed: {exc}")
-    if not halted() and time.monotonic() + 8 < end:
-        try:
-            sess = RmcardSession(ip, user, pw)
-            log(f"web session {sess.base}")
-            try:
-                sess.login(tries=1, deadline=end)
-                data, name = sess.download_config(timeout=8, deadline=end)
-                if _looks_like_rmcard_config(data):
-                    return data, name
-                last = RuntimeError("could not find RMCARD Save Configuration download")
-            finally:
-                try:
-                    sess.logout(deadline=end)
-                except Exception:
-                    pass
-        except Exception as exc:
-            last = exc
-            log(f"web save failed: {exc}")
+            last = RuntimeError(f"ftp {name}: {exc}")
+            log(f"ftp get failed: {last}")
     if last is None:
         last = CardReadDeadline("card read deadline")
     raise RuntimeError(f"could not read the card config: {last}")

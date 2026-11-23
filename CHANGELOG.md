@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.108] - 2026-11-23
+
+- The writer tries the card clock, then UTC, then this server's clock when it reads a UPS config over FTP. A file name that is not the card's current minute waits out the FTP timeout. That timeout no longer skips the later names.
+- This read does not open the card website. A website TLS timeout is no longer stored as the job error.
+- The read still stops at 30 seconds. A failed read is not tried again.
+- The writer reloads when writer.py is newer than the running process, or when an update asks for a restart. The collector does not need a restart.
+
 ## [0.5.107] - 2026-11-23
 
 - The writer reads a UPS config over FTP. Firmware 1.4.0 and later builds a file named for the current minute. The website Save is used only when FTP does not return that file.

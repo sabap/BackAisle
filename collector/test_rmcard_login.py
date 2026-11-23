@@ -181,6 +181,10 @@ def test_config_name_uses_the_card_minute_first() -> None:
         raise AssertionError(repr(names))
     if "2026_11_23_0910.txt" not in names or "2026_11_23_1946.txt" not in names:
         raise AssertionError(repr(names))
+    if names.index("2026_11_23_1946.txt") > names.index("2026_11_23_0910.txt"):
+        raise AssertionError(repr(names))
+    if names.index("2026_11_23_1946.txt") > names.index("2026_11_23_1445.txt"):
+        raise AssertionError(repr(names))
     found = parse_snmp_date("0x07ea0b170e2e0000")
     if found != card:
         raise AssertionError(repr(found))
@@ -201,6 +205,49 @@ def test_ftp_lists_real_text_names_only() -> None:
     ])
     if names != ["2026_11_23_0101.txt", "notes.TXT"]:
         raise AssertionError(repr(names))
+
+
+def test_ftp_timeout_tries_the_next_clock() -> None:
+    import writer
+    from datetime import datetime as real_datetime
+    from datetime import timezone as real_timezone
+
+    calls: list[str] = []
+    opened = []
+    body = b"CyberPowerSystems, RMCARD205\nSYSTEM_IP_ADDRESS, 10.1.1.1\n"
+
+    class Frozen(real_datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is not None:
+                return real_datetime(2026, 11, 23, 19, 46, tzinfo=real_timezone.utc)
+            return real_datetime(2026, 11, 23, 9, 10)
+
+    def fake_ftp(ip, user, pw, names, timeout=6):
+        calls.append(names[0])
+        if names[0] == "2026_11_23_1946.txt":
+            raise TimeoutError("timed out")
+        return body, names[0]
+
+    class NoWeb:
+        def __init__(self, *args, **kwargs):
+            opened.append(args)
+
+    old = (writer.datetime, writer.ftp_get_named_config, writer.card_clock, writer.RmcardSession)
+    writer.datetime = Frozen
+    writer.ftp_get_named_config = fake_ftp
+    writer.card_clock = lambda ip, secrets: None
+    writer.RmcardSession = NoWeb
+    try:
+        data, name = writer.pull_config_bytes("10.1.1.1", {})
+    finally:
+        writer.datetime, writer.ftp_get_named_config, writer.card_clock, writer.RmcardSession = old
+    if opened:
+        raise AssertionError(repr(opened))
+    if calls[:2] != ["2026_11_23_1946.txt", "2026_11_23_0910.txt"]:
+        raise AssertionError(repr(calls))
+    if name != "2026_11_23_0910.txt" or b"RMCARD205" not in data:
+        raise AssertionError(repr(name))
 
 
 def test_read_failure_is_not_retried() -> None:
@@ -225,6 +272,7 @@ if __name__ == "__main__":
     test_deadline_stops_before_save()
     test_timed_login_tries_one_logout()
     test_config_name_uses_the_card_minute_first()
+    test_ftp_timeout_tries_the_next_clock()
     test_ftp_lists_real_text_names_only()
     test_read_failure_is_not_retried()
     print("ok")

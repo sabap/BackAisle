@@ -18,23 +18,33 @@ def config_stamp(moment: datetime) -> str:
 
 
 def config_pull_names(card: datetime | None, local: datetime, utc: datetime) -> list[str]:
-    """Likely save-file names. The card minute comes first, then one minute either side."""
+    """Likely save-file names. Exact minutes come before the neighbors.
+
+    A wrong minute waits out the FTP timeout. It does not refuse at once, so
+    the card clock and UTC are tried before this server's clock.
+    """
+    def bare(moment: datetime | None) -> datetime | None:
+        if moment is None:
+            return None
+        return moment.replace(tzinfo=None) if moment.tzinfo else moment
+
+    clocks = [bare(card), bare(utc), bare(local)]
     ordered: list[str] = []
 
-    def add(moment: datetime | None, span: int) -> None:
+    def add(moment: datetime | None) -> None:
         if moment is None:
             return
-        deltas = [0]
-        for step in range(1, span + 1):
-            deltas.extend((-step, step))
-        for delta in deltas:
-            name = config_stamp(moment + timedelta(minutes=delta))
-            if name not in ordered:
-                ordered.append(name)
+        name = config_stamp(moment)
+        if name not in ordered:
+            ordered.append(name)
 
-    add(card, 1)
-    add(local.replace(tzinfo=None) if local.tzinfo else local, 1)
-    add(utc.replace(tzinfo=None) if utc.tzinfo else utc, 1)
+    for moment in clocks:
+        add(moment)
+    for moment in clocks:
+        if moment is None:
+            continue
+        add(moment - timedelta(minutes=1))
+        add(moment + timedelta(minutes=1))
     return ordered[:9]
 
 
@@ -121,34 +131,38 @@ def ftp_read_text_files(host: str, user: str, password: str, timeout: int = 4) -
 
 
 def ftp_get_named_config(host: str, user: str, password: str, names: list[str], timeout: int = 6) -> tuple[bytes, str]:
-    """One FTP login. RETR each clock name until the card returns a file.
+    """RETR each clock name until the card returns a file.
 
-    A wrong minute is a quick refusal. The directory listing is empty, so the
-    name has to be the card's current YYYY_MM_DD_HHMM.txt.
+    The directory listing is empty. The name has to be the card's current
+    YYYY_MM_DD_HHMM.txt. A different minute waits until the socket timeout,
+    so each name gets its own login and a timeout does not skip the rest.
     """
     allowed = [name for name in names if CONFIG_STAMP.match(name)]
     if not allowed:
         raise RuntimeError("ftp config name missing")
     timeout = 3 if timeout < 3 else min(int(timeout), 12)
-    ftp = ftp_connect(host, user, password, timeout)
-    try:
-        last = "ftp did not return a config file"
-        for name in allowed:
+    last: BaseException | str = "ftp did not return a config file"
+    for name in allowed:
+        ftp = None
+        try:
+            ftp = ftp_connect(host, user, password, timeout)
             buf = io.BytesIO()
-            try:
-                ftp.retrbinary(f"RETR {name}", buf.write)
-            except (error_perm, error_temp) as exc:
-                last = str(exc)
-                continue
+            ftp.retrbinary(f"RETR {name}", buf.write)
             data = buf.getvalue()
             if len(data) > 1_000_000:
                 last = "ftp file too large"
                 continue
             if data:
                 return data, name
-        raise RuntimeError(last)
-    finally:
-        _close(ftp)
+            last = "ftp file was empty"
+        except (error_perm, error_temp, OSError) as exc:
+            last = exc
+        finally:
+            if ftp is not None:
+                _close(ftp)
+    if isinstance(last, BaseException):
+        raise RuntimeError(str(last)) from last
+    raise RuntimeError(str(last))
 
 
 def ftp_get_config(host: str, user: str, password: str, filename: str, timeout: int = 30) -> bytes:
