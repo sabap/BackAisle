@@ -89,6 +89,102 @@ def ftp_connect(host: str, user: str, password: str, timeout: int = 20) -> FTP:
     return ftp
 
 
+def ftp_command_verb(cmd: str) -> str:
+    """The FTP verb only. The rest of PASS is the password and is not logged."""
+    word = (cmd or "").split(" ", 1)[0].strip().lower()
+    return (word or "cmd")[:12]
+
+
+def ftp_reply_code(resp: str) -> str:
+    """The three-digit reply. The rest of a PASV reply is an address."""
+    text = resp or ""
+    if len(text) >= 3 and text[0].isdigit():
+        return text[:3]
+    return "ok"
+
+
+def ftp_brief(exc: BaseException, secret: str = "") -> str:
+    """A short exception label. Reply text that is not a code is dropped."""
+    text = " ".join(str(exc).split())
+    if secret and len(secret) >= 4 and not secret.isdigit() and secret in text:
+        text = text.replace(secret, "********")
+    kind = type(exc).__name__
+    number = getattr(exc, "winerror", None)
+    if number is None:
+        number = getattr(exc, "errno", None)
+    suffix = f" win={int(number)}" if isinstance(number, int) and number else ""
+    if not text:
+        return kind + " no-message" + suffix
+    matched = re.match(r"(\d{3})\b", text)
+    if matched:
+        return f"{kind} reply={matched.group(1)}" + suffix
+    if "timed out" in text.lower() or "timeout" in text.lower():
+        return kind + " timed-out" + suffix
+    return kind + " no-message" + suffix
+
+
+class _TraceFTP(FTP):
+    """Same FTP session. Each command records its verb, time, and reply code."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.events: list[str] = []
+        self.secret = ""
+
+    def sendcmd(self, cmd):
+        verb = ftp_command_verb(cmd)
+        started = time.monotonic()
+        try:
+            resp = FTP.sendcmd(self, cmd)
+        except Exception as exc:
+            self.events.append(
+                f"{verb} {time.monotonic() - started:.2f}s {ftp_brief(exc, self.secret)}"
+            )
+            raise
+        self.events.append(f"{verb} {time.monotonic() - started:.2f}s {ftp_reply_code(resp)}")
+        return resp
+
+
+def _fail_stage(events: list[str]) -> str:
+    """Where an exception landed when the command itself was not recorded.
+
+    PASV can succeed and the data socket can still fail. That is not a failed
+    control connection. Login verbs mean the TCP connect already finished.
+    """
+    verbs = [(event or "").split(" ", 1)[0] for event in events]
+    if "retr" in verbs or "pasv" in verbs:
+        return "data"
+    if "user" in verbs or "pass" in verbs:
+        return "login"
+    return "connect"
+
+
+def _retr_config_bytes(host: str, user: str, password: str, name: str, timeout: int) -> bytes:
+    ftp = _TraceFTP()
+    ftp.secret = password or ""
+    mark = time.monotonic()
+    try:
+        ftp.connect(host, 21, timeout=timeout)
+        ftp.events.append(f"connect {time.monotonic() - mark:.2f}s")
+        ftp.login(user, password)
+        ftp.set_pasv(True)
+        buf = io.BytesIO()
+        mark = time.monotonic()
+        ftp.retrbinary(f"RETR {name}", buf.write)
+        ftp.events.append(f"data {time.monotonic() - mark:.2f}s bytes={len(buf.getvalue())}")
+        return buf.getvalue()
+    except Exception as exc:
+        brief = ftp_brief(exc, password or "")
+        if not any(brief in event for event in ftp.events):
+            ftp.events.append(f"{_fail_stage(ftp.events)} {time.monotonic() - mark:.2f}s {brief}")
+        note = name + " " + " ".join(ftp.events)
+        if password and len(password) >= 4 and not password.isdigit() and password in note:
+            note = note.replace(password, "********")
+        raise RuntimeError(note) from exc
+    finally:
+        _close(ftp)
+
+
 def ftp_text_names(names: list[str]) -> list[str]:
     """Basenames of .txt files on the card. A guessed timestamp is not a real file."""
     found: list[str] = []
@@ -143,25 +239,19 @@ def ftp_get_named_config(host: str, user: str, password: str, names: list[str], 
     timeout = 3 if timeout < 3 else min(int(timeout), 12)
     last: BaseException | str = "ftp did not return a config file"
     for name in allowed:
-        ftp = None
         try:
-            ftp = ftp_connect(host, user, password, timeout)
-            buf = io.BytesIO()
-            ftp.retrbinary(f"RETR {name}", buf.write)
-            data = buf.getvalue()
-            if len(data) > 1_000_000:
-                last = "ftp file too large"
-                continue
-            if data:
-                return data, name
-            last = "ftp file was empty"
-        except (error_perm, error_temp, OSError) as exc:
-            last = exc
-        finally:
-            if ftp is not None:
-                _close(ftp)
+            data = _retr_config_bytes(host, user, password, name, timeout)
+        except Exception as exc:
+            last = exc if isinstance(exc, RuntimeError) else RuntimeError(f"{name} {ftp_brief(exc, password)}")
+            continue
+        if len(data) > 1_000_000:
+            last = RuntimeError(f"{name} file-too-large")
+            continue
+        if data:
+            return data, name
+        last = RuntimeError(f"{name} empty-file")
     if isinstance(last, BaseException):
-        raise RuntimeError(str(last)) from last
+        raise last
     raise RuntimeError(str(last))
 
 

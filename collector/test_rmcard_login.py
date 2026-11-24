@@ -782,6 +782,147 @@ def test_read_failure_is_not_retried() -> None:
             raise AssertionError(text)
 
 
+def test_ftp_trace_keeps_the_verb_and_drops_the_secret() -> None:
+    from rmcard_ftp import _fail_stage, ftp_brief, ftp_command_verb, ftp_reply_code
+
+    verb = ftp_command_verb("PASS hunter2-secret")
+    if verb != "pass" or "hunter" in verb:
+        raise AssertionError(verb)
+    code = ftp_reply_code("227 Entering Passive Mode (10,1,1,1,1,1)")
+    if code != "227" or "," in code:
+        raise AssertionError(code)
+    empty = ftp_brief(EOFError())
+    if empty != "EOFError no-message":
+        raise AssertionError(empty)
+    hidden = ftp_brief(RuntimeError("login failed hunter2-secret"), "hunter2-secret")
+    if "hunter" in hidden:
+        raise AssertionError("secret leaked")
+    if _fail_stage([]) != "connect":
+        raise AssertionError("connect")
+    if _fail_stage(["connect 0.01s", "user 0.02s 331", "pass 0.02s 230"]) != "login":
+        raise AssertionError("login")
+    pasv = ["connect 0.01s", "user 0.02s 331", "pass 0.02s 230", "pasv 0.04s 227"]
+    if _fail_stage(pasv) != "data":
+        raise AssertionError("data")
+
+
+def test_closed_pattern_is_eof_or_reset_only() -> None:
+    import writer
+
+    samples = {
+        "2026_11_23_1946.txt OSError no-message": "other",
+        "2026_11_23_1946.txt EOFError no-message": "closed-without-reply",
+        "2026_11_23_1946.txt connect 0.01s OSError no-message win=10054": "closed-without-reply",
+        "2026_11_23_1946.txt OSError no-message win=10053": "closed-without-reply",
+        "2026_11_23_1946.txt ConnectionResetError no-message": "closed-without-reply",
+        "2026_11_23_1946.txt TimeoutError timed-out win=10060": "timed-out",
+        "2026_11_23_1946.txt error_perm reply=550": "ftp-reply",
+    }
+    for note, expected in samples.items():
+        found = writer._config_read_pattern([note])
+        if found != expected:
+            raise AssertionError(expected + " got " + found)
+    mixed = writer._config_read_pattern([
+        "2026_11_23_1946.txt EOFError no-message",
+        "2026_11_23_0910.txt TimeoutError timed-out",
+    ])
+    if mixed != "mixed":
+        raise AssertionError(mixed)
+
+
+def _frozen_config_pull(fake):
+    import writer
+    from datetime import datetime as real_datetime
+    from datetime import timezone as real_timezone
+
+    class Frozen(real_datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is not None:
+                return real_datetime(2026, 11, 23, 19, 46, tzinfo=real_timezone.utc)
+            return real_datetime(2026, 11, 23, 9, 10)
+
+    class NoWeb:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("website")
+
+    old = (writer.datetime, writer.ftp_get_named_config, writer.card_clock, writer.RmcardSession)
+    writer.datetime = Frozen
+    writer.ftp_get_named_config = fake
+    writer.card_clock = lambda ip, secrets: None
+    writer.RmcardSession = NoWeb
+    try:
+        return writer.pull_config_bytes("10.1.1.1", {}, web_user="ops", web_pass="hunter2-secret")
+    finally:
+        writer.datetime, writer.ftp_get_named_config, writer.card_clock, writer.RmcardSession = old
+
+
+def test_empty_ftp_error_names_every_clock() -> None:
+    import writer
+    from datetime import datetime, timezone
+    from rmcard_ftp import config_pull_names
+
+    calls: list[str] = []
+
+    def fake(ip, user, pw, names, timeout=6):
+        calls.append(names[0])
+        if user != "ops" or pw != "hunter2-secret":
+            raise AssertionError("wrong login")
+        raise EOFError()
+
+    try:
+        _frozen_config_pull(fake)
+        raise AssertionError("should fail")
+    except RuntimeError as exc:
+        text = str(exc)
+    expected = config_pull_names(
+        None,
+        datetime(2026, 11, 23, 9, 10),
+        datetime(2026, 11, 23, 19, 46, tzinfo=timezone.utc),
+    )
+    if calls != expected:
+        raise AssertionError(repr(calls))
+    if not text.startswith("could not read the card config:"):
+        raise AssertionError(text[:120])
+    if "pattern=closed-without-reply" not in text or "clock=skipped" not in text:
+        raise AssertionError(text[:180])
+    if f"tried={len(expected)} of {len(expected)}" not in text:
+        raise AssertionError(text[:180])
+    if "first=2026_11_23_1946.txt" not in text or "last=" not in text:
+        raise AssertionError(text[:220])
+    last_name = expected[-1]
+    if f"last={last_name}" not in text:
+        raise AssertionError(text[:220])
+    for name in expected:
+        if name not in text:
+            raise AssertionError(name)
+    if text.count(expected[0]) < 2 or text.count(last_name) < 2:
+        raise AssertionError("trace dropped a clock name")
+    if "EOFError no-message" not in text:
+        raise AssertionError(text[:180])
+    if writer.is_retryable(RuntimeError(text)):
+        raise AssertionError("retried")
+
+
+def test_config_read_hides_the_saved_password() -> None:
+    def fake(ip, user, pw, names, timeout=6):
+        if pw != "hunter2-secret":
+            raise AssertionError("wrong login")
+        raise RuntimeError(names[0] + " login failed hunter2-secret")
+
+    try:
+        _frozen_config_pull(fake)
+        raise AssertionError("should fail")
+    except RuntimeError as exc:
+        text = str(exc)
+    if "hunter" in text:
+        raise AssertionError("secret leaked")
+    if "********" not in text or "2026_11_23_1946.txt" not in text:
+        raise AssertionError("redaction missing")
+    if "pattern=" not in text:
+        raise AssertionError("pattern missing")
+
+
 if __name__ == "__main__":
     test_retry_logs_out_before_the_next_login()
     test_failed_login_logs_out()
@@ -817,4 +958,8 @@ if __name__ == "__main__":
     test_ftp_enable_wait_is_not_retried()
     test_ftp_lists_real_text_names_only()
     test_read_failure_is_not_retried()
+    test_ftp_trace_keeps_the_verb_and_drops_the_secret()
+    test_closed_pattern_is_eof_or_reset_only()
+    test_empty_ftp_error_names_every_clock()
+    test_config_read_hides_the_saved_password()
     print("ok")

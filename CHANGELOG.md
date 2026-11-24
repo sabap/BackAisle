@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.5.115] - 2026-11-24
+
+- A failed config read records every file name it tried, whether the card clock was read, and where the transfer stopped. A closed connection, a timeout, and an FTP reply stay distinct. The password is left out.
+- The read still tries the card clock, then UTC, then this server's clock. It still stops at 30 seconds. A failed read is not tried again.
+- The writer reloads when writer.py is newer than the running process, or when an update asks for a restart. The collector does not need a restart.
+
 ## [0.5.114] - 2026-11-24
 
 - Power, Vendors stores CyberPower onboarding defaults. A vendor zip must contain one firmware file and one data file. The update notes stay with that package.

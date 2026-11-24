@@ -40,6 +40,7 @@ from profiles import get_secret  # noqa: E402
 from db import connect, init_db  # noqa: E402
 from rmcard_ftp import (  # noqa: E402
     config_pull_names,
+    ftp_brief,
     ftp_get_named_config,
     ftp_put_config,
     ftp_put_firmware_bin,
@@ -272,7 +273,7 @@ def run_targets_parallel(job: dict, secrets: dict, targets, fn) -> None:
     for th in threads:
         th.join()
     if errors and job_truthy(job, "stop_on_error"):
-        raise RuntimeError("; ".join(errors)[:500])
+        raise RuntimeError("; ".join(errors)[:2000])
 
 
 def _run_target_attempts(con, job: dict, secrets: dict, t: dict, fn, retries: int, stop: threading.Event) -> None:
@@ -321,7 +322,7 @@ def _run_target_attempts(con, job: dict, secrets: dict, t: dict, fn, retries: in
             step(con, tid, 99, "error", "fail", str(e))
             con.execute(
                 "UPDATE write_job_targets SET status='fail', ended_at=?, error=? WHERE id=?",
-                (now(), str(e)[:500], tid),
+                (now(), str(e)[:2000], tid),
             )
             con.commit()
             raise
@@ -548,6 +549,34 @@ def card_clock(ip: str, secrets: dict) -> datetime | None:
     return found
 
 
+def _config_read_pattern(tried: list[str]) -> str:
+    """One word for the job row. The command times stay in the same message.
+
+    An empty EOF, or Windows reset 10054 / abort 10053, is a closed socket.
+    Any other dropped reply text stays "other" so it is not called a close.
+    """
+    blob = " ".join(tried)
+    closed = (
+        "EOFError" in blob
+        or "ConnectionResetError" in blob
+        or "ConnectionAbortedError" in blob
+        or "win=10054" in blob
+        or "win=10053" in blob
+    )
+    waited = "timed-out" in blob or "TimeoutError" in blob
+    replied = "reply=" in blob
+    kinds = int(closed) + int(waited) + int(replied)
+    if kinds > 1:
+        return "mixed"
+    if replied:
+        return "ftp-reply"
+    if waited:
+        return "timed-out"
+    if closed:
+        return "closed-without-reply"
+    return "other"
+
+
 def pull_config_bytes(
     ip: str,
     secrets: dict,
@@ -571,12 +600,18 @@ def pull_config_bytes(
         deadline_s = CARD_READ_DEADLINE_S
     deadline_s = max(0.0, min(float(deadline_s), 60.0))
     end = time.monotonic() + deadline_s
-    last: BaseException | None = None
+    tried: list[str] = []
+    started = time.monotonic()
 
     def halted() -> bool:
         if stop is not None and stop():
             raise RuntimeError("job cancelled")
         return time.monotonic() >= end
+
+    def hide(text: str) -> str:
+        if pw and len(pw) >= 4 and not pw.isdigit() and pw in text:
+            return text.replace(pw, "********")
+        return text
 
     if halted():
         raise RuntimeError("could not read the card config: card read deadline")
@@ -587,19 +622,37 @@ def pull_config_bytes(
     for name in names:
         if halted():
             break
-        if last is not None and time.monotonic() + 7 >= end:
+        if tried and time.monotonic() + 7 >= end:
             break
         try:
             data, got = ftp_get_named_config(ip, user, pw, [name], timeout=6)
             if _looks_like_rmcard_config(data):
                 return data, got
-            last = RuntimeError(f"ftp {name} is not an RMCARD config")
+            tried.append(hide(f"{name} not-a-config"))
         except Exception as exc:
-            last = RuntimeError(f"ftp {name}: {exc}")
-            log(f"ftp get failed: {last}")
-    if last is None:
-        last = CardReadDeadline("card read deadline")
-    raise RuntimeError(f"could not read the card config: {last}")
+            note = hide(str(exc).strip())
+            if name not in note:
+                note = hide(f"{name} {ftp_brief(exc, pw)}")
+            tried.append(note or f"{name} no-message")
+    if not tried:
+        raise RuntimeError("could not read the card config: card read deadline")
+    elapsed = time.monotonic() - started
+    pattern = _config_read_pattern(tried)
+    clock_word = "read" if clock is not None else "skipped"
+    first_name = tried[0].split(" ", 1)[0]
+    last_name = tried[-1].split(" ", 1)[0]
+    head = (
+        f"could not read the card config: {elapsed:.2f}s tried={len(tried)} "
+        f"of {len(names)} clock={clock_word} pattern={pattern} "
+        f"first={first_name}"
+    )
+    if len(tried) > 1:
+        head += f" last={last_name}"
+    # The names lead so a truncated job pill still shows the pattern.
+    # The command trace for every name follows.
+    detail = head + " || " + " || ".join(tried)
+    log("config read failed " + detail[:500])
+    raise RuntimeError(detail[:1900])
 
 
 def save_config_file(ip: str, data: bytes, name: str) -> Path:
@@ -1686,7 +1739,7 @@ def process_job(job_id: int) -> None:
             _audit_card_outcome(con, job_id, "Fail", str(e))
         else:
             log(f"job {job_id} failed: {e}")
-        con.execute("UPDATE write_jobs SET status='fail', ended_at=?, error=? WHERE id=?", (now(), str(e)[:500], job_id))
+        con.execute("UPDATE write_jobs SET status='fail', ended_at=?, error=? WHERE id=?", (now(), str(e)[:2000], job_id))
         con.commit()
     finally:
         con.close()
