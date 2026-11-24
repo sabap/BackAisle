@@ -122,29 +122,60 @@ function ba_queue_default_ups(PDO $db, array $user, array $post): array
     }
     $rawGroup = $post['group_id'] ?? '';
     $gid = ($rawGroup === '' || $rawGroup === null) ? null : (int)$rawGroup;
-    $cfgId = (int)($post['config_id'] ?? 0);
     $sid = (int)($post['snmp_profile_id'] ?? 0) ?: null;
     $postedHost = $post['hostname'] ?? $ip;
+    $settings = ba_vendor_settings($db);
+    $apply = (int)$settings['apply_config'] === 1;
+    $enforce = (int)$settings['enforce_firmware'] === 1;
+    $battery = (int)$settings['set_battery_date'] === 1;
+    $configId = $apply ? (int)$settings['config_template_id'] : 0;
+    $firmwareId = $enforce ? (int)$settings['firmware_id'] : 0;
+    if ($apply) {
+        $chk = $db->prepare('SELECT id FROM config_templates WHERE id=?');
+        $chk->execute([$configId]);
+        $haveConfig = (bool)$chk->fetch();
+        $chk->closeCursor();
+        if ($configId < 1 || !$haveConfig) {
+            throw new RuntimeException('Choose a config profile on Power, Vendors before adding a default UPS');
+        }
+    }
+    if ($enforce) {
+        $chk = $db->prepare('SELECT id FROM firmware_images WHERE id=?');
+        $chk->execute([$firmwareId]);
+        $haveFirmware = (bool)$chk->fetch();
+        $chk->closeCursor();
+        if ($firmwareId < 1 || !$haveFirmware) {
+            throw new RuntimeException('Choose an uploaded firmware version on Power, Vendors before adding a default UPS');
+        }
+    }
+    $wid = ba_webcred_posted($db, $post['web_credential_id'] ?? '');
+    ba_vendor_onboarding_login($db, $wid);
     $db->prepare('INSERT INTO devices (ip, hostname, site, group_id, snmp_profile_id, sensor_expected, is_simulated, enabled, va_rating) VALUES (?,?,?,?,?,1,0,1,2000)')
         ->execute([$ip, trim((string)$postedHost), 'Hospital', $gid, $sid]);
     $did = ba_last_id($db);
     if ($did > 0) {
         ba_pp_exec($db, 'UPDATE devices SET department_id=? WHERE id=?', [ba_device_department_choice($user), $did]);
-        $wid = ba_webcred_posted($db, $post['web_credential_id'] ?? '');
         if ($wid !== null) {
             ba_pp_exec($db, 'UPDATE devices SET web_credential_id=? WHERE id=?', [$wid, $did]);
         }
     }
-    $factory = ba_rmcard_factory_login();
+    $payload = [
+        'device_id' => $did,
+        'apply_config' => $apply ? 1 : 0,
+        'config_id' => $configId,
+        'enforce_firmware' => $enforce ? 1 : 0,
+        'firmware_id' => $firmwareId,
+        'set_battery_date' => $battery ? 1 : 0,
+    ];
     $db->prepare("INSERT INTO write_jobs (kind,status,simulate,stop_on_error,created_by,payload_json) VALUES ('provision','queued',0,1,?,?)")
-        ->execute([$user['username'], json_encode(['device_id'=>$did,'config_id'=>$cfgId,'web_user'=>$factory['user'],'web_pass'=>$factory['pass']])]);
+        ->execute([$user['username'], json_encode($payload)]);
     $jid = ba_last_id($db);
     $db->prepare("INSERT INTO write_job_targets (job_id,device_id,ip,hostname,status) VALUES (?,?,?,?,'queued')")
         ->execute([$jid, $did, $ip, $postedHost]);
     ba_audit($db, 'add_default_ups', 'device', (string)$did, $ip);
     return [
         'job_id' => $jid,
-        'message' => 'Default UPS ' . $ip . ' queued (' . $factory['user'] . '/' . $factory['pass'] . ' card login + config profile). Job #' . $jid,
+        'message' => 'Default UPS ' . $ip . ' queued. Onboarding follows the CyberPower settings on Power, Vendors. Job #' . $jid,
     ];
 }
 

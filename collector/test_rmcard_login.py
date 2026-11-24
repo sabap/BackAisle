@@ -538,13 +538,34 @@ def test_password_lines_are_not_sent_in_one_burst() -> None:
         raise AssertionError(repr(events))
 
 
-def test_confirm_mismatch_does_not_send_another_password() -> None:
+def test_confirm_mismatch_answers_the_new_password_once() -> None:
     cli, sent = _scripted_cli(
         [
             "New User Name:",
             "New Password:",
             "Admin Confirm Password:",
             "Admin Confirm Password has been entered incorrectly. New Password:",
+            "Admin Confirm Password:",
+            "CyberPower > ",
+        ],
+        "ops",
+        "next-secret",
+    )
+    cli._reach_prompt()
+    if sent != ["ops\r", "next-secret\r", "next-secret\r", "next-secret\r", "next-secret\r"]:
+        raise AssertionError(repr(sent))
+    if not cli.account_changed:
+        raise AssertionError("account")
+
+
+def test_second_password_rejection_stops() -> None:
+    cli, sent = _scripted_cli(
+        [
+            "New User Name:",
+            "New Password:",
+            "Admin Confirm Password:",
+            "Admin Confirm Password has been entered incorrectly. New Password:",
+            "Password Error",
         ],
         "ops",
         "next-secret",
@@ -555,10 +576,33 @@ def test_confirm_mismatch_does_not_send_another_password() -> None:
         text = str(exc)
     else:
         raise AssertionError("expected a refusal")
-    if "entered incorrectly" not in text or "next-secret" in text:
+    if "rejected the new administrator password" not in text or "Password Error" not in text:
         raise AssertionError(text)
-    if sent != ["ops\r", "next-secret\r", "next-secret\r"]:
+    if "next-secret" in text:
+        raise AssertionError("secret leaked")
+    if sent != ["ops\r", "next-secret\r", "next-secret\r", "next-secret\r"]:
         raise AssertionError(repr(sent))
+
+
+def test_firmware_compare_refuses_a_downgrade() -> None:
+    import writer
+
+    if not writer.firmware_is_older("1.4.1", "1.4.4"):
+        raise AssertionError("older")
+    if writer.firmware_is_older("1.4.4", "1.4.4") or writer.firmware_is_older("1.4", "1.4.0"):
+        raise AssertionError("equal")
+    if writer.firmware_is_older("1.10.0", "1.4.4") or writer.firmware_is_older("1.4.5", "1.4.4"):
+        raise AssertionError("newer")
+    shown = writer.parse_firmware_version("hardware 1.2 firmware 1.4.4 dhcp enable")
+    if shown != "1.4.4" or not writer.firmware_is_older(shown, "1.4.5"):
+        raise AssertionError(shown)
+    try:
+        writer.firmware_is_older("hardware 1.2", "1.4.4")
+    except RuntimeError as exc:
+        if "dotted number" not in str(exc):
+            raise
+    else:
+        raise AssertionError("expected a refusal")
 
 
 def test_silent_shell_presses_enter_once() -> None:
@@ -566,6 +610,93 @@ def test_silent_shell_presses_enter_once() -> None:
     cli._reach_prompt()
     if cli.account_changed or sent != ["\r"]:
         raise AssertionError(repr((cli.account_changed, sent)))
+
+
+def test_shell_sets_the_saved_account_before_ftp() -> None:
+    import writer
+
+    seen: list[str] = []
+
+    class Fake:
+        def __init__(self, ip, user, password, timeout=20, new_user=None, new_password=None):
+            self.account_changed = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def run(self, command):
+            seen.append(command)
+
+        def sign_out(self):
+            seen.append("exit")
+
+    def waited(ip, user, password, timeout_s=180):
+        if user != "ops" or password != "next-secret" or timeout_s != 180:
+            raise AssertionError(user)
+
+    changed = writer.enable_factory_ftp(
+        "10.1.1.1", "card", "secret", "ops", "next-secret", opener=Fake, wait=waited
+    )
+    if not changed or seen != [
+        "admin name ops",
+        "admin passwd next-secret",
+        "ftp access enable",
+        "exit",
+    ]:
+        raise AssertionError(repr((changed, seen)))
+
+
+def test_current_password_prompt_is_not_the_new_password() -> None:
+    cli, sent = _scripted_cli(
+        [
+            "New User Name:",
+            "input admin password :",
+            "New Password:",
+            "Admin Confirm Password:",
+            "CyberPower > ",
+        ],
+        "ops",
+        "next-secret",
+    )
+    cli._reach_prompt()
+    if sent != ["ops\r", "secret\r", "next-secret\r", "next-secret\r"]:
+        raise AssertionError(repr(sent))
+    if not cli.account_changed:
+        raise AssertionError("account")
+
+
+def test_telnet_enables_ssh_then_exits() -> None:
+    import socket
+    from rmcard_cli import enable_ssh_on_console
+
+    class Sock:
+        def __init__(self):
+            self.sent: list[bytes] = []
+            self.chunks = [
+                b"CyberPower SystemsCommand Shell v1.0\r\nLogin Name: ",
+                b"Login Password: ",
+                b"Welcome\r\nCyberPower > ",
+                b"\r\nCyberPower > ",
+            ]
+
+        def settimeout(self, _seconds):
+            return None
+
+        def recv(self, _size):
+            if not self.chunks:
+                raise socket.timeout()
+            return self.chunks.pop(0)
+
+        def sendall(self, data):
+            self.sent.append(data)
+
+    sock = Sock()
+    enable_ssh_on_console(sock, "card", "secret")
+    if sock.sent != [b"card\r", b"secret\r", b"console ssh enable\r", b"exit\r"]:
+        raise AssertionError(repr(sock.sent))
 
 
 def test_factory_auth_failure_uses_the_saved_login() -> None:
@@ -674,8 +805,13 @@ if __name__ == "__main__":
     test_rejected_administrator_password_is_not_retried()
     test_second_new_user_prompt_stops()
     test_password_lines_are_not_sent_in_one_burst()
-    test_confirm_mismatch_does_not_send_another_password()
+    test_confirm_mismatch_answers_the_new_password_once()
+    test_second_password_rejection_stops()
+    test_firmware_compare_refuses_a_downgrade()
     test_silent_shell_presses_enter_once()
+    test_shell_sets_the_saved_account_before_ftp()
+    test_current_password_prompt_is_not_the_new_password()
+    test_telnet_enables_ssh_then_exits()
     test_factory_auth_failure_uses_the_saved_login()
     test_ftp_wait_accepts_the_second_login()
     test_ftp_enable_wait_is_not_retried()

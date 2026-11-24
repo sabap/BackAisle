@@ -82,6 +82,10 @@ expect("account", {"role": "admin", "password": "GoodPass1"}, [
     "admin passwd GoodPass1",
     "admin show",
 ])
+expect("account", {"role": "admin", "password": "N3t$pass"}, [
+    "admin passwd N3t$pass",
+    "admin show",
+])
 expect("account", {"role": "device", "access": "disable", "name": "view1", "password": "ViewPass1"}, [
     "device access disable",
     "device name view1",
@@ -99,9 +103,9 @@ expect("account", {"role": "device", "name": "123456789012345"}, [
 
 rejects("account", {"role": "admin"})
 
-if not _LINE.match("ftp access enable") or not _LINE.match("ftp show"):
+if not _LINE.match("ftp access enable") or not _LINE.match("ftp show") or not _LINE.match("console ssh enable"):
     raise SystemExit("ftp enable was refused")
-if _LINE.match("ftp access disable") or _LINE.match("ftp port 2121") or _LINE.match("exit"):
+if _LINE.match("ftp access disable") or _LINE.match("ftp port 2121") or _LINE.match("exit") or _LINE.match("console ssh disable"):
     raise SystemExit("ftp command was too broad")
 rejects("account", {"role": "admin", "access": "enable"})
 rejects("account", {"role": "device", "name": "this name is too long"})

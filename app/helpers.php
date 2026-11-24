@@ -86,6 +86,7 @@ function ba_request_path(): string {
         'users.php' => '/users',
         'account.php' => '/account',
         'writes.php' => '/writes',
+        'vendors.php' => '/vendors',
         'org.php' => '/org',
         'snmp.php' => '/snmp',
         'models.php' => '/models',

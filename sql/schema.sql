@@ -380,9 +380,34 @@ CREATE TABLE firmware_images (
   version NVARCHAR(64) NOT NULL,
   fw_path NVARCHAR(512) NOT NULL,
   data_path NVARCHAR(512) NOT NULL,
+  notes_path NVARCHAR(512) NULL,
+  source_name NVARCHAR(255) NULL,
   uploaded_at NVARCHAR(32) NOT NULL,
   uploaded_by NVARCHAR(128) NULL
 );
+GO
+IF COL_LENGTH('firmware_images', 'notes_path') IS NULL
+  ALTER TABLE firmware_images ADD notes_path NVARCHAR(512) NULL;
+GO
+IF COL_LENGTH('firmware_images', 'source_name') IS NULL
+  ALTER TABLE firmware_images ADD source_name NVARCHAR(255) NULL;
+GO
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'power_vendors')
+CREATE TABLE power_vendors (
+  code NVARCHAR(32) NOT NULL PRIMARY KEY,
+  name NVARCHAR(64) NOT NULL,
+  apply_config INT NOT NULL DEFAULT 0,
+  config_template_id INT NULL,
+  enforce_firmware INT NOT NULL DEFAULT 0,
+  firmware_id INT NULL,
+  set_battery_date INT NOT NULL DEFAULT 0,
+  updated_at NVARCHAR(32) NULL,
+  updated_by NVARCHAR(128) NULL
+);
+GO
+IF NOT EXISTS (SELECT 1 FROM power_vendors WHERE code = 'cyberpower')
+INSERT INTO power_vendors (code, name, apply_config, enforce_firmware, set_battery_date)
+VALUES ('cyberpower', 'CyberPower', 0, 0, 0);
 GO
 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'write_jobs')
 CREATE TABLE write_jobs (

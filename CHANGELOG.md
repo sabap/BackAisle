@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.5.114] - 2026-11-24
+
+- Power, Vendors stores CyberPower onboarding defaults. A vendor zip must contain one firmware file and one data file. The update notes stay with that package.
+- Add default UPS uses those settings. It signs in with the factory account. When the card asks for a new administrator name, it answers with the Web/SSH/FTP login saved on the UPS. When the card opens at the command prompt, it sets that login there.
+- A confirm password that was entered incorrectly is answered once more. A second rejection stops the job. The password is left out of the quoted card text.
+- Firmware updates only when the minimum-firmware switch is on and the card is older than the selected package. A newer card stays on its current firmware. If the version cannot be read, the update is not started.
+- The default profile keeps the card IP address, gateway, subnet mask, hostname, and MAC address. The battery replacement date is today only when that switch is on.
+- The three switches start off. Apply config profile uses the same login check. It does not update firmware and it does not set the battery date.
+- Signed-in pages use app.css?v=layout19. Login stays layout6.
+- The writer reloads when writer.py is newer than the running process, or when an update asks for a restart. The collector does not need a restart.
+
 ## [0.5.113] - 2026-11-24
 
 - Apply config profile with the factory login checked signs in with the saved Web/SSH/FTP login when the factory password no longer works. It then enables FTP and signs out.

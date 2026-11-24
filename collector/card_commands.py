@@ -22,7 +22,7 @@ _FIELDS = {
     "sensor": {"index", "name", "location", "temp_high", "temp_low", "humid_high", "humid_low"},
     "account": {"role", "name", "password", "access"},
 }
-_SECRET = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.,_/#()+=!@%-]{3,62}$")
+_SECRET = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.,_/#()+=!@%$-]{3,62}$")
 _PASSWD_LINE = re.compile(r"^((?:admin|device) passwd )\S+$")
 
 _LINE = re.compile(
@@ -39,11 +39,12 @@ _LINE = re.compile(
     r"|envcfg index [1-8] (?:temphthres|templthres|humhthres|humlthres) -?\d+"
     r"|envcfg show"
     r"|(?:admin|device) name " + _ARG + r""
-    r"|(?:admin|device) passwd [A-Za-z0-9][A-Za-z0-9.,_/#()+=!@%-]{3,62}"
+    r"|(?:admin|device) passwd [A-Za-z0-9][A-Za-z0-9.,_/#()+=!@%$-]{3,62}"
     r"|device access (?:enable|disable)"
     r"|(?:admin|device) show"
     r"|ftp show"
     r"|ftp access enable"
+    r"|console ssh enable"
     r")$"
 )
 
@@ -86,7 +87,7 @@ def _secret(value, limit: int, label: str) -> str:
     text = str(value if value is not None else "")
     if text != text.strip() or len(text) < 4 or len(text) > limit or not _SECRET.match(text):
         raise ValueError(
-            label + " must be 4 to " + str(limit) + " characters: letters, numbers, and . , _ - / # ( ) + = ! @ %"
+            label + " must be 4 to " + str(limit) + " characters: letters, numbers, and . , _ - / # ( ) + = ! @ % $"
         )
     return text
 

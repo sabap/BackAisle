@@ -572,8 +572,8 @@ function ba_card_fields(string $recipe): array
 function ba_card_secret(string $raw, int $max, string $label): string
 {
     $len = strlen($raw);
-    if ($raw !== trim($raw) || $len < 4 || $len > $max || !preg_match('/^[A-Za-z0-9][A-Za-z0-9.,_\/#()+=!@%-]*$/', $raw)) {
-        throw new RuntimeException($label . ' must be 4 to ' . $max . ' characters: letters, numbers, and . , _ - / # ( ) + = ! @ %');
+    if ($raw !== trim($raw) || $len < 4 || $len > $max || !preg_match('/^[A-Za-z0-9][A-Za-z0-9.,_\/#()+=!@%$-]*$/', $raw)) {
+        throw new RuntimeException($label . ' must be 4 to ' . $max . ' characters: letters, numbers, and . , _ - / # ( ) + = ! @ % $');
     }
     return $raw;
 }

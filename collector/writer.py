@@ -182,6 +182,8 @@ def is_retryable(exc: BaseException) -> bool:
         "rejected the new administrator",
         "web/ssh/ftp credential",
         "could not read the card config",
+        "config profile missing",
+        "firmware version could not be read",
         "card read deadline",
         "job cancelled",
     )
@@ -638,6 +640,23 @@ def run_pull(con, job: dict, secrets: dict) -> None:
     )
 
 
+def _port_refused(exc: BaseException) -> bool:
+    seen: list[BaseException] = [exc]
+    index = 0
+    while index < len(seen) and index < 6:
+        item = seen[index]
+        index += 1
+        if isinstance(item, ConnectionRefusedError) or getattr(item, "winerror", None) == 10061:
+            return True
+        text = str(item).lower()
+        if "connection refused" in text or "10061" in text:
+            return True
+        for nxt in (item.__cause__, item.__context__):
+            if isinstance(nxt, BaseException) and all(nxt is not old for old in seen):
+                seen.append(nxt)
+    return False
+
+
 def enable_factory_ftp(
     ip: str,
     user: str,
@@ -647,21 +666,45 @@ def enable_factory_ftp(
     opener=None,
     wait=None,
 ) -> bool:
-    """A factory card has FTP off. The first SSH login may demand a new account.
+    """Sign in, set the saved administrator, and make sure FTP is on.
 
-    The saved Web/SSH/FTP login is that new account. exit makes FTP active.
+    SSH may already be open. When it is closed, telnet enables it. If the
+    shell asks for a new administrator, answer with the saved login. New
+    Password and Confirm Password both get that saved password. If the shell
+    opens without those questions, admin name and admin passwd set the same
+    login, and input admin password is the current password.
     Returns True when the card accepted the new account, so later FTP uses it.
     """
-    from rmcard_cli import RmcardCli
+    from card_commands import build_card_commands
+    from rmcard_cli import RmcardCli, enable_ssh_via_telnet
 
     Cli = opener or RmcardCli
 
-    def session(login_user: str, login_pass: str, rename: str | None, new_pass: str | None) -> bool:
+    def session_once(login_user: str, login_pass: str, rename: str | None, new_pass: str | None) -> bool:
         with Cli(ip, login_user, login_pass, new_user=rename, new_password=new_pass) as cli:
             accepted = bool(getattr(cli, "account_changed", False))
+            if not accepted and rename and new_pass:
+                lines = build_card_commands(
+                    "account",
+                    {"role": "admin", "name": rename, "password": new_pass},
+                )
+                for line in lines:
+                    if line.endswith(" show"):
+                        continue
+                    cli.run(line)
+                accepted = True
             cli.run("ftp access enable")
             cli.sign_out()
             return accepted
+
+    def session(login_user: str, login_pass: str, rename: str | None, new_pass: str | None) -> bool:
+        try:
+            return session_once(login_user, login_pass, rename, new_pass)
+        except Exception as exc:
+            if opener is not None or not _port_refused(exc):
+                raise
+            enable_ssh_via_telnet(ip, login_user, login_pass)
+            return session_once(login_user, login_pass, rename, new_pass)
 
     try:
         changed = session(user, password, new_user, new_password)
@@ -895,46 +938,236 @@ def run_firmware(con, job: dict, secrets: dict) -> None:
                 raise
 
 
+_FW_IN_TEXT = re.compile(r"(?i)firmware(?:\s+version)?\s*:?\s*([0-9]+(?:\.[0-9]+){1,3})")
+
+
+def parse_firmware_version(text: str) -> str:
+    """A dotted card version, from a bare value or a sys show line."""
+    raw = " ".join((text or "").split())
+    if re.fullmatch(r"[0-9]+(?:\.[0-9]+){1,3}", raw):
+        return raw
+    found = _FW_IN_TEXT.search(raw)
+    if not found:
+        raise RuntimeError("firmware version is not a dotted number")
+    return found.group(1)
+
+
+def _firmware_tuple(text: str) -> tuple[int, int, int]:
+    parts = [int(piece) for piece in parse_firmware_version(text).split(".")]
+    while len(parts) < 3:
+        parts.append(0)
+    return parts[0], parts[1], parts[2]
+
+
+def firmware_is_older(current: str, minimum: str) -> bool:
+    """True only when the card is below the selected minimum. Equal is not older."""
+    return _firmware_tuple(current) < _firmware_tuple(minimum)
+
+
+def _login_is_factory(user: str, password: str) -> bool:
+    return user.strip().lower() == RMCARD_FACTORY_USER.lower() or password == RMCARD_FACTORY_PASS
+
+
+def read_card_firmware(ip: str, user: str, password: str) -> str:
+    """Read the agent firmware from sys show. The shell is closed afterward."""
+    from rmcard_cli import RmcardCli
+
+    with RmcardCli(ip, user, password) as cli:
+        text = cli.run("sys show")
+        cli.sign_out()
+    return parse_firmware_version(text)
+
+
+def _saved_onboarding_login(con, device, secrets: dict) -> tuple[str, str]:
+    saved = assigned_card_login(con, device)
+    if saved is None:
+        saved = web_creds(secrets)
+    user, password = saved
+    if _login_is_factory(user, password):
+        raise RuntimeError(
+            "Choose a Web/SSH/FTP login that is not the factory account. "
+            "The card rejects that name and password."
+        )
+    return user, password
+
+
+def _provision_firmware(con, secrets: dict, tid: int, seq: int, ip: str, user: str, password: str, image, simulate: bool) -> int:
+    minimum = str(image["version"] or "").strip()
+    fw_path = Path(image["fw_path"])
+    data_path = Path(image["data_path"])
+    if not re.match(r"cpsrm2scfw_.*\.bin$", fw_path.name, re.I):
+        raise RuntimeError(f"firmware file must be cpsrm2scfw_XXX.bin, got {fw_path.name}")
+    if not re.match(r"cpsrm2scdata_.*\.bin$", data_path.name, re.I):
+        raise RuntimeError(f"data file must be cpsrm2scdata_XXX.bin, got {data_path.name}")
+    step(con, tid, seq, "read_firmware", "running", minimum)
+    if simulate:
+        step(con, tid, seq, "read_firmware", "ok", f"SIMULATE compare with {minimum}")
+        return seq + 1
+    # The credential session just closed. A second SSH too soon misses the banner.
+    time.sleep(4)
+    current = ""
+    show_error: Exception | None = None
+    try:
+        current = read_card_firmware(ip, user, password)
+    except Exception as exc:
+        show_error = exc
+    if not current:
+        try:
+            snmp_user, auth, priv = snmp_creds(secrets)
+            agent = asyncio.run(snmp_get_one(ip, snmp_user, auth, priv, SET_OIDS["agentFirmware"]))
+            current = parse_firmware_version("" if agent is None else str(agent))
+        except Exception as exc:
+            shown = str(show_error) if show_error is not None else str(exc)
+            raise RuntimeError(
+                "the card firmware version could not be read, so the update was not started. " + shown
+            ) from exc
+    if not firmware_is_older(current, minimum):
+        step(con, tid, seq, "read_firmware", "ok", f"{current} is already at or above {minimum}")
+        return seq + 1
+    step(con, tid, seq, "read_firmware", "ok", f"{current} is older than {minimum}")
+    seq += 1
+    step(con, tid, seq, "put_fw", "running", fw_path.name)
+    detail = ftp_put_firmware_bin(ip, user, password, fw_path, simulate=False)
+    step(con, tid, seq, "put_fw", "ok", detail)
+    seq += 1
+    step(con, tid, seq, "reboot_after_fw", "running", "do not power off UPS")
+    wait_ftp_alive(ip, user, password, timeout_s=240, simulate=False)
+    time.sleep(5)
+    step(con, tid, seq, "reboot_after_fw", "ok", "")
+    seq += 1
+    step(con, tid, seq, "put_data", "running", data_path.name)
+    detail = ftp_put_firmware_bin(ip, user, password, data_path, simulate=False)
+    step(con, tid, seq, "put_data", "ok", detail)
+    seq += 1
+    step(con, tid, seq, "reboot_after_data", "running", "")
+    wait_ftp_alive(ip, user, password, timeout_s=240, simulate=False)
+    step(con, tid, seq, "reboot_after_data", "ok", "")
+    return seq + 1
+
+
+def _provision_config(con, job: dict, secrets: dict, tid: int, seq: int, ip: str, host: str, user: str, password: str, simulate: bool) -> int:
+    payload = json.loads(job["payload_json"] or "{}")
+    cfg_id = int(payload.get("config_id") or 0)
+    tmpl = con.execute("SELECT * FROM config_templates WHERE id=?", (cfg_id,)).fetchone()
+    if not tmpl:
+        raise RuntimeError("config profile missing")
+    raw = Path(tmpl["path"]).read_text(encoding="latin1")
+    if not looks_like_rmcard_config(raw):
+        raise RuntimeError("template file does not look like an RMCARD text config")
+    step(con, tid, seq, "read_config", "running", "reading this card over FTP")
+    if simulate:
+        step(con, tid, seq, "read_config", "ok", "SIMULATE kept this card address and name")
+        step(con, tid, seq + 1, "restore", "ok", "SIMULATE config profile")
+        return seq + 2
+    current, _name = pull_config_bytes(
+        ip, secrets, user, password, stop=lambda: job_is_cancelled(con, int(job["id"]))
+    )
+    rewritten = apply_profile_keep_network(raw, current.decode("latin1", "replace"), ip, host)
+    step(con, tid, seq, "read_config", "ok", "kept this card address and name")
+    fname = datetime.now().strftime("%Y_%m_%d_%H%M.txt")
+    tmp = CONFIG_DIR / f"provision_{ip.replace('.', '_')}_{fname}"
+    tmp.write_text(rewritten, encoding="latin1")
+    seq += 1
+    step(con, tid, seq, "restore", "running", str(tmpl["name"]))
+    detail = scp_put_config(ip, user, password, tmp, fname, simulate=False)
+    step(con, tid, seq, "restore", "ok", detail)
+    seq += 1
+    step(con, tid, seq, "wait_reboot", "running", "")
+    time.sleep(8)
+    wait_ftp_alive(ip, user, password, timeout_s=180, simulate=False)
+    step(con, tid, seq, "wait_reboot", "ok", "")
+    return seq + 1
+
+
+def _provision_battery(con, secrets: dict, tid: int, seq: int, ip: str, device_id: int, simulate: bool) -> int:
+    today = datetime.now().strftime("%m/%d/%Y")
+    step(con, tid, seq, "battery_date", "running", today)
+    if simulate:
+        step(con, tid, seq, "battery_date", "ok", f"SIMULATE {today}")
+        return seq + 1
+    snmp_user, auth, priv = snmp_creds(secrets)
+    asyncio.run(snmp_set(ip, snmp_user, auth, priv, "batteryLastReplace", today))
+    stored = datetime.now().date().isoformat()
+    try:
+        con.execute("UPDATE devices SET last_battery_replacement=? WHERE id=?", (stored, device_id))
+        con.commit()
+    except Exception:
+        pass
+    step(con, tid, seq, "battery_date", "ok", today)
+    return seq + 1
+
+
 def run_provision(con, job: dict, secrets: dict) -> None:
+    """New CyberPower card: check the login prompt, then the vendor defaults.
+
+    Firmware and the battery date run only when that vendor setting is on.
+    A newer card is not downgraded. Apply config profile does not call this.
+    """
     payload = json.loads(job["payload_json"] or "{}")
     device = con.execute("SELECT * FROM devices WHERE id=?", (payload["device_id"],)).fetchone()
+    if not device:
+        raise RuntimeError("device missing")
     tgt = con.execute("SELECT id FROM write_job_targets WHERE job_id=?", (job["id"],)).fetchone()
+    if not tgt:
+        raise RuntimeError("provision target missing")
     tid = tgt["id"]
-    # A new card is still at the factory login in the payload. The assigned
-    # Web/SSH/FTP credential is for jobs after that first connection.
-    web_user = payload.get("web_user") or RMCARD_FACTORY_USER
-    web_pass = payload.get("web_pass") or RMCARD_FACTORY_PASS
-    step(con, tid, 1, "web_login", "running", web_user)
-    sess = RmcardSession(device["ip"], web_user, web_pass)
+    con.execute("UPDATE write_job_targets SET status='running', started_at=? WHERE id=?", (now(), tid))
+    con.commit()
+    simulate = job_is_simulate(job)
     try:
-        sess.login(tries=1, deadline=time.monotonic() + CARD_READ_DEADLINE_S)
-        step(con, tid, 1, "web_login", "ok", "factory " + RMCARD_FACTORY_USER + "/" + RMCARD_FACTORY_PASS)
-    finally:
-        # Provision applies the profile over SCP. Holding the web slot blocks the retry.
-        try:
-            sess.logout()
-        except Exception:
-            pass
-    cfg_id = int(payload.get("config_id") or 0)
-    if cfg_id:
-        tmpl = con.execute("SELECT * FROM config_templates WHERE id=?", (cfg_id,)).fetchone()
-        if not tmpl:
-            raise RuntimeError("config profile missing")
-        raw = Path(tmpl["path"]).read_bytes()
-        fname = time.strftime("%Y_%m_%d_%H%M.txt")
-        tmp = CONFIG_DIR / f"provision_{device['ip'].replace('.', '_')}_{fname}"
-        tmp.write_bytes(raw)
-        step(con, tid, 2, "apply_config", "running", tmpl["name"])
-        try:
-            detail = scp_put_config(device["ip"], web_user, web_pass, tmp, fname, simulate=job_is_simulate(job))
-        except Exception as e:
-            detail = f"scp failed ({e}); config stored for manual restore"
-        step(con, tid, 2, "apply_config", "ok", detail)
-        wait_ftp_alive(device["ip"], web_user, web_pass, timeout_s=180, simulate=job_is_simulate(job))
-    sample = asyncio.run(poll_after(device["ip"], secrets))
-    step(con, tid, 3, "snmp_poll", "ok", json.dumps({"model": sample.get("model"), "firmware": sample.get("firmware")}))
-    con.execute("UPDATE write_job_targets SET status='ok', ended_at=?, post_model=?, post_firmware=? WHERE id=?",
-                (now(), sample.get("model"), sample.get("firmware"), tid))
+        saved_user, saved_pass = _saved_onboarding_login(con, device, secrets)
+        ip = str(device["ip"])
+        host = str(device["hostname"] or "").strip()
+        step(con, tid, 1, "enable_ftp", "running", "checking the card login")
+        if simulate:
+            user, password = saved_user, saved_pass
+            step(con, tid, 1, "enable_ftp", "ok", "SIMULATE credential check")
+        else:
+            changed = enable_factory_ftp(
+                ip, RMCARD_FACTORY_USER, RMCARD_FACTORY_PASS, saved_user, saved_pass
+            )
+            user, password = (saved_user, saved_pass) if changed else (RMCARD_FACTORY_USER, RMCARD_FACTORY_PASS)
+            detail = "FTP enabled over SSH"
+            if changed:
+                detail += ". Administrator name updated."
+            step(con, tid, 1, "enable_ftp", "ok", detail)
+        seq = 2
+        if payload_flag(payload, "enforce_firmware"):
+            image = con.execute(
+                "SELECT * FROM firmware_images WHERE id=?",
+                (int(payload.get("firmware_id") or 0),),
+            ).fetchone()
+            if not image:
+                raise RuntimeError("firmware image missing")
+            seq = _provision_firmware(con, secrets, tid, seq, ip, user, password, image, simulate)
+        if payload_flag(payload, "apply_config"):
+            seq = _provision_config(con, job, secrets, tid, seq, ip, host, user, password, simulate)
+        if payload_flag(payload, "set_battery_date"):
+            seq = _provision_battery(con, secrets, tid, seq, ip, int(device["id"]), simulate)
+        step(con, tid, seq, "snmp_poll", "running", "")
+        if simulate:
+            step(con, tid, seq, "snmp_poll", "ok", "SIMULATE")
+            sample = {}
+        else:
+            sample = asyncio.run(poll_after(ip, secrets))
+            step(con, tid, seq, "snmp_poll", "ok", json.dumps({
+                "model": sample.get("model"),
+                "firmware": sample.get("firmware"),
+                "agent_firmware": sample.get("agent_firmware"),
+            }))
+        con.execute(
+            "UPDATE write_job_targets SET status='ok', ended_at=?, post_model=?, post_firmware=? WHERE id=?",
+            (now(), sample.get("model"), sample.get("agent_firmware") or sample.get("firmware"), tid),
+        )
+        con.commit()
+    except Exception as exc:
+        step(con, tid, 99, "error", "fail", str(exc))
+        con.execute(
+            "UPDATE write_job_targets SET status='fail', ended_at=?, error=? WHERE id=?",
+            (now(), str(exc)[:500], tid),
+        )
+        con.commit()
+        raise
 
 
 def run_push_cert(con, job: dict, secrets: dict) -> None:

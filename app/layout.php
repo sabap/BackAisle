@@ -15,7 +15,7 @@ function ba_layout_start(string $title, string $nav = 'fleet'): void {
     $canWrites = function_exists('ba_editor') && ba_editor($u, 'edit_writes');
     $watchOn = ba_nav_on($nav, ['alerts', 'events']);
     $pollOn = ba_nav_on($nav, ['snmp', 'models']);
-    $powerOn = ba_nav_on($nav, ['fleet', 'batteries', 'battery', 'writes']);
+    $powerOn = ba_nav_on($nav, ['fleet', 'batteries', 'battery', 'writes', 'vendors']);
     $envOn = ba_nav_on($nav, ['climate']);
     ?>
 <!doctype html>
@@ -27,7 +27,7 @@ function ba_layout_start(string $title, string $nav = 'fleet'): void {
   <link rel="icon" href="/assets/logo.svg?v=aisle1" type="image/svg+xml">
   <link rel="icon" href="/assets/favicon-32.png?v=aisle1" type="image/png" sizes="32x32">
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=aisle1">
-  <link rel="stylesheet" href="/assets/app.css?v=layout18">
+  <link rel="stylesheet" href="/assets/app.css?v=layout19">
 </head>
 <body<?= ba_tech_mode() ? ' class="tech"' : '' ?>>
 <header class="top">
@@ -55,6 +55,7 @@ function ba_layout_start(string $title, string $nav = 'fleet'): void {
       <a class="<?= $nav==='batteries'?'on':'' ?>" href="/batteries.php">Batteries</a>
       <a class="<?= $nav==='battery'?'on':'' ?>" href="/battery.php">Due</a>
       <?php if ($canWrites): ?>
+        <a class="<?= $nav==='vendors'?'on':'' ?>" href="/vendors.php">Vendors</a>
         <a class="<?= $nav==='writes'?'on':'' ?>" href="/writes.php">Writes</a>
       <?php endif; ?>
     </span>

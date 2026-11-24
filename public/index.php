@@ -9,6 +9,7 @@ require __DIR__ . '/../app/auth.php';
 require __DIR__ . '/../app/layout.php';
 require __DIR__ . '/../app/pages.php';
 require __DIR__ . '/../app/writes.php';
+require __DIR__ . '/../app/vendors.php';
 require __DIR__ . '/../app/card_settings.php';
 require __DIR__ . '/../app/ldap.php';
 require __DIR__ . '/../app/webcred.php';
@@ -123,6 +124,9 @@ switch ($path) {
         break;
     case '/writes':
         page_fleet_writes($db, $user);
+        break;
+    case '/vendors':
+        page_power_vendors($db, $user);
         break;
     case '/writes/template':
         page_template_view($db);

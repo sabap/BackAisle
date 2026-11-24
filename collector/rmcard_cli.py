@@ -213,6 +213,7 @@ class RmcardCli:
         sent_pass = False
         sent_new_user = False
         password_answers = 0
+        recovered = False
         just_sent = ""
         # A factory card is already waiting at New User Name. Enter before
         # that question is a blank name, and the saved password then lands
@@ -232,7 +233,17 @@ class RmcardCli:
                 woke = True
                 continue
             if sent_new_user and password_answers and _PASSWORD_REJECT.search(buf):
-                raise RuntimeError(self._rejected_password(buf))
+                # Firmware 1.4.4 asks for New Password again when the confirm
+                # did not match. Answer that question once. A second rejection stops.
+                asks_again = (
+                    not recovered
+                    and re.search(r"entered incorrectly", buf, re.I) is not None
+                    and _NEW_PASS.search(buf) is not None
+                )
+                if not asks_again:
+                    raise RuntimeError(self._rejected_password(buf))
+                recovered = True
+                password_answers = 0
             while True:
                 hits = _prompt_hits(buf)
                 if not hits:
@@ -243,6 +254,15 @@ class RmcardCli:
                     continue
                 if kind == "prompt":
                     return
+                line_start = buf.rfind("\n", 0, start) + 1
+                if _CONFIRM.search(buf[line_start:end]):
+                    # "input admin password" asks for the password that
+                    # already works. The new password is a later question.
+                    chan.send(self.password + "\r")
+                    started = True
+                    just_sent = self.password
+                    buf = buf[end:]
+                    break
                 if kind == "new_user" or (kind == "user" and sent_new_user):
                     if sent_new_user:
                         raise RuntimeError(self._rejected_name(buf))
@@ -360,3 +380,88 @@ def _card_reject_message(command: str, text: str) -> str:
     if len(shown) > 180:
         shown = shown[:180]
     return shown + " was rejected (" + reason + "). The card was not reset."
+
+
+_IAC, _DO, _DONT, _WILL, _WONT, _SB, _SE = 255, 253, 254, 251, 252, 250, 240
+
+
+def _telnet_eat(sock, data: bytes) -> bytes:
+    """Answer telnet options and return the text bytes."""
+    out = bytearray()
+    replies = bytearray()
+    index = 0
+    while index < len(data):
+        if data[index] != _IAC or index + 1 >= len(data):
+            if data[index] != _IAC:
+                out.append(data[index])
+            index += 1
+            continue
+        cmd = data[index + 1]
+        if cmd in (_DO, _DONT, _WILL, _WONT) and index + 2 < len(data):
+            opt = data[index + 2]
+            reply = {_WILL: _DO, _DO: _WILL, _DONT: _WONT, _WONT: _DONT}[cmd]
+            replies.extend((_IAC, reply, opt))
+            index += 3
+            continue
+        if cmd == _SB:
+            end = data.find(bytes((_IAC, _SE)), index + 2)
+            index = len(data) if end < 0 else end + 2
+            continue
+        index += 2
+    if replies:
+        sock.sendall(replies)
+    return bytes(out)
+
+
+def _telnet_read(sock, marker: str, seconds: float) -> str:
+    end = time.time() + seconds
+    buf = ""
+    while time.time() < end and marker not in buf:
+        sock.settimeout(0.4)
+        try:
+            chunk = sock.recv(4096)
+        except socket.timeout:
+            continue
+        if not chunk:
+            break
+        buf += _telnet_eat(sock, chunk).decode("utf-8", "replace").replace("\x00", "")
+    return buf
+
+
+def enable_ssh_on_console(sock, user: str, password: str) -> None:
+    """A factory card serves telnet and leaves SSH closed. Enable SSH, then exit."""
+    banner = _telnet_read(sock, "Login Name:", 8)
+    if "Login Name:" not in banner:
+        raise RuntimeError("the card did not ask for a telnet login")
+    sock.sendall(user.encode() + b"\r")
+    asked = _telnet_read(sock, "Login Password:", 8)
+    if "Login Password:" not in asked:
+        raise RuntimeError("the card did not ask for the telnet password")
+    sock.sendall(password.encode() + b"\r")
+    shell = _telnet_read(sock, "CyberPower >", 12)
+    if "CyberPower >" not in shell:
+        raise RuntimeError("telnet did not reach the command prompt")
+    sock.sendall(b"console ssh enable\r")
+    reply = _telnet_read(sock, "CyberPower >", 8)
+    if "Parameter Error" in reply or "Command not found" in reply or "CyberPower >" not in reply:
+        raise RuntimeError("the card did not enable SSH")
+    sock.sendall(b"exit\r")
+
+
+def enable_ssh_via_telnet(host: str, user: str, password: str) -> None:
+    sock = socket.create_connection((host, 23), timeout=12)
+    try:
+        enable_ssh_on_console(sock, user, password)
+    finally:
+        sock.close()
+    deadline = time.time() + 15
+    last: Exception | None = None
+    while time.time() < deadline:
+        try:
+            probe = socket.create_connection((host, 22), timeout=3)
+            probe.close()
+            return
+        except OSError as exc:
+            last = exc
+            time.sleep(1)
+    raise RuntimeError("SSH did not open after it was enabled") from last

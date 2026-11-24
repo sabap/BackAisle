@@ -458,6 +458,8 @@ SET_OIDS = {
     "envirHumidHigh": (1, 3, 6, 1, 4, 1, 3808, 1, 1, 4, 3, 2, 0),
     "envirHumidLow": (1, 3, 6, 1, 4, 1, 3808, 1, 1, 4, 3, 3, 0),
     "agentFirmware": (1, 3, 6, 1, 4, 1, 3808, 1, 1, 1, 1, 2, 4, 0),
+    # RMCARD battery replacement date, DisplayString mm/dd/yyyy.
+    "batteryLastReplace": (1, 3, 6, 1, 4, 1, 3808, 1, 1, 1, 2, 1, 3, 0),
 }
 
 

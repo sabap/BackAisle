@@ -1462,16 +1462,13 @@ JS;
     if ($canDefaultUps) {
         $groups = ba_groups($db);
         ba_users_modal_open('modal-add-default', 'Add default UPS', false, '', true);
-        echo '<p class="muted">Connects with factory <code>cyber</code>/<code>cyber</code>, applies a config profile, then polls with the selected SNMPv3 credentials. A Web/SSH/FTP login saved here is for later jobs. The first connection still uses the factory login.</p>';
+        echo '<p class="muted">Adds a new CyberPower UPS and starts onboarding. Assign a Web/SSH/FTP login that is not the factory account. BackAisle signs in with the factory account and sets that saved login when the card asks, or at the command prompt when it does not. Default config, minimum firmware, and the battery replacement date come from Power, Vendors. A card that is already in inventory uses Apply config profile instead.</p>';
         echo '<form method="post" class="stack" action="'.h(ba_href('/devices')).'">';
         echo '<label>IP</label><input name="ip" placeholder="IP" required>';
         echo '<label>Hostname</label><input name="hostname" placeholder="hostname">';
         echo '<label>Group</label><select name="group_id"><option value="">group</option>'.ba_group_options($groups).'</select>';
-        echo '<label>Config profile</label><select name="config_id"><option value="0">config profile</option>';
-        foreach ($db->query('SELECT id,name,is_default FROM config_templates') as $t) {
-            echo '<option value="'.(int)$t['id'].'" '.($t['is_default']?'selected':'').'>'.h($t['name']).'</option>';
-        }
-        echo '</select><label>Web/SSH/FTP login</label><select name="web_credential_id"><option value="">(site default)</option>'.ba_webcred_options($db, null).'</select>';
+        echo '<label>Web/SSH/FTP login</label><select name="web_credential_id"><option value="">(site default)</option>'.ba_webcred_options($db, null).'</select>';
+        echo '<p class="muted">Site default uses UPS_WEB_USER when that is set. The saved login must not be the factory account.</p>';
         echo '<label>SNMPv3 credentials</label><select name="snmp_profile_id"><option value="">SNMPv3 after apply</option>';
         foreach (ba_snmp_card_profiles($db) as $p) {
             echo '<option value="'.(int)$p['id'].'">'.h($p['name']).'</option>';

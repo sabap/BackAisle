@@ -197,8 +197,21 @@ CREATE TABLE IF NOT EXISTS firmware_images (
   version TEXT NOT NULL,
   fw_path TEXT NOT NULL,
   data_path TEXT NOT NULL,
+  notes_path TEXT,
+  source_name TEXT,
   uploaded_at TEXT NOT NULL,
   uploaded_by TEXT
+);
+CREATE TABLE IF NOT EXISTS power_vendors (
+  code TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  apply_config INTEGER NOT NULL DEFAULT 0,
+  config_template_id INTEGER,
+  enforce_firmware INTEGER NOT NULL DEFAULT 0,
+  firmware_id INTEGER,
+  set_battery_date INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT,
+  updated_by TEXT
 );
 CREATE TABLE IF NOT EXISTS write_jobs (
   id INTEGER PRIMARY KEY,
@@ -662,6 +675,10 @@ def init_db(con=None):
             "IF COL_LENGTH('devices','web_credential_id') IS NULL ALTER TABLE devices ADD web_credential_id INT NULL",
             "IF COL_LENGTH('events','source') IS NULL ALTER TABLE events ADD source NVARCHAR(16) NULL",
             "IF COL_LENGTH('snmp_profiles','cred_style') IS NULL ALTER TABLE snmp_profiles ADD cred_style NVARCHAR(16) NOT NULL CONSTRAINT DF_snmp_profiles_cred_style DEFAULT 'authpriv'",
+            "IF COL_LENGTH('firmware_images','notes_path') IS NULL ALTER TABLE firmware_images ADD notes_path NVARCHAR(512) NULL",
+            "IF COL_LENGTH('firmware_images','source_name') IS NULL ALTER TABLE firmware_images ADD source_name NVARCHAR(255) NULL",
+            "IF OBJECT_ID('dbo.power_vendors','U') IS NULL CREATE TABLE power_vendors (code NVARCHAR(32) NOT NULL PRIMARY KEY, name NVARCHAR(64) NOT NULL, apply_config INT NOT NULL DEFAULT 0, config_template_id INT NULL, enforce_firmware INT NOT NULL DEFAULT 0, firmware_id INT NULL, set_battery_date INT NOT NULL DEFAULT 0, updated_at NVARCHAR(32) NULL, updated_by NVARCHAR(128) NULL)",
+            "IF NOT EXISTS (SELECT 1 FROM power_vendors WHERE code='cyberpower') INSERT INTO power_vendors (code, name, apply_config, enforce_firmware, set_battery_date) VALUES ('cyberpower','CyberPower',0,0,0)",
             "UPDATE events SET source='trap' WHERE source IS NULL AND code='snmp_trap'",
             "UPDATE events SET source='poll' WHERE source IS NULL AND code IN ('poll_timeout','poll_fail')",
         ):
@@ -694,6 +711,13 @@ def init_db(con=None):
     _add_col(con, "users", "source", "TEXT NOT NULL DEFAULT 'local'")
     _add_col(con, "users", "display_name", "TEXT")
     _add_col(con, "config_templates", "is_default", "INTEGER NOT NULL DEFAULT 0")
+    _add_col(con, "firmware_images", "notes_path", "TEXT")
+    _add_col(con, "firmware_images", "source_name", "TEXT")
+    con.execute(
+        "INSERT INTO power_vendors (code, name, apply_config, enforce_firmware, set_battery_date) "
+        "SELECT 'cyberpower', 'CyberPower', 0, 0, 0 WHERE NOT EXISTS "
+        "(SELECT 1 FROM power_vendors WHERE code='cyberpower')"
+    )
     row = con.execute("SELECT COUNT(*) AS n FROM thresholds").fetchone()
     if row["n"] == 0:
         con.execute(

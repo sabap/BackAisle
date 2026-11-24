@@ -212,6 +212,25 @@ canvas { width:100%; height:140px; background:#0e141c; border-radius:6px; }
 .flash.info a { color: #93c5fd; }
 .flash.err a { color: #fecaca; }
 form.stack label { display:block; margin:.4rem 0 .15rem; color:var(--muted); font-size:.8rem; }
+form.stack label.switch {
+  display:flex; align-items:center; gap:.7rem; margin:.9rem 0 .2rem;
+  color:var(--ink); font-size:.95rem; cursor:pointer; position:relative;
+}
+form.stack label.switch input {
+  position:absolute; opacity:0; width:1px; height:1px; margin:0;
+}
+.switch-ui {
+  width:2.5rem; height:1.4rem; border-radius:999px; background:#243140;
+  border:1px solid #3d5168; position:relative; flex:0 0 auto;
+}
+.switch-ui::after {
+  content:""; position:absolute; top:2px; left:2px; width:1.05rem; height:1.05rem;
+  border-radius:50%; background:#9aabbc;
+}
+form.stack label.switch input:checked + .switch-ui { background:#1c4d38; border-color:#22c55e; }
+form.stack label.switch input:checked + .switch-ui::after { left:1.2rem; background:#86efac; }
+form.stack label.switch input:focus-visible + .switch-ui { outline:2px solid #f59e0b; outline-offset:2px; }
+.switch-label { color:var(--ink); }
 form.stack { max-width:640px; }
 form.stack .outlet-row {
   display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; margin:.35rem 0;
