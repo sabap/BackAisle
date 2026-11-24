@@ -210,16 +210,30 @@ def wait_ftp_alive(host: str, user: str, password: str, timeout_s: int = 180, si
     if simulate:
         time.sleep(1)
         return
+    wait_ftp_logins(host, [(user, password)], timeout_s=timeout_s)
+
+
+def wait_ftp_logins(host: str, logins: list[tuple[str, str]], timeout_s: int = 180) -> None:
+    """Try each login until one is accepted. A factory apply may have just changed the account."""
+    unique: list[tuple[str, str]] = []
+    for user, password in logins:
+        pair = (user or "", password or "")
+        if not pair[0] or not pair[1] or pair in unique:
+            continue
+        unique.append(pair)
+    if not unique:
+        raise RuntimeError(f"card did not come back on FTP within {timeout_s}s: no login")
     deadline = time.time() + timeout_s
-    last = None
+    last: Exception | None = None
     while time.time() < deadline:
-        try:
-            ftp = ftp_connect(host, user, password, timeout=8)
-            _close(ftp)
-            return
-        except Exception as e:
-            last = e
-            time.sleep(5)
+        for user, password in unique:
+            try:
+                ftp = ftp_connect(host, user, password, timeout=8)
+                _close(ftp)
+                return
+            except Exception as e:
+                last = e
+        time.sleep(5)
     raise RuntimeError(f"card did not come back on FTP within {timeout_s}s: {last}")
 
 

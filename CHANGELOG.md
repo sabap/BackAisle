@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.5.113] - 2026-11-24
+
+- Apply config profile with the factory login checked signs in with the saved Web/SSH/FTP login when the factory password no longer works. It then enables FTP and signs out.
+- It waits up to 3 minutes for FTP. It tries the saved login and, when the account just changed, the factory login.
+- A failed FTP wait is not tried again. A retry would sign in with the factory password after the card had already replaced it.
+- Assign a Web/SSH/FTP login on the UPS before the job. The saved login must not be the factory account. Leave the factory login checked for the card that already replaced that password.
+- The card still keeps its own IP address, gateway, subnet mask, hostname, and MAC address. The card reboots after the profile is written.
+- The writer reloads when writer.py is newer than the running process, or when an update asks for a restart. The collector does not need a restart.
+
 ## [0.5.112] - 2026-11-23
 
 - Apply config profile with the factory login checked waits until the card asks for a new administrator name. It answers with the Web/SSH/FTP login saved on the UPS. It does not press Enter before the card asks. That Enter is a blank name, and the saved password then lands in the wrong field.

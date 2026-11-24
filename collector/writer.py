@@ -45,6 +45,7 @@ from rmcard_ftp import (  # noqa: E402
     ftp_put_firmware_bin,
     parse_snmp_date,
     wait_ftp_alive,
+    wait_ftp_logins,
 )
 from rmcard_http import (  # noqa: E402
     CardReadDeadline,
@@ -174,6 +175,7 @@ def is_retryable(exc: BaseException) -> bool:
         "command not found",
         "refusing command",
         "authentication failed",
+        "ftp did not answer after ssh enabled it",
         "unknown card setting",
         "enter at least one",
         "password error",
@@ -653,18 +655,40 @@ def enable_factory_ftp(
     from rmcard_cli import RmcardCli
 
     Cli = opener or RmcardCli
-    changed = False
-    try:
-        with Cli(ip, user, password, new_user=new_user, new_password=new_password) as cli:
-            changed = bool(getattr(cli, "account_changed", False))
+
+    def session(login_user: str, login_pass: str, rename: str | None, new_pass: str | None) -> bool:
+        with Cli(ip, login_user, login_pass, new_user=rename, new_password=new_pass) as cli:
+            accepted = bool(getattr(cli, "account_changed", False))
             cli.run("ftp access enable")
             cli.sign_out()
+            return accepted
+
+    try:
+        changed = session(user, password, new_user, new_password)
     except Exception as exc:
-        raise RuntimeError("could not enable FTP over SSH: " + str(exc)) from exc
+        # The first pass may already have replaced the factory password.
+        # A retry that signs in as the factory account then fails authentication.
+        saved_differs = bool(
+            new_user and new_password and (new_user != user or new_password != password)
+        )
+        if saved_differs and "authentication failed" in str(exc).lower():
+            try:
+                session(new_user, new_password, None, None)
+            except Exception as exc2:
+                raise RuntimeError("could not enable FTP over SSH: " + str(exc2)) from exc2
+            changed = True
+        else:
+            raise RuntimeError("could not enable FTP over SSH: " + str(exc)) from exc
     ftp_user = new_user if changed and new_user else user
     ftp_pass = new_password if changed and new_password else password
     try:
-        (wait or wait_ftp_alive)(ip, ftp_user, ftp_pass, timeout_s=45)
+        if wait is not None:
+            wait(ip, ftp_user, ftp_pass, timeout_s=180)
+        else:
+            logins = [(ftp_user, ftp_pass)]
+            if changed and (user != ftp_user or password != ftp_pass):
+                logins.append((user, password))
+            wait_ftp_logins(ip, logins, timeout_s=180)
     except Exception as exc:
         raise RuntimeError("FTP did not answer after SSH enabled it: " + str(exc)) from exc
     return changed

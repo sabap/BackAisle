@@ -276,7 +276,7 @@ def test_factory_login_enables_ftp_then_signs_out() -> None:
 
     def waited(ip, user, password, timeout_s=45):
         seen.append("wait")
-        if user != "card" or timeout_s != 45:
+        if user != "card" or timeout_s != 180:
             raise AssertionError(user)
 
     changed = writer.enable_factory_ftp("10.1.1.1", "card", "secret", opener=Fake, wait=waited)
@@ -308,7 +308,7 @@ def test_factory_login_reads_with_the_new_account() -> None:
 
     def waited(ip, user, password, timeout_s=45):
         seen.append("ftp:" + user)
-        if password != "next-secret" or timeout_s != 45:
+        if password != "next-secret" or timeout_s != 180:
             raise AssertionError("ftp login")
 
     changed = writer.enable_factory_ftp(
@@ -568,6 +568,76 @@ def test_silent_shell_presses_enter_once() -> None:
         raise AssertionError(repr((cli.account_changed, sent)))
 
 
+def test_factory_auth_failure_uses_the_saved_login() -> None:
+    import writer
+
+    opened: list[tuple[str, str | None]] = []
+
+    class Fake:
+        def __init__(self, ip, user, password, timeout=20, new_user=None, new_password=None):
+            opened.append((user, new_user))
+            self.user = user
+            if user == "card":
+                raise RuntimeError("authentication failed")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def run(self, command):
+            if command != "ftp access enable" or self.user == "card":
+                raise AssertionError(command)
+
+        def sign_out(self):
+            return None
+
+    def waited(ip, user, password, timeout_s=180):
+        if user != "ops" or password != "next-secret" or timeout_s != 180:
+            raise AssertionError(user)
+
+    changed = writer.enable_factory_ftp(
+        "10.1.1.1", "card", "secret", "ops", "next-secret", opener=Fake, wait=waited
+    )
+    if not changed or opened != [("card", "ops"), ("ops", None)]:
+        raise AssertionError(repr((changed, opened)))
+
+
+def test_ftp_wait_accepts_the_second_login() -> None:
+    import rmcard_ftp
+
+    seen: list[str] = []
+
+    def connect(host, user, password, timeout=20):
+        seen.append(user)
+        if user != "ops":
+            raise OSError("530")
+        return object()
+
+    old = rmcard_ftp.ftp_connect
+    rmcard_ftp.ftp_connect = connect
+    try:
+        rmcard_ftp.wait_ftp_logins(
+            "10.1.1.1", [("card", "secret"), ("ops", "next-secret")], timeout_s=30
+        )
+    finally:
+        rmcard_ftp.ftp_connect = old
+    if seen != ["card", "ops"]:
+        raise AssertionError(repr(seen))
+
+
+def test_ftp_enable_wait_is_not_retried() -> None:
+    import writer
+
+    text = (
+        "FTP did not answer after SSH enabled it: "
+        "card did not come back on FTP within 180s: timed out"
+    )
+    if writer.is_retryable(RuntimeError(text)):
+        raise AssertionError(text)
+
+
 def test_read_failure_is_not_retried() -> None:
     import writer
 
@@ -606,6 +676,9 @@ if __name__ == "__main__":
     test_password_lines_are_not_sent_in_one_burst()
     test_confirm_mismatch_does_not_send_another_password()
     test_silent_shell_presses_enter_once()
+    test_factory_auth_failure_uses_the_saved_login()
+    test_ftp_wait_accepts_the_second_login()
+    test_ftp_enable_wait_is_not_retried()
     test_ftp_lists_real_text_names_only()
     test_read_failure_is_not_retried()
     print("ok")
