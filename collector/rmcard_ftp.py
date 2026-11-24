@@ -5,7 +5,7 @@ import io
 import re
 import time
 from datetime import datetime, timedelta
-from ftplib import FTP, error_perm, error_temp
+from ftplib import FTP, error_perm, error_proto, error_temp
 from pathlib import Path
 
 # The card builds this file when the name matches its current minute. NLST stays empty.
@@ -103,8 +103,19 @@ def ftp_reply_code(resp: str) -> str:
     return "ok"
 
 
+def _ftp_visible(text: str) -> str:
+    """Printable reply fragment. Addresses and passive-mode tuples stay out."""
+    cleaned = []
+    for ch in text:
+        cleaned.append(ch if 32 <= ord(ch) < 127 else ".")
+    raw = "".join(cleaned)
+    raw = re.sub(r"\(\d{1,3}(?:,\d{1,3}){5}\)", "(#)", raw)
+    raw = re.sub(r"\d{1,3}(?:\.\d{1,3}){3}", "#", raw)
+    return " ".join(raw.split())[:80]
+
+
 def ftp_brief(exc: BaseException, secret: str = "") -> str:
-    """A short exception label. Reply text that is not a code is dropped."""
+    """A short exception label. A non-code line keeps a sanitized fragment."""
     text = " ".join(str(exc).split())
     if secret and len(secret) >= 4 and not secret.isdigit() and secret in text:
         text = text.replace(secret, "********")
@@ -118,9 +129,29 @@ def ftp_brief(exc: BaseException, secret: str = "") -> str:
     matched = re.match(r"(\d{3})\b", text)
     if matched:
         return f"{kind} reply={matched.group(1)}" + suffix
-    if "timed out" in text.lower() or "timeout" in text.lower():
+    if kind != "error_proto" and ("timed out" in text.lower() or "timeout" in text.lower()):
         return kind + " timed-out" + suffix
-    return kind + " no-message" + suffix
+    visible = _ftp_visible(text)
+    if not visible or not any(ch.isalnum() for ch in visible):
+        return kind + " binary" + suffix
+    return f"{kind} text={visible}" + suffix
+
+
+def _skip_blank_greeting(ftp: FTP, limit: int = 2) -> str:
+    """Read the greeting after one or more blank lines.
+
+    ftplib rejects a blank first line before it reads the 220. A line that
+    has text is the real failure and is not skipped.
+    """
+    last = error_proto("")
+    for _ in range(limit):
+        try:
+            return ftp.getresp()
+        except error_proto as exc:
+            last = exc
+            if str(exc).strip():
+                raise
+    raise last
 
 
 class _TraceFTP(FTP):
@@ -130,6 +161,16 @@ class _TraceFTP(FTP):
         super().__init__()
         self.events: list[str] = []
         self.secret = ""
+
+    def connect(self, host="", port=0, timeout=-999, source_address=None):
+        try:
+            return FTP.connect(self, host, port, timeout, source_address)
+        except error_proto as exc:
+            if str(exc).strip():
+                raise
+            self.events.append("greeting blank")
+            self.welcome = _skip_blank_greeting(self)
+            return self.welcome
 
     def sendcmd(self, cmd):
         verb = ftp_command_verb(cmd)

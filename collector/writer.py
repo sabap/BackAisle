@@ -553,7 +553,8 @@ def _config_read_pattern(tried: list[str]) -> str:
     """One word for the job row. The command times stay in the same message.
 
     An empty EOF, or Windows reset 10054 / abort 10053, is a closed socket.
-    Any other dropped reply text stays "other" so it is not called a close.
+    error_proto means the first line was not an FTP reply. Other text stays
+    "other" so it is not called a close.
     """
     blob = " ".join(tried)
     closed = (
@@ -565,13 +566,16 @@ def _config_read_pattern(tried: list[str]) -> str:
     )
     waited = "timed-out" in blob or "TimeoutError" in blob
     replied = "reply=" in blob
-    kinds = int(closed) + int(waited) + int(replied)
+    proto = "error_proto" in blob
+    kinds = int(closed) + int(waited) + int(replied) + int(proto)
     if kinds > 1:
         return "mixed"
     if replied:
         return "ftp-reply"
     if waited:
         return "timed-out"
+    if proto:
+        return "not-ftp"
     if closed:
         return "closed-without-reply"
     return "other"

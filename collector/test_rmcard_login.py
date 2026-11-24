@@ -804,6 +804,21 @@ def test_ftp_trace_keeps_the_verb_and_drops_the_secret() -> None:
     pasv = ["connect 0.01s", "user 0.02s 331", "pass 0.02s 230", "pasv 0.04s 227"]
     if _fail_stage(pasv) != "data":
         raise AssertionError("data")
+    from ftplib import error_proto
+
+    if ftp_brief(error_proto("")) != "error_proto no-message":
+        raise AssertionError("empty proto")
+    shown = ftp_brief(error_proto("Access denied"))
+    if shown != "error_proto text=Access denied":
+        raise AssertionError(shown)
+    hidden_banner = ftp_brief(error_proto("banner hunter2-secret"), "hunter2-secret")
+    if "hunter" in hidden_banner or "********" not in hidden_banner:
+        raise AssertionError("secret leaked")
+    addressed = ftp_brief(error_proto("go to 10.9.9.9 now"))
+    if "10.9.9.9" in addressed or "#" not in addressed:
+        raise AssertionError("address leaked")
+    if ftp_brief(error_proto("\x16\x03")) != "error_proto binary":
+        raise AssertionError("binary")
 
 
 def test_closed_pattern_is_eof_or_reset_only() -> None:
@@ -817,6 +832,8 @@ def test_closed_pattern_is_eof_or_reset_only() -> None:
         "2026_11_23_1946.txt ConnectionResetError no-message": "closed-without-reply",
         "2026_11_23_1946.txt TimeoutError timed-out win=10060": "timed-out",
         "2026_11_23_1946.txt error_perm reply=550": "ftp-reply",
+        "2026_11_24_2158.txt connect 0.02s error_proto no-message": "not-ftp",
+        "2026_11_24_2158.txt connect 0.02s error_proto text=Access denied": "not-ftp",
     }
     for note, expected in samples.items():
         found = writer._config_read_pattern([note])
@@ -828,6 +845,84 @@ def test_closed_pattern_is_eof_or_reset_only() -> None:
     ])
     if mixed != "mixed":
         raise AssertionError(mixed)
+
+
+def _serve_banner(payload: bytes):
+    import socket
+    import threading
+
+    ready = threading.Event()
+    box = {}
+
+    def run() -> None:
+        server = socket.socket()
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        server.settimeout(5)
+        box["port"] = server.getsockname()[1]
+        ready.set()
+        try:
+            conn, _ = server.accept()
+        except Exception:
+            server.close()
+            return
+        try:
+            conn.sendall(payload)
+            conn.shutdown(socket.SHUT_WR)
+            conn.settimeout(3)
+            try:
+                while conn.recv(64):
+                    pass
+            except Exception:
+                pass
+        finally:
+            conn.close()
+            server.close()
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    if not ready.wait(3):
+        raise AssertionError("banner server did not start")
+    return box["port"], thread
+
+
+def test_blank_greeting_is_skipped_and_other_text_is_kept() -> None:
+    from rmcard_ftp import _TraceFTP, ftp_brief
+
+    ready = b"220 CyberPower Systems FTP Server Ready\r\n"
+    port, thread = _serve_banner(ready)
+    ftp = _TraceFTP()
+    try:
+        welcome = ftp.connect("127.0.0.1", port, timeout=3)
+    finally:
+        ftp.close()
+        thread.join(3)
+    if not str(welcome).startswith("220") or "greeting blank" in ftp.events:
+        raise AssertionError("plain greeting")
+
+    port, thread = _serve_banner(b"\r\n" + ready)
+    ftp = _TraceFTP()
+    try:
+        welcome = ftp.connect("127.0.0.1", port, timeout=3)
+    finally:
+        ftp.close()
+        thread.join(3)
+    if not str(welcome).startswith("220") or "greeting blank" not in ftp.events:
+        raise AssertionError("blank greeting")
+
+    port, thread = _serve_banner(b"Access denied\r\n")
+    ftp = _TraceFTP()
+    try:
+        try:
+            ftp.connect("127.0.0.1", port, timeout=3)
+            raise AssertionError("bad greeting should fail")
+        except Exception as exc:
+            brief = ftp_brief(exc)
+    finally:
+        ftp.close()
+        thread.join(3)
+    if brief != "error_proto text=Access denied" or "greeting blank" in ftp.events:
+        raise AssertionError(brief)
 
 
 def _frozen_config_pull(fake):
@@ -959,6 +1054,7 @@ if __name__ == "__main__":
     test_ftp_lists_real_text_names_only()
     test_read_failure_is_not_retried()
     test_ftp_trace_keeps_the_verb_and_drops_the_secret()
+    test_blank_greeting_is_skipped_and_other_text_is_kept()
     test_closed_pattern_is_eof_or_reset_only()
     test_empty_ftp_error_names_every_clock()
     test_config_read_hides_the_saved_password()

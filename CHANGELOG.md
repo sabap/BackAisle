@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.116] - 2026-11-24
+
+- A config read quotes the first line when that line is not an FTP reply. The password and any address in the line are left out.
+- A blank line before the greeting is skipped, so the following greeting can be read.
+- The read still tries the card clock, then UTC, then this server's clock. It still stops at 30 seconds. A failed read is not tried again.
+- The writer reloads when writer.py is newer than the running process, or when an update asks for a restart. The collector does not need a restart.
+
 ## [0.5.115] - 2026-11-24
 
 - A failed config read records every file name it tried, whether the card clock was read, and where the transfer stopped. A closed connection, a timeout, and an FTP reply stay distinct. The password is left out.
