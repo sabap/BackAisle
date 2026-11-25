@@ -18,6 +18,13 @@ class BackAisleBackup
     public const PACKAGE_PREFIX = 'backaisle-site';
     public const ENC_MAGIC = 'BAISLE1';
     public const ENC_PBKDF2_ITERS = 200000;
+    public const HISTORY_KEEP = 5;
+    public const HISTORY_KEEP_MAX = 50;
+    private const WRITE_GRACE_SEC = 30;
+    private const STAGING_MAX_AGE_SEC = 21600;
+
+    /** @var array{deleted:list<string>,failed:list<string>,kept:int,keep:int} */
+    private static array $lastPrune = ['deleted' => [], 'failed' => [], 'kept' => 0, 'keep' => self::HISTORY_KEEP];
 
     public static function backupDir(): string
     {
@@ -147,6 +154,11 @@ class BackAisleBackup
                 @unlink($zipPath);
                 $final = $enc;
             }
+            try {
+                self::pruneHistory();
+            } catch (Throwable $e) {
+                // The new package is already on disk. A prune miss must not fail the export.
+            }
             return $final;
         } finally {
             self::rrmdir($staging);
@@ -260,6 +272,150 @@ class BackAisleBackup
         }
         usort($out, static fn($a, $b) => $b['mtime'] <=> $a['mtime']);
         return $out;
+    }
+
+    public static function historyKeepCount(): int
+    {
+        $raw = (string)self::HISTORY_KEEP;
+        try {
+            if (function_exists('ba_db') && function_exists('ba_setting')) {
+                $raw = ba_setting(ba_db(), 'backup_keep_count', (string)self::HISTORY_KEEP);
+            }
+        } catch (Throwable $e) {
+            $raw = (string)self::HISTORY_KEEP;
+        }
+        $n = (int)$raw;
+        if ($n < 1) {
+            $n = self::HISTORY_KEEP;
+        }
+        return min(self::HISTORY_KEEP_MAX, $n);
+    }
+
+    /** @return array{deleted:list<string>,failed:list<string>,kept:int,keep:int} */
+    public static function lastPrune(): array
+    {
+        return self::$lastPrune;
+    }
+
+    /** @param array{deleted?:list<string>,failed?:list<string>,kept?:int,keep?:int} $result */
+    public static function rememberPrune(array $result): void
+    {
+        self::$lastPrune = [
+            'deleted' => array_values($result['deleted'] ?? []),
+            'failed' => array_values($result['failed'] ?? []),
+            'kept' => (int)($result['kept'] ?? 0),
+            'keep' => (int)($result['keep'] ?? self::historyKeepCount()),
+        ];
+    }
+
+    public static function pruneSummary(array $result): string
+    {
+        $removed = count($result['deleted'] ?? []);
+        $failed = count($result['failed'] ?? []);
+        $keep = (int)($result['keep'] ?? self::historyKeepCount());
+        if ($removed < 1 && $failed < 1) {
+            return '';
+        }
+        $text = '';
+        if ($removed > 0) {
+            $text = ' Removed ' . $removed . ' older backup' . ($removed === 1 ? '' : 's')
+                . '. The ' . $keep . ' newest site packages and the ' . $keep
+                . ' newest application-file backups stay.';
+        }
+        if ($failed > 0) {
+            $text .= ' Could not remove ' . $failed . ' older backup' . ($failed === 1 ? '' : 's') . '.';
+        }
+        return $text;
+    }
+
+    /**
+     * Keep the newest site packages and the newest application-file backups.
+     * A file still being written is left in place.
+     *
+     * @return array{deleted:list<string>,failed:list<string>,kept:int,keep:int}
+     */
+    public static function pruneHistory(?int $keep = null): array
+    {
+        $keep = $keep === null ? self::historyKeepCount() : max(1, min(self::HISTORY_KEEP_MAX, $keep));
+        $deleted = [];
+        $failed = [];
+        $kept = 0;
+        $dir = self::backupDir();
+        $now = time();
+        foreach (scandir($dir) ?: [] as $name) {
+            if ($name === '.' || $name === '..') {
+                continue;
+            }
+            $path = $dir . DIRECTORY_SEPARATOR . $name;
+            if (!is_dir($path)) {
+                continue;
+            }
+            $oldStaging = str_ends_with($name, '_staging') || str_starts_with($name, 'restore-');
+            $age = $now - (int)@filemtime($path);
+            if ($oldStaging && $age > self::STAGING_MAX_AGE_SEC) {
+                self::rrmdir($path);
+                if (is_dir($path)) {
+                    $failed[] = $name . '/';
+                } else {
+                    $deleted[] = $name . '/';
+                }
+            }
+        }
+        $groups = ['site' => [], 'files' => []];
+        foreach (scandir($dir) ?: [] as $name) {
+            if ($name === '.' || $name === '..') {
+                continue;
+            }
+            $path = $dir . DIRECTORY_SEPARATOR . $name;
+            if (!is_file($path)) {
+                continue;
+            }
+            $kind = self::backupKind($name);
+            if ($kind === '') {
+                continue;
+            }
+            $groups[$kind][] = [
+                'name' => $name,
+                'path' => $path,
+                'mtime' => (int)@filemtime($path),
+            ];
+        }
+        foreach ($groups as $list) {
+            usort($list, static function (array $a, array $b): int {
+                $cmp = $b['mtime'] <=> $a['mtime'];
+                return $cmp !== 0 ? $cmp : strcmp((string)$b['name'], (string)$a['name']);
+            });
+            $kept += min($keep, count($list));
+            foreach ($list as $i => $file) {
+                if ($i === 0 || $i < $keep) {
+                    continue;
+                }
+                $age = $now - (int)$file['mtime'];
+                if ($file['mtime'] > 0 && $age >= 0 && $age < self::WRITE_GRACE_SEC) {
+                    $kept++;
+                    continue;
+                }
+                if (@unlink($file['path'])) {
+                    $deleted[] = $file['name'];
+                } else {
+                    $failed[] = $file['name'];
+                }
+            }
+        }
+        $result = ['deleted' => $deleted, 'failed' => $failed, 'kept' => $kept, 'keep' => $keep];
+        self::$lastPrune = $result;
+        return $result;
+    }
+
+    private static function backupKind(string $name): string
+    {
+        if (preg_match('/^backaisle-site_.+\.(zip|baisle)$/i', $name)) {
+            return 'site';
+        }
+        if (preg_match('/^backup_.+\.(zip|baisle)$/i', $name)) {
+            return 'files';
+        }
+        return '';
     }
 
     public static function safeFile(string $name): ?string

@@ -183,6 +183,8 @@ def is_retryable(exc: BaseException) -> bool:
         "rejected the new administrator",
         "web/ssh/ftp credential",
         "could not read the card config",
+        "no snmp response",
+        "empty snmp",
         "config profile missing",
         "firmware version could not be read",
         "card read deadline",
@@ -533,6 +535,49 @@ async def poll_after(ip: str, secrets: dict) -> dict:
     return sample
 
 
+# FTP answers while the SNMP agent is still starting. A poll a minute later worked.
+SNMP_AFTER_BOOT_S = 90
+SNMP_AFTER_BOOT_GAP_S = 15
+
+
+def _snmp_still_booting(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return "no snmp response" in text or "empty snmp" in text or "timed out" in text or "timeout" in text
+
+
+def poll_after_reboot(
+    ip: str,
+    secrets: dict,
+    stop=None,
+    on_wait=None,
+    deadline_s: float = SNMP_AFTER_BOOT_S,
+    gap_s: float = SNMP_AFTER_BOOT_GAP_S,
+    poll=None,
+) -> dict:
+    """Ask again until SNMP answers or the boot window ends. One miss does not rewrite the card."""
+    deadline = time.monotonic() + deadline_s
+    attempt = 0
+    while True:
+        if stop is not None and stop():
+            raise RuntimeError("job cancelled")
+        attempt += 1
+        try:
+            if poll is None:
+                return asyncio.run(poll_after(ip, secrets))
+            return poll(ip, secrets)
+        except Exception as exc:
+            remaining = deadline - time.monotonic()
+            if not _snmp_still_booting(exc) or remaining <= 0:
+                raise
+            pause = min(gap_s, remaining)
+            if pause <= 0:
+                raise
+            if on_wait is not None:
+                on_wait(attempt)
+            log(f"snmp after reboot not ready attempt {attempt}")
+            time.sleep(pause)
+
+
 def card_clock(ip: str, secrets: dict) -> datetime | None:
     """The card's local time. The save-file name is that minute."""
     try:
@@ -879,7 +924,14 @@ def run_push_config(con, job: dict, secrets: dict) -> None:
             wait_ftp_alive(t["ip"], user, pw, timeout_s=180, simulate=False)
         step(con, tid, restore_seq + 1, "wait_reboot", "ok", "")
         step(con, tid, restore_seq + 2, "snmp_poll", "running", "")
-        sample = asyncio.run(poll_after(t["ip"], secrets))
+        sample = poll_after_reboot(
+            t["ip"],
+            secrets,
+            stop=lambda: job_is_cancelled(con, int(job["id"])),
+            on_wait=lambda _attempt: step(
+                con, tid, restore_seq + 2, "snmp_poll", "running", "SNMP is not answering yet"
+            ),
+        )
         step(con, tid, restore_seq + 2, "snmp_poll", "ok", json.dumps({
             "model": sample.get("model"),
             "firmware": sample.get("firmware"),
@@ -980,7 +1032,12 @@ def run_firmware(con, job: dict, secrets: dict) -> None:
             step(con, tid, 5, "reboot_after_data", "running", "")
             wait_ftp_alive(t["ip"], user, pw, timeout_s=240, simulate=simulate)
             step(con, tid, 5, "reboot_after_data", "ok", "")
-            sample = asyncio.run(poll_after(t["ip"], secrets))
+            sample = poll_after_reboot(
+                t["ip"],
+                secrets,
+                stop=lambda: job_is_cancelled(con, int(job["id"])),
+                on_wait=lambda _attempt: step(con, tid, 6, "snmp_poll", "running", "SNMP is not answering yet"),
+            )
             step(con, tid, 6, "snmp_poll", "ok", json.dumps({
                 "firmware": sample.get("firmware"),
                 "agent_firmware": sample.get("agent_firmware"),
@@ -1210,7 +1267,12 @@ def run_provision(con, job: dict, secrets: dict) -> None:
             step(con, tid, seq, "snmp_poll", "ok", "SIMULATE")
             sample = {}
         else:
-            sample = asyncio.run(poll_after(ip, secrets))
+            sample = poll_after_reboot(
+                ip,
+                secrets,
+                stop=lambda: job_is_cancelled(con, int(job["id"])),
+                on_wait=lambda _attempt: step(con, tid, seq, "snmp_poll", "running", "SNMP is not answering yet"),
+            )
             step(con, tid, seq, "snmp_poll", "ok", json.dumps({
                 "model": sample.get("model"),
                 "firmware": sample.get("firmware"),

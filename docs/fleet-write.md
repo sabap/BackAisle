@@ -36,7 +36,7 @@ Apply config profile with the factory login checked is the new-card path. Assign
 2. **SCP put** of the `.txt` to `user@ip:` (colon required), classic SCP (`scp -O`), not the SFTP subsystem. Some cards offer **aes128-cbc** and **keyboard-interactive** auth.
 3. FTP STOR of the `.txt` then QUIT.
 
-Optional: SNMP SET of `sysLocation` is allowed for identity. Do not retry restore in a loop.
+Optional: SNMP SET of `sysLocation` is allowed for identity. Do not retry restore in a loop. After FTP answers, SNMP is polled for up to 90 seconds. A poll that is still waiting does not write the profile again.
 
 ## Firmware
 

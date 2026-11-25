@@ -42,6 +42,7 @@ class BackAisleUpdate
             'auto_check' => $row('updates_auto_check', '1') !== '0',
             'check_interval_hours' => max(1, (int)$row('updates_check_hours', '24')),
             'ssl_verify' => $row('updates_ssl_verify', '1') !== '0',
+            'backup_keep_count' => self::backupKeepCount($row('backup_keep_count', (string)BackAisleBackup::HISTORY_KEEP)),
             'github_owner' => self::GITHUB_OWNER,
             'github_repo' => self::GITHUB_REPO,
             'github_token' => '',
@@ -55,6 +56,16 @@ class BackAisleUpdate
         ba_set_setting($db, 'updates_auto_check', !empty($c['auto_check']) ? '1' : '0');
         ba_set_setting($db, 'updates_check_hours', (string)max(1, (int)($c['check_interval_hours'] ?? 24)));
         ba_set_setting($db, 'updates_ssl_verify', !empty($c['ssl_verify']) ? '1' : '0');
+        ba_set_setting($db, 'backup_keep_count', (string)self::backupKeepCount($c['backup_keep_count'] ?? BackAisleBackup::HISTORY_KEEP));
+    }
+
+    public static function backupKeepCount(mixed $raw): int
+    {
+        $n = (int)$raw;
+        if ($n < 1) {
+            $n = BackAisleBackup::HISTORY_KEEP;
+        }
+        return min(BackAisleBackup::HISTORY_KEEP_MAX, $n);
     }
 
     /** @return array<string,mixed> */
@@ -140,6 +151,7 @@ class BackAisleUpdate
             'include_audit' => true,
             'include_readings' => false,
         ]);
+        $pruned = BackAisleBackup::lastPrune();
         $dir = BackAisleBackup::backupDir();
         $name = 'backup_' . date('Ymd_His') . '_v' . self::installedVersion() . '.zip';
         $path = $dir . DIRECTORY_SEPARATOR . $name;
@@ -154,12 +166,25 @@ class BackAisleUpdate
             $filesAdded = 0;
         }
         $zipOk = is_file($path) && filesize($path) >= 200;
+        try {
+            $again = BackAisleBackup::pruneHistory();
+            $pruned = [
+                'deleted' => array_values(array_unique(array_merge($pruned['deleted'], $again['deleted']))),
+                'failed' => array_values(array_unique(array_merge($pruned['failed'], $again['failed']))),
+                'kept' => $again['kept'],
+                'keep' => $again['keep'],
+            ];
+            BackAisleBackup::rememberPrune($pruned);
+        } catch (Throwable $e) {
+            // The recovery files are already written.
+        }
         return [
             'code_zip' => $zipOk ? $path : '',
             'site_package' => $sitePath,
             'code_bytes' => $zipOk ? (int)filesize($path) : 0,
             'site_bytes' => (int)filesize($sitePath),
             'files_added' => $filesAdded,
+            'prune_note' => BackAisleBackup::pruneSummary($pruned),
         ];
     }
 
@@ -295,6 +320,7 @@ class BackAisleUpdate
                 $msg .= ', some files finish on the next page load';
             }
             $msg .= '). Writer recycle requested (watchdog or restart BackAisleWriter).';
+            $msg .= (string)($backup['prune_note'] ?? '');
             return [
                 'ok' => true,
                 'message' => $msg,

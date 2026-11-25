@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.119] - 2026-11-25
+
+- After FTP answers, SNMP is polled for up to 90 seconds. The step says SNMP is not answering yet while it waits. A poll that is still waiting does not write the profile again.
+- An update keeps the 5 newest site packages and the 5 newest application-file backups. Older files in those two groups are removed. Admin, Updates sets that count from 1 to 50.
+- The read still tries the card clock, then UTC, then this server's clock. It still stops at 30 seconds. A failed read is not tried again.
+- The writer reloads when writer.py is newer than the running process, or when an update asks for a restart. The collector does not need a restart.
+
 ## [0.5.118] - 2026-11-25
 
 - After a blank line, the config read looks for one second for the FTP greeting. When no greeting follows, the login is sent anyway.

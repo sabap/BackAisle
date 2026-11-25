@@ -1191,6 +1191,124 @@ def test_config_read_hides_the_saved_password() -> None:
         raise AssertionError("pattern missing")
 
 
+def _snmp_clock():
+    import writer
+
+    clock = {"t": 0.0}
+    slept: list[float] = []
+    notes: list[str] = []
+    old = (writer.time.monotonic, writer.time.sleep, writer.log)
+
+    def monotonic():
+        return clock["t"]
+
+    def sleep(n):
+        clock["t"] += n
+        slept.append(n)
+
+    writer.time.monotonic = monotonic
+    writer.time.sleep = sleep
+    writer.log = notes.append
+    return writer, clock, slept, notes, old
+
+
+def test_snmp_after_reboot_waits_and_then_answers() -> None:
+    writer, _clock, slept, notes, old = _snmp_clock()
+    calls: list[int] = []
+
+    def fake(ip, secrets):
+        calls.append(1)
+        if len(calls) < 3:
+            raise RuntimeError("No SNMP response received before timeout")
+        return {"model": "RMCARD205"}
+
+    try:
+        sample = writer.poll_after_reboot("10.1.1.1", {}, poll=fake, deadline_s=90, gap_s=15)
+    finally:
+        writer.time.monotonic, writer.time.sleep, writer.log = old
+    if sample.get("model") != "RMCARD205" or calls != [1, 1, 1]:
+        raise AssertionError(repr((calls, sample)))
+    if slept != [15, 15]:
+        raise AssertionError(repr(slept))
+    if len(notes) != 2:
+        raise AssertionError(repr(notes))
+    if writer.is_retryable(RuntimeError("No SNMP response received before timeout")):
+        raise AssertionError("snmp timeout retried the write")
+    if writer.is_retryable(RuntimeError("empty SNMP GET")):
+        raise AssertionError("empty snmp retried the write")
+
+
+def test_snmp_after_reboot_stops_at_the_window() -> None:
+    writer, _clock, slept, _notes, old = _snmp_clock()
+    calls: list[int] = []
+
+    def fake(ip, secrets):
+        calls.append(1)
+        raise RuntimeError("No SNMP response received before timeout")
+
+    try:
+        try:
+            writer.poll_after_reboot("10.1.1.1", {}, poll=fake, deadline_s=20, gap_s=15)
+            raise AssertionError("should fail")
+        except RuntimeError as exc:
+            text = str(exc)
+    finally:
+        writer.time.monotonic, writer.time.sleep, writer.log = old
+    if text != "No SNMP response received before timeout":
+        raise AssertionError(text)
+    if len(calls) != 3 or slept != [15, 5]:
+        raise AssertionError(repr((calls, slept)))
+    if writer.is_retryable(RuntimeError(text)):
+        raise AssertionError("retried")
+
+
+def test_snmp_after_reboot_does_not_wait_on_another_error() -> None:
+    writer, _clock, slept, _notes, old = _snmp_clock()
+
+    def fake(ip, secrets):
+        raise RuntimeError("authentication failed")
+
+    try:
+        try:
+            writer.poll_after_reboot("10.1.1.1", {}, poll=fake, deadline_s=90, gap_s=15)
+            raise AssertionError("should fail")
+        except RuntimeError as exc:
+            text = str(exc)
+    finally:
+        writer.time.monotonic, writer.time.sleep, writer.log = old
+    if text != "authentication failed" or slept:
+        raise AssertionError(repr((text, slept)))
+    if not writer.is_retryable(RuntimeError("scp exit 1: connection timed out")):
+        raise AssertionError("scp timeout should still retry")
+
+
+def test_snmp_after_reboot_honors_cancel() -> None:
+    writer, _clock, slept, _notes, old = _snmp_clock()
+    calls: list[int] = []
+
+    def fake(ip, secrets):
+        calls.append(1)
+        raise RuntimeError("No SNMP response received before timeout")
+
+    try:
+        try:
+            writer.poll_after_reboot(
+                "10.1.1.1",
+                {},
+                stop=lambda: len(calls) > 0,
+                poll=fake,
+                deadline_s=90,
+                gap_s=15,
+            )
+            raise AssertionError("should stop")
+        except RuntimeError as exc:
+            text = str(exc)
+    finally:
+        writer.time.monotonic, writer.time.sleep, writer.log = old
+    if text != "job cancelled" or calls != [1] or slept != [15]:
+        raise AssertionError(repr((text, calls, slept)))
+
+
 if __name__ == "__main__":
     test_retry_logs_out_before_the_next_login()
     test_failed_login_logs_out()
@@ -1235,4 +1353,8 @@ if __name__ == "__main__":
     test_closed_pattern_is_eof_or_reset_only()
     test_empty_ftp_error_names_every_clock()
     test_config_read_hides_the_saved_password()
+    test_snmp_after_reboot_waits_and_then_answers()
+    test_snmp_after_reboot_stops_at_the_window()
+    test_snmp_after_reboot_does_not_wait_on_another_error()
+    test_snmp_after_reboot_honors_cancel()
     print("ok")

@@ -2108,6 +2108,7 @@ function page_admin(PDO $db, array $user): void {
             'auto_check' => isset($_POST['updates_auto_check']),
             'check_interval_hours' => (int)($_POST['check_interval_hours'] ?? 24),
             'ssl_verify' => isset($_POST['updates_ssl_verify']),
+            'backup_keep_count' => (int)($_POST['backup_keep_count'] ?? BackAisleBackup::HISTORY_KEEP),
         ]);
         ba_audit($db, 'updates_save', 'system', null);
         header('Location: ' . ba_href('/admin#updates'));
@@ -2167,7 +2168,8 @@ function page_admin(PDO $db, array $user): void {
         try {
             $b = BackAisleUpdate::createRecoveryBackup();
             ba_audit($db, 'update_backup_now', 'system', null, basename($b['site_package']));
-            $updMsg = 'Recovery backup created: '.basename($b['site_package']).' and '.basename($b['code_zip']).'.';
+            $updMsg = 'Recovery backup created: '.basename($b['site_package']).' and '.basename($b['code_zip']).'.'
+                . (string)($b['prune_note'] ?? '');
             $updFlash = 'ok';
         } catch (Throwable $e) {
             $updMsg = $e->getMessage();
@@ -2193,7 +2195,8 @@ function page_admin(PDO $db, array $user): void {
                 'password' => (string)($_POST['backup_password'] ?? ''),
             ]);
             ba_audit($db, 'export_site_backup', 'system', null, basename($path));
-            $updMsg = 'Site package written: '.basename($path).' ('.BackAisleBackup::formatBytes((int)filesize($path)).').';
+            $updMsg = 'Site package written: '.basename($path).' ('.BackAisleBackup::formatBytes((int)filesize($path)).').'
+                . BackAisleBackup::pruneSummary(BackAisleBackup::lastPrune());
             $updFlash = 'ok';
         } catch (Throwable $e) {
             $updMsg = $e->getMessage();
@@ -2387,6 +2390,9 @@ function page_admin(PDO $db, array $user): void {
         <label><input type="checkbox" name="updates_auto_check" value="1" <?= !empty($updCfg['auto_check'])?'checked':'' ?>> Auto-check when opening Admin</label>
         <label>Check interval (hours)</label>
         <input type="number" min="1" max="168" name="check_interval_hours" value="<?= (int)$updCfg['check_interval_hours'] ?>">
+        <label>Backups to keep</label>
+        <input type="number" min="1" max="50" name="backup_keep_count" value="<?= (int)($updCfg['backup_keep_count'] ?? BackAisleBackup::HISTORY_KEEP) ?>">
+        <p class="muted">Each update keeps this many site packages and this many application-file backups. Older files in those two groups are removed. The newest file in each group stays.</p>
         <label><input type="checkbox" name="updates_ssl_verify" value="1" <?= !empty($updCfg['ssl_verify'])?'checked':'' ?>> Verify TLS certificates when contacting GitHub (recommended)</label>
         <p class="muted">Requires a CA certificate list. Status:
           <?php if (!empty($caStatus['found'])): ?>
