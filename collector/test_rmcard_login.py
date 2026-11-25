@@ -925,6 +925,84 @@ def test_blank_greeting_is_skipped_and_other_text_is_kept() -> None:
         raise AssertionError(brief)
 
 
+def test_delayed_greeting_after_a_blank_line_is_accepted() -> None:
+    import socket
+    import threading
+    import time
+    from rmcard_ftp import _TraceFTP
+
+    ready = threading.Event()
+    box = {}
+
+    def run() -> None:
+        server = socket.socket()
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        server.settimeout(5)
+        box["port"] = server.getsockname()[1]
+        ready.set()
+        try:
+            conn, _ = server.accept()
+        except Exception:
+            server.close()
+            return
+        try:
+            conn.sendall(b"\r\n")
+            time.sleep(0.6)
+            conn.sendall(b"220 CyberPower Systems FTP Server Ready\r\n")
+            conn.settimeout(3)
+            try:
+                while conn.recv(64):
+                    pass
+            except Exception:
+                pass
+        finally:
+            conn.close()
+            server.close()
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    if not ready.wait(3):
+        raise AssertionError("banner server did not start")
+    ftp = _TraceFTP()
+    ftp.greeting_wait = 2
+    started = time.monotonic()
+    try:
+        welcome = ftp.connect("127.0.0.1", box["port"], timeout=1)
+    finally:
+        ftp.close()
+        thread.join(3)
+    elapsed = time.monotonic() - started
+    if not str(welcome).startswith("220") or "greeting blank" not in ftp.events:
+        raise AssertionError("delayed greeting")
+    if elapsed >= 2:
+        raise AssertionError("waited for the full greeting cap")
+
+
+def test_blank_greeting_timeout_tries_one_name() -> None:
+    import writer
+
+    calls: list[str] = []
+
+    def fake(ip, user, pw, names, timeout=6):
+        calls.append(names[0])
+        raise RuntimeError(names[0] + " greeting blank connect 6.02s TimeoutError timed-out")
+
+    try:
+        _frozen_config_pull(fake)
+        raise AssertionError("should fail")
+    except RuntimeError as exc:
+        text = str(exc)
+    if calls != ["2026_11_23_1946.txt"]:
+        raise AssertionError(repr(calls))
+    if "tried=1 of " not in text or "pattern=timed-out" not in text:
+        raise AssertionError(text[:180])
+    if "greeting blank" not in text:
+        raise AssertionError(text[:180])
+    if writer.is_retryable(RuntimeError(text)):
+        raise AssertionError("retried")
+
+
 def _frozen_config_pull(fake):
     import writer
     from datetime import datetime as real_datetime
@@ -1055,6 +1133,8 @@ if __name__ == "__main__":
     test_read_failure_is_not_retried()
     test_ftp_trace_keeps_the_verb_and_drops_the_secret()
     test_blank_greeting_is_skipped_and_other_text_is_kept()
+    test_delayed_greeting_after_a_blank_line_is_accepted()
+    test_blank_greeting_timeout_tries_one_name()
     test_closed_pattern_is_eof_or_reset_only()
     test_empty_ftp_error_names_every_clock()
     test_config_read_hides_the_saved_password()

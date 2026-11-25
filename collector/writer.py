@@ -638,6 +638,10 @@ def pull_config_bytes(
             if name not in note:
                 note = hide(f"{name} {ftp_brief(exc, pw)}")
             tried.append(note or f"{name} no-message")
+            # RETR is the first command that uses the file name. A greeting that
+            # never arrives fails the same way for every later name.
+            if "greeting blank" in tried[-1] and " user " not in tried[-1] and " retr " not in tried[-1]:
+                break
     if not tried:
         raise RuntimeError("could not read the card config: card read deadline")
     elapsed = time.monotonic() - started

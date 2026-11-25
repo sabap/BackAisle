@@ -154,6 +154,11 @@ def _skip_blank_greeting(ftp: FTP, limit: int = 2) -> str:
     raise last
 
 
+# The 6s cap is for one file name. The line after a blank greeting is not a file
+# transfer, so it gets this one longer wait. A normal 220 still returns at once.
+GREETING_WAIT_S = 15
+
+
 class _TraceFTP(FTP):
     """Same FTP session. Each command records its verb, time, and reply code."""
 
@@ -161,6 +166,7 @@ class _TraceFTP(FTP):
         super().__init__()
         self.events: list[str] = []
         self.secret = ""
+        self.greeting_wait = GREETING_WAIT_S
 
     def connect(self, host="", port=0, timeout=-999, source_address=None):
         try:
@@ -169,7 +175,15 @@ class _TraceFTP(FTP):
             if str(exc).strip():
                 raise
             self.events.append("greeting blank")
-            self.welcome = _skip_blank_greeting(self)
+            previous = self.sock.gettimeout()
+            self.sock.settimeout(self.greeting_wait)
+            try:
+                self.welcome = _skip_blank_greeting(self)
+            finally:
+                try:
+                    self.sock.settimeout(previous)
+                except Exception:
+                    pass
             return self.welcome
 
     def sendcmd(self, cmd):
