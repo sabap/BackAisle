@@ -131,6 +131,9 @@ function ba_db(bool $reconnect = false): PDO {
         if (function_exists('ba_ensure_snmp_schema')) {
             ba_ensure_snmp_schema($pdo);
         }
+        if (function_exists('ba_ensure_floor_schema')) {
+            ba_ensure_floor_schema($pdo);
+        }
         return $pdo;
     }
     $path = (string)($db['path'] ?? BA_DB);
@@ -153,6 +156,9 @@ function ba_db(bool $reconnect = false): PDO {
     }
     if (function_exists('ba_ensure_snmp_schema')) {
         ba_ensure_snmp_schema($pdo);
+    }
+    if (function_exists('ba_ensure_floor_schema')) {
+        ba_ensure_floor_schema($pdo);
     }
     return $pdo;
 }
@@ -207,6 +213,7 @@ function ba_ensure_infra_schema(PDO $db): void {
     ba_add_col($db, 'devices', 'port_count', 'INTEGER');
     ba_add_col($db, 'devices', 'manufacturer', 'TEXT');
     ba_add_col($db, 'devices', 'template_id', 'INTEGER');
+    ba_add_col($db, 'devices', 'on_floor', 'INTEGER NOT NULL DEFAULT 0');
     $db->exec(
         "CREATE TABLE IF NOT EXISTS device_templates (
             id INTEGER PRIMARY KEY,
@@ -222,6 +229,7 @@ function ba_ensure_infra_schema(PDO $db): void {
             notes TEXT,
             front_picture TEXT,
             rear_picture TEXT,
+            mount_form TEXT NOT NULL DEFAULT 'rackmount',
             is_active INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))

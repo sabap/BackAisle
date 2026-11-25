@@ -1321,6 +1321,11 @@ function page_devices(PDO $db, array $user): void {
         echo '</td><td>'.h($r['serial']).'</td><td>'.h($deptNames[(int)ba_col($r, 'department_id')] ?? '—').'</td><td>'.h($r['building'].' / '.$r['idf_closet']).'</td>';
         echo '<td>';
         if (!empty($r['rack_id'])) echo '<a href="'.h(ba_href('/rack?id='.(int)$r['rack_id'])).'">'.h(($r['rack'] ?: 'rack').' '.$u).'</a>';
+        elseif ((int)ba_col($r, 'on_floor', 0) === 1) {
+            $floorGid = (int)ba_col($r, 'group_id', 0);
+            if ($floorGid > 0) echo '<a href="'.h(ba_href('/idfs?group='.$floorGid)).'">Floor</a>';
+            else echo 'Floor';
+        }
         else echo h($r['rack'] ?: '—');
         echo '</td></tr>';
     }
@@ -1481,13 +1486,15 @@ JS;
     ba_layout_end();
 }
 
-function ba_render_device_face(string $caption, string $src, string $empty): void
+function ba_render_device_face(string $caption, string $src, string $empty, bool $side = false): void
 {
     $emptyClass = $src === '' ? ' is-empty' : '';
+    $sideClass = ($side && $src !== '') ? ' is-side' : '';
+    $alt = ($side && $src !== '') ? $caption . ', side standing' : $caption;
     echo '<figure class="dev-face"><figcaption>' . h($caption) . '</figcaption>';
-    echo '<div class="dev-shot' . $emptyClass . '">';
+    echo '<div class="dev-shot' . $emptyClass . $sideClass . '">';
     if ($src !== '') {
-        echo '<a href="' . h($src) . '" target="_blank" rel="noopener"><img src="' . h($src) . '" alt="' . h($caption) . '"></a>';
+        echo '<a href="' . h($src) . '" target="_blank" rel="noopener"><img src="' . h($src) . '" alt="' . h($alt) . '"></a>';
     } else {
         echo '<span class="dev-empty">' . h($empty) . '</span>';
     }
@@ -1580,13 +1587,19 @@ function ba_render_device_stage(array $r, array $faces, string $deptName): void
         $pill = $comm === 'down' ? 'down' : 'warn';
         $worst = $comm === 'down' ? 'st-down' : 'st-warn';
     }
+    $onFloor = (int)ba_col($r, 'on_floor', 0) === 1 && (int)ba_col($r, 'rack_id', 0) < 1;
+    $sideStand = function_exists('ba_picture_side_stand') && ba_picture_side_stand($r, $faces);
     echo '<section class="dev-stage ' . h($worst) . '">';
     echo '<div class="dev-faces">';
-    ba_render_device_face('Front', (string)($faces['front'] ?? ''), $frontEmpty);
-    ba_render_device_face('Rear', (string)($faces['rear'] ?? ''), $rearEmpty);
+    ba_render_device_face('Front', (string)($faces['front'] ?? ''), $frontEmpty, $sideStand);
+    ba_render_device_face('Rear', (string)($faces['rear'] ?? ''), $rearEmpty, $sideStand);
     $tplLabel = trim((string)($faces['template'] ?? ''));
     if ($tplLabel !== '') {
-        echo '<p class="dev-tpl">Template · ' . h($tplLabel) . '</p>';
+        $mountShown = strtolower(trim((string)($faces['mount_form'] ?? '')));
+        $pose = $sideStand ? ' · side standing' : (($onFloor && $mountShown === 'pedestal') ? ' · pedestal' : ($onFloor ? ' · upright' : ''));
+        echo '<p class="dev-tpl">Template · ' . h($tplLabel) . h($pose) . '</p>';
+    } elseif ($sideStand) {
+        echo '<p class="dev-tpl">Side standing</p>';
     }
     echo '</div><div class="dev-summary">';
     echo '<div class="dev-kicker">';
@@ -1607,6 +1620,13 @@ function ba_render_device_stage(array $r, array $faces, string $deptName): void
     $rackId = (int)ba_col($r, 'rack_id', 0);
     if ($rackId > 0) {
         echo ' · <a href="' . h(ba_href('/rack?id=' . $rackId)) . '">rack ' . h((string)ba_col($r, 'rack', '')) . ' U' . (int)ba_col($r, 'position_u', 0) . '</a>';
+    } elseif ($onFloor) {
+        $floorGid = (int)ba_col($r, 'group_id', 0);
+        if ($floorGid > 0) {
+            echo ' · <a href="' . h(ba_href('/idfs?group=' . $floorGid)) . '">on the floor</a>';
+        } else {
+            echo ' · on the floor';
+        }
     }
     echo '</p>';
     if ($retiredAt !== '') {
@@ -1743,7 +1763,8 @@ function page_device(PDO $db, array $user): void {
                     (string)($_POST['model'] ?? ''),
                     (int)($_POST['u_height'] ?? 1),
                     $createProfile,
-                    $created
+                    $created,
+                    ba_mount_form_value($_POST['mount_form'] ?? '')
                 );
                 ba_audit($db, 'add_template', 'device_template', (string)$tid, 'device=' . $id);
                 $savedFlag = $created ? 'model' : ($createProfile ? 'linked' : '1');
@@ -1791,19 +1812,49 @@ function page_device(PDO $db, array $user): void {
             }
             $wid = ba_webcred_posted($db, $_POST['web_credential_id'] ?? '');
             $kind = ba_kind_allowed((string)($_POST['kind'] ?? ($r['kind'] ?? 'ups')), 'ups');
+            $placement = (string)($_POST['placement'] ?? '');
+            if (!in_array($placement, ['rack', 'floor', 'none'], true)) {
+                $placement = ((int)ba_col($r, 'on_floor', 0) === 1 && (int)ba_col($r, 'rack_id', 0) < 1) ? 'floor' : (((int)ba_col($r, 'rack_id', 0) > 0) ? 'rack' : 'none');
+            }
             $rid = ($_POST['rack_id'] ?? '') === '' ? null : (int)$_POST['rack_id'];
             $pos = ($_POST['position_u'] ?? '') === '' ? null : (int)$_POST['position_u'];
             $uh = max(1, min(60, (int)($_POST['u_height'] ?? 1)));
             $face = $_POST['face'] ?? 'both';
             if (!in_array($face, ['front', 'rear', 'both'], true)) $face = 'both';
             $tid = ($_POST['template_id'] ?? '') === '' ? null : (int)$_POST['template_id'];
-            $db->prepare("UPDATE devices SET ip=?, hostname=?, site=?, building=?, idf_closet=?, rack=?, circuit=?, load_notes=?, install_date=?, last_battery_replacement=?, warranty_replace_by=?, sensor_expected=?, enabled=?, group_id=?, snmp_profile_id=?, web_credential_id=?, kind=?, rack_id=?, position_u=?, u_height=?, face=?, template_id=? WHERE id=?")
+            $onFloorSave = 0;
+            $rackText = trim($_POST['rack'] ?? '');
+            if ($placement === 'floor') {
+                if ($kind !== 'ups') {
+                    header('Location: ' . ba_href('/device?id='.$id.'&err='.rawurlencode('Only a UPS can stand on the closet floor.')));
+                    exit;
+                }
+                if (!$gid) {
+                    header('Location: ' . ba_href('/device?id='.$id.'&err='.rawurlencode('Choose the closet group before placing this UPS on the floor.')));
+                    exit;
+                }
+                $rid = null;
+                $pos = null;
+                $rackText = '';
+                $onFloorSave = 1;
+            } elseif ($placement === 'none') {
+                $rid = null;
+                $pos = null;
+                $onFloorSave = 0;
+            } else {
+                $onFloorSave = 0;
+                if (!$rid) {
+                    header('Location: ' . ba_href('/device?id='.$id.'&err='.rawurlencode('Choose a network rack, or set placement to Not placed.')));
+                    exit;
+                }
+            }
+            $db->prepare("UPDATE devices SET ip=?, hostname=?, site=?, building=?, idf_closet=?, rack=?, circuit=?, load_notes=?, install_date=?, last_battery_replacement=?, warranty_replace_by=?, sensor_expected=?, enabled=?, group_id=?, snmp_profile_id=?, web_credential_id=?, kind=?, rack_id=?, position_u=?, u_height=?, face=?, template_id=?, on_floor=? WHERE id=?")
                 ->execute([
                     $newIp, trim($_POST['hostname']??''), trim($_POST['site']??''), trim($_POST['building']??''),
-                    trim($_POST['idf_closet']??''), trim($_POST['rack']??''), trim($_POST['circuit']??''),
+                    trim($_POST['idf_closet']??''), $rackText, trim($_POST['circuit']??''),
                     trim($_POST['load_notes']??''), $_POST['install_date']?:null, $_POST['last_battery_replacement']?:null,
                     $_POST['warranty_replace_by']?:null, isset($_POST['sensor_expected'])?1:0, isset($_POST['enabled'])?1:0,
-                    $gid, $sid, $wid, $kind, $rid, $pos, $uh, $face, $tid, $id,
+                    $gid, $sid, $wid, $kind, $rid, $pos, $uh, $face, $tid, $onFloorSave, $id,
                 ]);
             $mpRaw = trim((string)($_POST['model_profile_id'] ?? ''));
             $mpid = $mpRaw === '' ? null : (int)$mpRaw;
@@ -1991,17 +2042,29 @@ function page_device(PDO $db, array $user): void {
           <select name="template_id"><?= ba_template_options($db, isset($r['template_id']) ? (int)$r['template_id'] : null) ?></select>
           <button name="apply_template" value="1">Apply template</button>
         </div>
-        <p class="muted">Apply copies manufacturer, model, kind, U height, face, ports, VA, credentials, and the model profile from the template. Installed parts stay as they are.</p>
-        <label>Kind</label><select name="kind"><?= ba_kind_options($r['kind'] ?? 'ups') ?></select>
+        <p class="muted">Apply copies manufacturer, model, kind, U height, face, ports, VA, credentials, and the model profile from the template. Installed parts stay as they are. Primary form stays on the template and decides whether floor pictures turn.</p>
+        <label>Kind</label><select name="kind" id="device-kind"><?= ba_kind_options($r['kind'] ?? 'ups') ?></select>
+        <?php
+          $placementNow = 'none';
+          if ((int)ba_col($r, 'on_floor', 0) === 1 && (int)($r['rack_id'] ?? 0) < 1) $placementNow = 'floor';
+          elseif ((int)($r['rack_id'] ?? 0) > 0) $placementNow = 'rack';
+        ?>
+        <label>Placement</label>
+        <select name="placement" id="device-placement">
+          <option value="rack"<?= $placementNow === 'rack' ? ' selected' : '' ?>>In a network rack</option>
+          <option value="floor"<?= $placementNow === 'floor' ? ' selected' : '' ?>>On the closet floor</option>
+          <option value="none"<?= $placementNow === 'none' ? ' selected' : '' ?>>Not placed</option>
+        </select>
+        <p class="muted" id="placement-floor-note">A rackmount UPS on the floor stands on its side, and the front and rear pictures turn 90 degrees. A pedestal UPS stays upright. Set that on the device template. The Group above is the closet.</p>
+        <div id="placement-rack-fields">
         <label>Network rack</label>
-        <select name="rack_id"><option value="">(not placed)</option><?php
+        <select name="rack_id"><option value="">(choose a rack)</option><?php
           foreach ($db->query('SELECT r.id, r.name, g.name AS gname FROM racks r JOIN groups g ON g.id=r.group_id ORDER BY g.name, r.sort_order, r.name') as $rk) {
               $sel = ((int)($r['rack_id'] ?? 0) === (int)$rk['id']) ? ' selected' : '';
               echo '<option value="'.(int)$rk['id'].'"'.$sel.'>'.h($rk['gname'].' / '.$rk['name']).'</option>';
           }
         ?></select>
         <label>Bottom U</label><input type="number" name="position_u" min="1" value="<?= h((string)($r['position_u'] ?? '')) ?>">
-        <label>Height (U)</label><input type="number" name="u_height" min="1" max="60" value="<?= h((string)($r['u_height'] ?? 1)) ?>">
         <label>Face</label><select name="face"><?php
           foreach (['both'=>'both (full depth)','front'=>'front','rear'=>'rear'] as $fv=>$fl) {
               $sel = (($r['face'] ?? 'both') === $fv) ? ' selected' : '';
@@ -2009,6 +2072,28 @@ function page_device(PDO $db, array $user): void {
           }
         ?></select>
         <label>Rack label (text)</label><input name="rack" value="<?= h($r['rack']) ?>">
+        </div>
+        <label>Height (U)</label><input type="number" name="u_height" min="1" max="60" value="<?= h((string)($r['u_height'] ?? 1)) ?>">
+        <script>
+        (function () {
+          var sel = document.getElementById("device-placement");
+          var rack = document.getElementById("placement-rack-fields");
+          var note = document.getElementById("placement-floor-note");
+          var kind = document.getElementById("device-kind");
+          if (!sel || !rack || !note) return;
+          function paint() {
+            var ups = !kind || kind.value === "ups";
+            var floorOpt = sel.querySelector("option[value=floor]");
+            if (floorOpt) floorOpt.disabled = !ups;
+            if (!ups && sel.value === "floor") sel.value = "none";
+            rack.hidden = sel.value !== "rack";
+            note.hidden = sel.value !== "floor";
+          }
+          sel.addEventListener("change", paint);
+          if (kind) kind.addEventListener("change", paint);
+          paint();
+        })();
+        </script>
         <label>Circuit</label><input name="circuit" value="<?= h($r['circuit']) ?>">
         <label>Load notes</label><textarea name="load_notes"><?= h($r['load_notes']) ?></textarea>
         <label>Install</label><input type="date" name="install_date" value="<?= h($r['install_date']) ?>">
@@ -2053,6 +2138,9 @@ function page_device(PDO $db, array $user): void {
         echo '<label>Manufacturer</label><input name="manufacturer" value="' . h(trim((string)ba_col($r, 'manufacturer', ''))) . '" placeholder="CyberPower, APC, Cisco">';
         echo '<label>Model</label><input name="model" required autofocus value="' . h(trim((string)ba_col($r, 'model', ''))) . '">';
         echo '<label>Height (U)</label><input type="number" name="u_height" min="1" max="60" value="' . $uhNow . '">';
+        echo '<label>Primary form</label><select name="mount_form">';
+        echo '<option value="rackmount" selected>Rackmount</option><option value="pedestal">Pedestal</option></select>';
+        echo '<p class="muted">Rackmount on the closet floor turns the front and rear pictures 90 degrees. Pedestal stays upright.</p>';
         if (ba_editor($user, 'edit_snmp')) {
             echo '<label><input type="checkbox" name="create_model"> Also create a model profile</label>';
             echo '<p class="muted">The profile uses this model name as its match. If a profile already matches this exact name, that profile is used instead of a second one. A new profile means a UPS with a blank model no longer uses the only profile on the site. Summary readings stay either way.</p>';

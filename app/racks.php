@@ -816,6 +816,9 @@ function ba_idf_place(array $d, array $racksById): array {
         $top = $u + $uh - 1;
         $uTxt = $u === $top ? 'U' . $u : 'U' . $u . '–' . $top;
     }
+    if ((int)ba_col($d, 'on_floor', 0) === 1 && $rid < 1) {
+        return ['text' => 'Floor', 'href' => ''];
+    }
     if ($name === '' && $uTxt === '') {
         return ['text' => 'Not placed', 'href' => ''];
     }
@@ -1153,11 +1156,42 @@ function page_idfs(PDO $db, array $user): void {
                 ba_audit($db, 'add_rack', 'rack', $name, 'group '.$g);
                 $msg = 'Rack added';
                 $gid = $g;
+            } elseif ($act === 'place_floor') {
+                $g = (int)($_POST['group_id'] ?? 0);
+                $did = (int)($_POST['device_id'] ?? 0);
+                $gid = $g;
+                ba_ensure_floor_schema($db);
+                $st = $db->prepare('SELECT * FROM devices WHERE id=?');
+                $st->execute([$did]);
+                $dev = $st->fetch();
+                $st->closeCursor();
+                if (!$dev) throw new RuntimeException('Unit not found');
+                $kind = strtolower(trim((string)($dev['kind'] ?? 'ups')));
+                if ($kind !== '' && $kind !== 'ups') throw new RuntimeException('Only a UPS can stand on the closet floor.');
+                if ((int)($dev['group_id'] ?? 0) !== $g) throw new RuntimeException('That UPS is not in this closet.');
+                if ((int)($dev['rack_id'] ?? 0) > 0) throw new RuntimeException('Take the UPS out of the rack before placing it on the floor.');
+                ba_sync_location_from_group($db, $did, $g, null);
+                ba_pp_exec($db, 'UPDATE devices SET on_floor=1, rack_id=NULL, position_u=NULL WHERE id=?', [$did]);
+                ba_audit($db, 'place_floor', 'device', (string)$did, 'group '.$g);
+                $msg = 'Placed on the floor.';
+            } elseif ($act === 'lift_floor') {
+                $g = (int)($_POST['group_id'] ?? 0);
+                $did = (int)($_POST['device_id'] ?? 0);
+                $gid = $g;
+                ba_ensure_floor_schema($db);
+                $st = $db->prepare('SELECT id FROM devices WHERE id=? AND group_id=? AND on_floor=1');
+                $st->execute([$did, $g]);
+                $have = $st->fetch();
+                $st->closeCursor();
+                if (!$have) throw new RuntimeException('That UPS is not on the floor in this closet.');
+                ba_pp_exec($db, 'UPDATE devices SET on_floor=0 WHERE id=? AND group_id=?', [$did, $g]);
+                ba_audit($db, 'lift_floor', 'device', (string)$did, 'group '.$g);
+                $msg = 'Removed from the floor. The UPS stays in this closet.';
             } elseif ($act === 'del_rack') {
                 $rid = (int)$_POST['rack_id'];
                 $rk = ba_rack($db, $rid);
                 if (!$rk) throw new RuntimeException('Rack not found');
-                $db->prepare('UPDATE devices SET rack_id=NULL, position_u=NULL, rack=NULL WHERE rack_id=?')->execute([$rid]);
+                $db->prepare('UPDATE devices SET rack_id=NULL, position_u=NULL, rack=NULL, on_floor=0 WHERE rack_id=?')->execute([$rid]);
                 $db->prepare('DELETE FROM racks WHERE id=?')->execute([$rid]);
                 ba_audit($db, 'del_rack', 'rack', (string)$rid);
                 $msg = 'Rack removed (units unplaced)';
@@ -1217,8 +1251,8 @@ function page_idfs(PDO $db, array $user): void {
         echo '<h1>'.h($g['name']).'</h1>';
         echo '<p class="idf-lead' . ($leadCls !== '' ? ' ' . $leadCls : '') . '">' . h($lead) . '</p>';
         echo '<p class="muted">'.(ba_tech_mode()
-            ? 'Add a rack, open it, then tap a U to place a device. U1 is the bottom.'
-            : 'Click an empty U to place a UPS, switch, or patch panel. U1 is the bottom of the rack.').'</p>';
+            ? 'Add a rack, open it, then tap a U to place a device. A UPS can also stand on the floor. U1 is the bottom.'
+            : 'Click an empty U to place a UPS, switch, or patch panel. A UPS can also stand on the floor of this closet. U1 is the bottom of the rack.').'</p>';
         echo '</div>';
         if ($admin && !ba_tech_mode()) {
             echo '<button type="button" class="btn" data-open-modal="modal-add-rack">Add network rack</button>';
@@ -1250,6 +1284,9 @@ function page_idfs(PDO $db, array $user): void {
             echo '</div></div></div>';
         } else {
             echo '<div class="empty">No racks in this closet yet.</div>';
+        }
+        if (!$loadError) {
+            ba_render_idf_floor($db, $gid, $devices, $admin);
         }
 
         if ($admin) {
@@ -1359,6 +1396,86 @@ function ba_render_tech_u_picker(array $rack, array $devices, int $focusU, strin
     echo '</div></div>';
 }
 
+function ba_render_idf_floor(PDO $db, int $groupId, array $devices, bool $admin): void {
+    $floor = [];
+    $open = [];
+    $upsHere = 0;
+    foreach ($devices as $d) {
+        if (!is_array($d)) {
+            continue;
+        }
+        $kind = strtolower(trim((string)ba_col($d, 'kind', 'ups')));
+        if ($kind !== '' && $kind !== 'ups') {
+            continue;
+        }
+        $upsHere++;
+        $racked = (int)ba_col($d, 'rack_id', 0) > 0;
+        if ((int)ba_col($d, 'on_floor', 0) === 1 && !$racked) {
+            $floor[] = $d;
+        } elseif (!$racked) {
+            $open[] = $d;
+        }
+    }
+    $byName = static function (array $a, array $b): int {
+        $an = strtolower(trim((string)ba_col($a, 'hostname', '')) . ' ' . (string)ba_col($a, 'ip', ''));
+        $bn = strtolower(trim((string)ba_col($b, 'hostname', '')) . ' ' . (string)ba_col($b, 'ip', ''));
+        return $an <=> $bn;
+    };
+    usort($floor, $byName);
+    usort($open, $byName);
+    ba_card_open('Floor');
+    echo '<p class="muted">UPS units that stand in this closet instead of a rack. A rackmount template turns the front and rear pictures 90 degrees. A pedestal template stays upright.</p>';
+    if (!$floor) {
+        echo '<p class="empty">No UPS on the floor in this closet.</p>';
+    } else {
+        echo '<div class="floor-units">';
+        foreach ($floor as $d) {
+            $faces = ba_device_faces($db, $d);
+            $side = ba_picture_side_stand($d, $faces);
+            $mount = strtolower(trim((string)($faces['mount_form'] ?? '')));
+            $pose = $side ? 'Side standing' : ($mount === 'pedestal' ? 'Pedestal' : 'Upright');
+            $name = trim((string)ba_col($d, 'hostname', ''));
+            if ($name === '') {
+                $name = (string)ba_col($d, 'ip', 'UPS');
+            }
+            $id = (int)ba_col($d, 'id', 0);
+            echo '<article class="floor-unit">';
+            echo '<div class="dev-faces floor-faces">';
+            ba_render_device_face('Front', (string)($faces['front'] ?? ''), 'No front picture yet.', $side);
+            ba_render_device_face('Rear', (string)($faces['rear'] ?? ''), 'No rear picture yet.', $side);
+            echo '</div><div class="floor-meta">';
+            echo '<a href="' . h(ba_href('/device?id=' . $id)) . '">' . h($name) . '</a>';
+            echo '<span class="muted">' . h($pose) . '</span>';
+            if ($admin) {
+                echo '<form method="post" class="stack" onsubmit="return confirm(\'Remove this UPS from the floor? It stays in this closet.\')">';
+                echo '<input type="hidden" name="act" value="lift_floor"><input type="hidden" name="group_id" value="' . $groupId . '">';
+                echo '<input type="hidden" name="device_id" value="' . $id . '"><button>Remove from floor</button></form>';
+            }
+            echo '</div></article>';
+        }
+        echo '</div>';
+    }
+    if ($admin && $open) {
+        echo '<form method="post" class="stack floor-place"><input type="hidden" name="act" value="place_floor">';
+        echo '<input type="hidden" name="group_id" value="' . $groupId . '">';
+        echo '<label>Place a UPS on the floor</label><select name="device_id" required>';
+        echo '<option value="">Choose an unplaced UPS</option>';
+        foreach ($open as $d) {
+            $name = trim((string)ba_col($d, 'hostname', ''));
+            if ($name === '') {
+                $name = (string)ba_col($d, 'ip', 'UPS');
+            }
+            $model = trim((string)ba_col($d, 'model', ''));
+            $label = $model !== '' ? $name . ' · ' . $model : $name;
+            echo '<option value="' . (int)ba_col($d, 'id', 0) . '">' . h($label) . '</option>';
+        }
+        echo '</select><button>Place on floor</button></form>';
+    } elseif ($admin && $upsHere > 0 && !$open) {
+        echo '<p class="muted">Every UPS in this closet is already in a rack or on the floor.</p>';
+    }
+    ba_card_close();
+}
+
 function page_rack(PDO $db, array $user): void {
     $admin = ba_editor($user, 'edit_infrastructure');
     $id = (int)($_GET['id'] ?? 0);
@@ -1404,7 +1521,7 @@ function page_rack(PDO $db, array $user): void {
                 $slotFace = ($placedKind === '' || $placedKind === 'ups') ? 'both' : $face;
                 $hit = ba_slot_taken($occupants, $pos, $uh, $slotFace, $did);
                 if ($hit) throw new RuntimeException('U overlap with '.($hit['hostname'] ?: $hit['ip']));
-                $db->prepare('UPDATE devices SET rack_id=?, position_u=?, u_height=?, face=?, kind=IFNULL(kind,\'ups\'), updated_at=datetime(\'now\') WHERE id=?')
+                $db->prepare('UPDATE devices SET rack_id=?, position_u=?, u_height=?, face=?, kind=IFNULL(kind,\'ups\'), on_floor=0, updated_at=datetime(\'now\') WHERE id=?')
                     ->execute([$id, $pos, $uh, $face, $did]);
                 ba_sync_location_from_group($db, $did, (int)$rack['group_id'], $rack['name']);
                 ba_audit($db, 'place_device', 'device', (string)$did, 'rack '.$id.' U'.$pos);
@@ -1466,7 +1583,7 @@ function page_rack(PDO $db, array $user): void {
                 $focusU = 0;
             } elseif ($act === 'unplace') {
                 $did = (int)$_POST['device_id'];
-                $db->prepare('UPDATE devices SET rack_id=NULL, position_u=NULL, rack=NULL, updated_at=datetime(\'now\') WHERE id=? AND rack_id=?')
+                $db->prepare('UPDATE devices SET rack_id=NULL, position_u=NULL, rack=NULL, on_floor=0, updated_at=datetime(\'now\') WHERE id=? AND rack_id=?')
                     ->execute([$did, $id]);
                 ba_audit($db, 'unplace_device', 'device', (string)$did);
                 $msg = 'Removed from rack';
@@ -1505,6 +1622,7 @@ function page_rack(PDO $db, array $user): void {
     $unplaced = $db->prepare(
         "SELECT id, hostname, ip, kind, model FROM devices
          WHERE rack_id IS NULL AND IFNULL(kind,'ups')='ups'
+           AND (on_floor IS NULL OR on_floor=0)
            AND (group_id=? OR group_id IS NULL)
          ORDER BY hostname, ip"
     );

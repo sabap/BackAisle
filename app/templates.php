@@ -127,7 +127,40 @@ function ba_template_options(PDO $db, ?int $selected = null, ?string $kind = nul
     return $html;
 }
 
+function ba_ensure_floor_schema(PDO $db): void {
+    static $done = false;
+    if ($done) {
+        return;
+    }
+    $done = true;
+    if (ba_db_driver() === 'sqlsrv') {
+        ba_ensure_column($db, 'device_templates', 'mount_form', "NVARCHAR(16) NOT NULL CONSTRAINT DF_tpl_mount_form DEFAULT 'rackmount'");
+        ba_ensure_column($db, 'devices', 'on_floor', 'INT NOT NULL CONSTRAINT DF_devices_on_floor DEFAULT 0');
+        return;
+    }
+    ba_ensure_column($db, 'device_templates', 'mount_form', "TEXT NOT NULL DEFAULT 'rackmount'");
+    ba_ensure_column($db, 'devices', 'on_floor', 'INTEGER NOT NULL DEFAULT 0');
+}
+
+/** rackmount or pedestal. An empty value is rackmount, which is the column default. */
+function ba_mount_form_value(mixed $raw): string {
+    return strtolower(trim((string)$raw)) === 'pedestal' ? 'pedestal' : 'rackmount';
+}
+
+function ba_mount_form_label(mixed $raw): string {
+    return ba_mount_form_value($raw) === 'pedestal' ? 'Pedestal' : 'Rackmount';
+}
+
+/** Turn front and rear only for a rackmount template standing on the closet floor. */
+function ba_picture_side_stand(array $device, array $faces): bool {
+    if ((int)ba_col($device, 'on_floor', 0) !== 1 || (int)ba_col($device, 'rack_id', 0) > 0) {
+        return false;
+    }
+    return strtolower(trim((string)($faces['mount_form'] ?? ''))) === 'rackmount';
+}
+
 function ba_ensure_template_links(PDO $db): void {
+    ba_ensure_floor_schema($db);
     ba_ensure_column($db, 'device_templates', 'snmp_profile_id', 'INT NULL');
     ba_ensure_column($db, 'device_templates', 'model_profile_id', 'INT NULL');
     if (function_exists('ba_ensure_model_schema')) {
@@ -163,7 +196,7 @@ function ba_apply_template(PDO $db, int $deviceId, int $templateId): void {
 }
 
 /** Save the hardware on this device as a template. Optionally create a model profile and assign both. */
-function ba_save_device_as_template(PDO $db, array $device, string $manufacturer, string $model, int $uHeight, bool $createProfile, ?bool &$profileCreated = null): int {
+function ba_save_device_as_template(PDO $db, array $device, string $manufacturer, string $model, int $uHeight, bool $createProfile, ?bool &$profileCreated = null, string $mountForm = 'rackmount'): int {
     ba_ensure_template_links($db);
     $model = trim($model);
     $manufacturer = trim($manufacturer);
@@ -206,7 +239,7 @@ function ba_save_device_as_template(PDO $db, array $device, string $manufacturer
             }
         }
         $db->prepare(
-            'INSERT INTO device_templates (manufacturer, model, kind, u_height, face, snmp_profile_id, model_profile_id) VALUES (?,?,?,?,?,?,?)'
+            'INSERT INTO device_templates (manufacturer, model, kind, u_height, face, snmp_profile_id, model_profile_id, mount_form) VALUES (?,?,?,?,?,?,?,?)'
         )->execute([
             $manufacturer !== '' ? $manufacturer : null,
             $model,
@@ -215,6 +248,7 @@ function ba_save_device_as_template(PDO $db, array $device, string $manufacturer
             $face,
             $sid > 0 ? $sid : null,
             $mpid,
+            ba_mount_form_value($mountForm),
         ]);
         $tid = ba_last_id($db);
         if ($tid < 1) {
@@ -260,15 +294,16 @@ function ba_tpl_public_picture(mixed $raw): string
     return $path;
 }
 
-/** @return array{front:string,rear:string,template:string} */
+/** @return array{front:string,rear:string,template:string,mount_form:string} */
 function ba_device_faces(PDO $db, array $device): array
 {
-    $empty = ['front' => '', 'rear' => '', 'template' => ''];
+    $empty = ['front' => '', 'rear' => '', 'template' => '', 'mount_form' => ''];
     $tid = (int)ba_col($device, 'template_id', 0);
     if ($tid < 1) {
         return $empty;
     }
-    $st = $db->prepare('SELECT manufacturer, model, front_picture, rear_picture FROM device_templates WHERE id=?');
+    ba_ensure_floor_schema($db);
+    $st = $db->prepare('SELECT manufacturer, model, front_picture, rear_picture, mount_form FROM device_templates WHERE id=?');
     $st->execute([$tid]);
     $row = $st->fetch();
     $st->closeCursor();
@@ -287,6 +322,7 @@ function ba_device_faces(PDO $db, array $device): array
         'front' => $front,
         'rear' => ba_tpl_public_picture(ba_col($row, 'rear_picture', '')),
         'template' => $label,
+        'mount_form' => strtolower(trim((string)ba_col($row, 'mount_form', ''))),
     ];
 }
 
@@ -357,8 +393,8 @@ function page_templates(PDO $db, array $user): void {
                 }
                 ba_pp_exec(
                     $db,
-                    'UPDATE device_templates SET plug_type=?, outlet_count=?, data_port_count=?, env_port_count=? WHERE id=?',
-                    [$plug !== '' ? $plug : null, $kind === 'ups' ? $outlets : null, $dataPorts, $envPorts, $tid]
+                    'UPDATE device_templates SET plug_type=?, outlet_count=?, data_port_count=?, env_port_count=?, mount_form=? WHERE id=?',
+                    [$plug !== '' ? $plug : null, $kind === 'ups' ? $outlets : null, $dataPorts, $envPorts, ba_mount_form_value($_POST['mount_form'] ?? ''), $tid]
                 );
                 if ($kind === 'ups') {
                     $postedPlugs = is_array($_POST['outlet_plug'] ?? null) ? $_POST['outlet_plug'] : [];
@@ -416,7 +452,10 @@ function page_templates(PDO $db, array $user): void {
         if ($msg) echo '<div class="flash">'.h($msg).'</div>';
         echo '<p class="muted"><a href="/templates.php">All templates</a></p>';
         echo '<h1>'.h($tpl ? $tpl['model'] : 'New device template').'</h1>';
-        echo '<p class="muted">Catalog entry for IDF gear. Apply it to a UPS, switch, or patch panel to fill model, U height, ports, credentials, and the model profile. A UPS template also stores the plug type, output outlets, data ports, and environmental ports. A switch template can also draw bays and a kit of components.</p>';
+        echo '<p class="muted">Catalog entry for IDF gear. Apply it to a UPS, switch, or patch panel to fill model, U height, ports, credentials, and the model profile. A UPS template also stores the plug type, output outlets, data ports, and environmental ports. Primary form says whether the UPS is rackmount or pedestal. A switch template can also draw bays and a kit of components.</p>';
+        if (!$admin && $tpl) {
+            echo '<p>Primary form: <strong>'.h(ba_mount_form_label($tpl['mount_form'] ?? '')).'</strong></p>';
+        }
         if ($admin) {
             echo '<form method="post" enctype="multipart/form-data" class="ucard stack template-form">';
             echo '<div class="ucard-head"><h3>Template</h3></div><div class="ucard-body"><div class="template-fields">';
@@ -432,6 +471,12 @@ function page_templates(PDO $db, array $user): void {
                 echo '<option value="'.$k.'"'.$sel.'>'.$lab.'</option>';
             }
             echo '</select>';
+            $mountNow = ba_mount_form_value(is_array($tpl) ? ($tpl['mount_form'] ?? '') : '');
+            echo '<label>Primary form</label><select name="mount_form">';
+            echo '<option value="rackmount"'.($mountNow === 'rackmount' ? ' selected' : '').'>Rackmount</option>';
+            echo '<option value="pedestal"'.($mountNow === 'pedestal' ? ' selected' : '').'>Pedestal</option>';
+            echo '</select>';
+            echo '<p class="muted">Rackmount is the usual closet UPS. On the closet floor, a rackmount unit stands on its side and the front and rear pictures turn 90 degrees. A pedestal unit stays upright on the floor.</p>';
             echo '<label>Port count</label><input type="number" name="port_count" min="0" value="'.h((string)($tpl['port_count'] ?? '')).'" placeholder="24 or 48 for patch panels">';
             $outlets = ba_template_outlets($db, (int)($tpl['id'] ?? 0));
             $outletN = (int)($tpl['outlet_count'] ?? count($outlets));
@@ -608,7 +653,7 @@ function page_templates(PDO $db, array $user): void {
     echo '<h1>Device templates</h1>';
     echo '<p class="muted">Reusable models for IDF racks. Apply a template to fill U height, manufacturer, model, and ports. Switch components are a separate catalog.</p>';
     ba_card_open('Templates', $admin ? '<a class="btn" href="/templates.php?action=new">New template</a>' : '');
-    echo '<table><thead><tr><th>Kind</th><th>Manufacturer</th><th>Model</th><th>U</th><th>Face</th><th>Ports</th><th>Outlets</th><th>VA</th><th></th></tr></thead><tbody>';
+    echo '<table><thead><tr><th>Kind</th><th>Manufacturer</th><th>Model</th><th>U</th><th>Form</th><th>Face</th><th>Ports</th><th>Outlets</th><th>VA</th><th></th></tr></thead><tbody>';
     foreach ($rows as $t) {
         $t = array_change_key_case($t, CASE_LOWER);
         $dim = !(int)$t['is_active'] ? ' class="muted"' : '';
@@ -622,7 +667,7 @@ function page_templates(PDO $db, array $user): void {
         }
         echo '<tr'.$dim.'><td>'.h(ba_kind_label($t['kind'])).'</td><td>'.h($t['manufacturer']).'</td>';
         echo '<td><a href="/templates.php?id='.(int)$t['id'].'">'.h($t['model']).'</a></td>';
-        echo '<td>'.(int)$t['u_height'].'</td><td>'.h($t['face']).'</td><td>'.h((string)($t['port_count'] ?? '—')).'</td>';
+        echo '<td>'.(int)$t['u_height'].'</td><td>'.h(ba_mount_form_label($t['mount_form'] ?? '')).'</td><td>'.h($t['face']).'</td><td>'.h((string)($t['port_count'] ?? '—')).'</td>';
         echo '<td>'.h($outletCell).'</td>';
         echo '<td>'.h($t['va_rating'] !== null ? (string)(int)$t['va_rating'] : '—').'</td><td>';
         if ($admin) {
@@ -633,7 +678,7 @@ function page_templates(PDO $db, array $user): void {
         }
         echo '</td></tr>';
     }
-    if (!$rows) echo '<tr><td colspan="9" class="muted">No templates yet.</td></tr>';
+    if (!$rows) echo '<tr><td colspan="10" class="muted">No templates yet.</td></tr>';
     echo '</tbody></table>';
     ba_card_close();
     ba_render_part_catalog($db, $admin);

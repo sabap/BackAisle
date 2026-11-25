@@ -50,7 +50,8 @@ CREATE TABLE devices (
   port_count INT NULL,
   manufacturer NVARCHAR(128) NULL,
   template_id INT NULL,
-  web_credential_id INT NULL
+  web_credential_id INT NULL,
+  on_floor INT NOT NULL DEFAULT 0
 );
 GO
 IF COL_LENGTH('devices', 'web_credential_id') IS NULL
@@ -67,6 +68,9 @@ IF COL_LENGTH('devices', 'warranty_expires') IS NULL
 GO
 IF COL_LENGTH('devices', 'device_picture') IS NULL
   ALTER TABLE devices ADD device_picture NVARCHAR(255) NULL;
+GO
+IF COL_LENGTH('devices', 'on_floor') IS NULL
+  ALTER TABLE devices ADD on_floor INT NOT NULL CONSTRAINT DF_devices_on_floor DEFAULT 0;
 GO
 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'poll_state')
 CREATE TABLE poll_state (
@@ -212,6 +216,7 @@ CREATE TABLE device_templates (
   snmp_profile_id INT NULL,
   front_picture NVARCHAR(255) NULL,
   rear_picture NVARCHAR(255) NULL,
+  mount_form NVARCHAR(16) NOT NULL DEFAULT 'rackmount',
   is_active INT NOT NULL DEFAULT 1,
   plug_type NVARCHAR(32) NULL,
   outlet_count INT NULL,
@@ -220,6 +225,9 @@ CREATE TABLE device_templates (
   created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
   updated_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
 );
+GO
+IF COL_LENGTH('device_templates', 'mount_form') IS NULL
+  ALTER TABLE device_templates ADD mount_form NVARCHAR(16) NOT NULL CONSTRAINT DF_tpl_mount_form DEFAULT 'rackmount';
 GO
 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'device_template_outlets')
 CREATE TABLE device_template_outlets (

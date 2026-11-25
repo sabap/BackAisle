@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.120] - 2026-11-25
+
+- A UPS can stand on the closet floor. The closet page lists those units. Placement on a device is In a network rack, On the closet floor, or Not placed.
+- A template Primary form is Rackmount or Pedestal. Existing templates start as Rackmount. A rackmount UPS on the floor turns its front and rear pictures 90 degrees. A pedestal UPS stays upright.
+- Signed-in pages use app.css?v=layout20. Login stays layout6.
+- The collector does not need a restart. The writer does not need a restart.
+
 ## [0.5.119] - 2026-11-25
 
 - After FTP answers, SNMP is polled for up to 90 seconds. The step says SNMP is not answering yet while it waits. A poll that is still waiting does not write the profile again.

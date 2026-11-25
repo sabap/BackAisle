@@ -903,7 +903,41 @@ form.stack.notify-form { max-width: none; }
   transition: transform .2s ease;
 }
 .dev-shot a:hover img { transform: scale(1.03); }
+.dev-shot.is-side { height: 280px; }
+.dev-shot.is-side a {
+  position: relative;
+  width: 132px;
+  height: 248px;
+  display: block;
+  flex: 0 0 auto;
+}
+.dev-shot.is-side img {
+  position: absolute;
+  width: 248px;
+  height: 132px;
+  max-width: none;
+  max-height: none;
+  top: 50%;
+  left: 50%;
+  transition: none;
+  object-fit: contain;
+  transform: translate(-50%, -50%) rotate(90deg);
+}
+.dev-shot.is-side a:hover img { transform: translate(-50%, -50%) rotate(90deg) scale(1.03); }
 .dev-shot.is-empty { border-style: dashed; }
+.floor-units { display: flex; flex-wrap: wrap; gap: 1rem; align-items: stretch; }
+.floor-unit {
+  flex: 1 1 22rem;
+  max-width: 40rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #10161e;
+  padding: .75rem;
+}
+.floor-unit .dev-faces { padding: 0; }
+.floor-meta { display: flex; flex-wrap: wrap; gap: .5rem .8rem; align-items: center; margin-top: .55rem; }
+.floor-meta form { margin: 0; }
+.floor-place { margin-top: .9rem; max-width: 28rem; }
 .dev-empty {
   color: var(--muted);
   font-size: .82rem;
