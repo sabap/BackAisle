@@ -5,7 +5,7 @@ import io
 import re
 import time
 from datetime import datetime, timedelta
-from ftplib import FTP, error_perm, error_proto, error_temp
+from ftplib import FTP, error_perm, error_proto, error_reply, error_temp
 from pathlib import Path
 
 # The card builds this file when the name matches its current minute. NLST stays empty.
@@ -154,9 +154,9 @@ def _skip_blank_greeting(ftp: FTP, limit: int = 2) -> str:
     raise last
 
 
-# The 6s cap is for one file name. The line after a blank greeting is not a file
-# transfer, so it gets this one longer wait. A normal 220 still returns at once.
-GREETING_WAIT_S = 15
+# A late 220 still counts. This card sends nothing after the blank line and
+# answers the first command, so the peek stays short.
+GREETING_PEEK_S = 1
 
 
 class _TraceFTP(FTP):
@@ -166,7 +166,6 @@ class _TraceFTP(FTP):
         super().__init__()
         self.events: list[str] = []
         self.secret = ""
-        self.greeting_wait = GREETING_WAIT_S
 
     def connect(self, host="", port=0, timeout=-999, source_address=None):
         try:
@@ -176,15 +175,38 @@ class _TraceFTP(FTP):
                 raise
             self.events.append("greeting blank")
             previous = self.sock.gettimeout()
-            self.sock.settimeout(self.greeting_wait)
+            self.sock.settimeout(GREETING_PEEK_S)
             try:
-                self.welcome = _skip_blank_greeting(self)
+                try:
+                    self.welcome = _skip_blank_greeting(self)
+                    return self.welcome
+                except TimeoutError:
+                    # The blank line was the whole banner. Login sends USER.
+                    self.file = self.sock.makefile("r", encoding=self.encoding)
+                    self.events.append("greeting skipped")
+                    self.welcome = ""
+                    return ""
             finally:
                 try:
                     self.sock.settimeout(previous)
                 except Exception:
                     pass
-            return self.welcome
+
+    def login(self, user="", passwd="", acct=""):
+        if "greeting skipped" not in self.events:
+            return FTP.login(self, user, passwd, acct)
+        account = user or ""
+        resp = self.sendcmd("USER " + account)
+        # A greeting that shows up late is not the answer to USER.
+        if resp[:3] == "220":
+            resp = self.sendcmd("USER " + account)
+        if resp[:1] == "3":
+            resp = self.sendcmd("PASS " + (passwd or ""))
+        if resp[:1] == "3":
+            resp = self.sendcmd("ACCT " + (acct or ""))
+        if not resp or resp[:1] != "2":
+            raise error_reply(resp)
+        return resp
 
     def sendcmd(self, cmd):
         verb = ftp_command_verb(cmd)

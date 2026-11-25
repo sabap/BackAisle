@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.118] - 2026-11-25
+
+- After a blank line, the config read looks for one second for the FTP greeting. When no greeting follows, the login is sent anyway.
+- The other file names are not tried until a file transfer has been attempted. A timeout on a file name still tries the next minute.
+- The read still tries the card clock, then UTC, then this server's clock. It still stops at 30 seconds. A failed read is not tried again.
+- The writer reloads when writer.py is newer than the running process, or when an update asks for a restart. The collector does not need a restart.
+
 ## [0.5.117] - 2026-11-25
 
 - After a blank line, the config read waits 15 seconds for the FTP greeting. A greeting that is already there returns at once.

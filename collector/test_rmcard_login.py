@@ -965,7 +965,6 @@ def test_delayed_greeting_after_a_blank_line_is_accepted() -> None:
     if not ready.wait(3):
         raise AssertionError("banner server did not start")
     ftp = _TraceFTP()
-    ftp.greeting_wait = 2
     started = time.monotonic()
     try:
         welcome = ftp.connect("127.0.0.1", box["port"], timeout=1)
@@ -977,6 +976,102 @@ def test_delayed_greeting_after_a_blank_line_is_accepted() -> None:
         raise AssertionError("delayed greeting")
     if elapsed >= 2:
         raise AssertionError("waited for the full greeting cap")
+
+
+def test_blank_line_accepts_a_login() -> None:
+    import socket
+    import threading
+    import time
+    from rmcard_ftp import _TraceFTP
+
+    ready = threading.Event()
+    box = {}
+
+    def run() -> None:
+        server = socket.socket()
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        server.settimeout(5)
+        box["port"] = server.getsockname()[1]
+        ready.set()
+        try:
+            conn, _ = server.accept()
+        except Exception:
+            server.close()
+            return
+        try:
+            conn.sendall(b"\r\n")
+            conn.settimeout(5)
+            data = b""
+            while b"\n" not in data:
+                piece = conn.recv(256)
+                if not piece:
+                    return
+                data += piece
+            if not data.upper().startswith(b"USER "):
+                conn.sendall(b"500 not user\r\n")
+                return
+            conn.sendall(b"331 Password required\r\n")
+            data = b""
+            while b"\n" not in data:
+                piece = conn.recv(256)
+                if not piece:
+                    return
+                data += piece
+            if data.upper().startswith(b"PASS "):
+                conn.sendall(b"230 Logged in\r\n")
+            conn.settimeout(3)
+            try:
+                while conn.recv(64):
+                    pass
+            except Exception:
+                pass
+        finally:
+            conn.close()
+            server.close()
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    if not ready.wait(3):
+        raise AssertionError("banner server did not start")
+    ftp = _TraceFTP()
+    ftp.secret = "hunter2-secret"
+    started = time.monotonic()
+    try:
+        ftp.connect("127.0.0.1", box["port"], timeout=2)
+        reply = ftp.login("ops", "hunter2-secret")
+    finally:
+        ftp.close()
+        thread.join(3)
+    elapsed = time.monotonic() - started
+    trace = " ".join(ftp.events)
+    if "hunter" in trace:
+        raise AssertionError("secret leaked")
+    if not str(reply).startswith("230"):
+        raise AssertionError("login")
+    if "greeting skipped" not in ftp.events or " user " not in f" {trace} ":
+        raise AssertionError("trace")
+    if elapsed >= 3:
+        raise AssertionError("waited for a banner")
+
+
+def test_file_timeout_after_a_blank_greeting_tries_the_next_name() -> None:
+    calls: list[str] = []
+    body = b"CyberPowerSystems, RMCARD205\nSYSTEM_IP_ADDRESS, 10.1.1.1\n"
+
+    def fake(ip, user, pw, names, timeout=6):
+        calls.append(names[0])
+        if len(calls) == 1:
+            raise RuntimeError(
+                names[0] + " greeting blank user 0.10s 331 pass 0.10s 230 retr 6.00s TimeoutError timed-out"
+            )
+        return body, names[0]
+
+    data, name = _frozen_config_pull(fake)
+    if calls[:2] != ["2026_11_23_1946.txt", "2026_11_23_0910.txt"]:
+        raise AssertionError(repr(calls))
+    if name != "2026_11_23_0910.txt" or b"RMCARD205" not in data:
+        raise AssertionError(repr(name))
 
 
 def test_blank_greeting_timeout_tries_one_name() -> None:
@@ -1134,6 +1229,8 @@ if __name__ == "__main__":
     test_ftp_trace_keeps_the_verb_and_drops_the_secret()
     test_blank_greeting_is_skipped_and_other_text_is_kept()
     test_delayed_greeting_after_a_blank_line_is_accepted()
+    test_blank_line_accepts_a_login()
+    test_file_timeout_after_a_blank_greeting_tries_the_next_name()
     test_blank_greeting_timeout_tries_one_name()
     test_closed_pattern_is_eof_or_reset_only()
     test_empty_ftp_error_names_every_clock()
