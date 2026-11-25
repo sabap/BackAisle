@@ -120,23 +120,40 @@ function ba_queue_default_ups(PDO $db, array $user, array $post): array
     if ($taken) {
         throw new RuntimeException('This address is already in inventory. Open that UPS and choose Apply config profile.');
     }
+    $factoryPick = (string)($post['factory_pick'] ?? '') === '1';
+    $vendor = ba_vendor_key((string)($post['vendor'] ?? ''));
+    if ($factoryPick && $vendor !== '' && $vendor !== 'cyberpower') {
+        throw new RuntimeException('Factory onboarding is available for CyberPower.');
+    }
+    $tid = (int)($post['template_id'] ?? 0);
+    ba_add_template_guard($db, $tid, 'ups', $vendor);
     $rawGroup = $post['group_id'] ?? '';
     $gid = ($rawGroup === '' || $rawGroup === null) ? null : (int)$rawGroup;
-    $sid = (int)($post['snmp_profile_id'] ?? 0) ?: null;
-    $postedHost = $post['hostname'] ?? $ip;
+    $sid = (int)($post['snmp_profile_id'] ?? 0);
+    $postedHost = trim((string)($post['hostname'] ?? ''));
+    if ($postedHost === '') {
+        $postedHost = $ip;
+    }
     $settings = ba_vendor_settings($db);
-    $apply = (int)$settings['apply_config'] === 1;
     $enforce = (int)$settings['enforce_firmware'] === 1;
     $battery = (int)$settings['set_battery_date'] === 1;
-    $configId = $apply ? (int)$settings['config_template_id'] : 0;
     $firmwareId = $enforce ? (int)$settings['firmware_id'] : 0;
+    if ($factoryPick) {
+        $apply = true;
+        $configId = (int)($post['config_id'] ?? 0);
+    } else {
+        $apply = (int)$settings['apply_config'] === 1;
+        $configId = $apply ? (int)$settings['config_template_id'] : 0;
+    }
     if ($apply) {
         $chk = $db->prepare('SELECT id FROM config_templates WHERE id=?');
         $chk->execute([$configId]);
         $haveConfig = (bool)$chk->fetch();
         $chk->closeCursor();
         if ($configId < 1 || !$haveConfig) {
-            throw new RuntimeException('Choose a config profile on Power, Vendors before adding a default UPS');
+            throw new RuntimeException($factoryPick
+                ? 'Choose a config profile.'
+                : 'Choose a config profile on Power, Vendors before adding a default UPS');
         }
     }
     if ($enforce) {
@@ -150,11 +167,38 @@ function ba_queue_default_ups(PDO $db, array $user, array $post): array
     }
     $wid = ba_webcred_posted($db, $post['web_credential_id'] ?? '');
     ba_vendor_onboarding_login($db, $wid);
-    $db->prepare('INSERT INTO devices (ip, hostname, site, group_id, snmp_profile_id, sensor_expected, is_simulated, enabled, va_rating) VALUES (?,?,?,?,?,1,0,1,2000)')
-        ->execute([$ip, trim((string)$postedHost), 'Hospital', $gid, $sid]);
+    $site = trim((string)($post['site'] ?? ''));
+    if ($site === '') {
+        $site = 'Hospital';
+    }
+    if (array_key_exists('sensor_expected', $post)) {
+        $sensor = ((string)$post['sensor_expected'] === '1') ? 1 : 0;
+    } else {
+        $sensor = 1;
+    }
+    $db->prepare('INSERT INTO devices (ip, hostname, site, building, idf_closet, rack, circuit, load_notes, group_id, sensor_expected, is_simulated, enabled, va_rating, kind) VALUES (?,?,?,?,?,?,?,?,?,?,0,1,2000,?)')
+        ->execute([
+            $ip,
+            $postedHost,
+            $site,
+            trim((string)($post['building'] ?? '')),
+            trim((string)($post['idf_closet'] ?? '')),
+            trim((string)($post['rack'] ?? '')),
+            trim((string)($post['circuit'] ?? '')),
+            trim((string)($post['load_notes'] ?? '')),
+            $gid,
+            $sensor,
+            'ups',
+        ]);
     $did = ba_last_id($db);
     if ($did > 0) {
         ba_pp_exec($db, 'UPDATE devices SET department_id=? WHERE id=?', [ba_device_department_choice($user), $did]);
+        if ($tid > 0) {
+            ba_apply_template($db, $did, $tid);
+        }
+        if ($sid > 0) {
+            ba_pp_exec($db, 'UPDATE devices SET snmp_profile_id=? WHERE id=?', [$sid, $did]);
+        }
         if ($wid !== null) {
             ba_pp_exec($db, 'UPDATE devices SET web_credential_id=? WHERE id=?', [$wid, $did]);
         }
@@ -173,9 +217,14 @@ function ba_queue_default_ups(PDO $db, array $user, array $post): array
     $db->prepare("INSERT INTO write_job_targets (job_id,device_id,ip,hostname,status) VALUES (?,?,?,?,'queued')")
         ->execute([$jid, $did, $ip, $postedHost]);
     ba_audit($db, 'add_default_ups', 'device', (string)$did, $ip);
+    if ($factoryPick) {
+        $message = 'Factory UPS ' . $ip . ' queued. BackAisle signs in with the factory account and applies the selected profile. Minimum firmware and the battery date follow Power, Vendors. Job #' . $jid;
+    } else {
+        $message = 'Default UPS ' . $ip . ' queued. Onboarding follows the CyberPower settings on Power, Vendors. Job #' . $jid;
+    }
     return [
         'job_id' => $jid,
-        'message' => 'Default UPS ' . $ip . ' queued. Onboarding follows the CyberPower settings on Power, Vendors. Job #' . $jid,
+        'message' => $message,
     ];
 }
 
@@ -510,6 +559,11 @@ PY);
                 $db->exec('UPDATE config_templates SET is_default=0');
                 $db->prepare('UPDATE config_templates SET is_default=1 WHERE id=?')->execute([(int)$_POST['id']]);
                 $msg = 'Default config profile set';
+            } elseif ($act === 'rename_config') {
+                $cfgId = (int)($_POST['id'] ?? 0);
+                $newName = ba_rename_config_profile($db, $cfgId, (string)($_POST['name'] ?? ''));
+                ba_audit($db, 'rename_config', 'config_template', (string)$cfgId, $newName);
+                $msg = 'Config profile renamed';
             }
         } catch (Throwable $e) {
             $msg = 'Error: '.$e->getMessage();
@@ -832,15 +886,41 @@ JS;
     }
 
     if ($tab === 'configs') {
+        $renameOpen = str_starts_with($msg, 'Error') && (($_POST['act'] ?? '') === 'rename_config');
+        $renameId = $renameOpen ? (int)($_POST['id'] ?? 0) : 0;
+        $renameName = $renameOpen ? (string)($_POST['name'] ?? '') : '';
         ba_card_open('Config profiles');
-        echo '<p class="muted">Pulled RMCARD YYYY_MM_DD_HHMM.txt files. Create one from a UPS device page, or check UPS rows on Inventory and choose Create config profile. Apply one to a UPS that is already in inventory from that device page, or from the same Inventory checkboxes. Add a factory-default UPS from Inventory when the address is not already there.</p><table><thead><tr><th>Name</th><th>Source</th><th>When</th><th></th></tr></thead><tbody>';
+        echo '<p class="muted">Pulled RMCARD YYYY_MM_DD_HHMM.txt files. Create one from a UPS device page, or check UPS rows on Inventory and choose Create config profile. Rename a profile here. The saved file stays where it is. Apply one to a UPS that is already in inventory from that device page, or from the same Inventory checkboxes. Add a factory-default UPS from Inventory when the address is not already there.</p><table><thead><tr><th>Name</th><th>Source</th><th>When</th><th></th></tr></thead><tbody>';
         foreach ($db->query('SELECT * FROM config_templates ORDER BY id DESC') as $t) {
-            echo '<tr><td>'.h($t['name']).($t['is_default']?' <span class="muted">default</span>':'').'</td><td>'.h($t['source_ip']).'</td><td>'.h($t['pulled_at']).'</td><td>';
+            echo '<tr><td>'.h($t['name']).($t['is_default']?' <span class="muted">default</span>':'').'</td><td>'.h($t['source_ip']).'</td><td>'.h($t['pulled_at']).'</td><td class="cfg-actions">';
             echo '<a href="'.h(ba_href('/writes/template?id='.(int)$t['id'])).'">preview</a> ';
-            echo '<form method="post" style="display:inline"><input type="hidden" name="act" value="mark_default_cfg"><input type="hidden" name="id" value="'.(int)$t['id'].'"><button>set default</button></form></td></tr>';
+            echo '<button type="button" class="btn" data-open-modal="modal-rename-config" data-config-id="'.(int)$t['id'].'" data-config-name="'.h((string)$t['name']).'">Rename</button> ';
+            echo '<form method="post" action="'.h(ba_href('/org?tab=configs')).'"><input type="hidden" name="act" value="mark_default_cfg"><input type="hidden" name="tab" value="configs"><input type="hidden" name="id" value="'.(int)$t['id'].'"><button>set default</button></form></td></tr>';
         }
         echo '</tbody></table>';
         ba_card_close();
+        ba_users_modal_open('modal-rename-config', 'Rename config profile', $renameOpen);
+        echo '<form method="post" action="'.h(ba_href('/org?tab=configs')).'" class="stack">';
+        echo '<input type="hidden" name="act" value="rename_config"><input type="hidden" name="tab" value="configs">';
+        echo '<input type="hidden" name="id" id="rename-config-id" value="'.$renameId.'">';
+        echo '<label for="rename-config-name">Profile name</label>';
+        echo '<input id="rename-config-name" name="name" maxlength="128" required value="'.h($renameName).'">';
+        echo '<p class="muted">This changes the name on Organization. The saved file stays where it is. The name has to be different from every other profile.</p>';
+        echo '<button>Save name</button></form>';
+        ba_users_modal_close();
+        echo <<<'JS'
+<script>
+document.addEventListener('click', function (ev) {
+  var btn = ev.target.closest ? ev.target.closest('[data-config-id]') : null;
+  if (!btn) return;
+  var id = document.getElementById('rename-config-id');
+  var name = document.getElementById('rename-config-name');
+  if (!id || !name) return;
+  id.value = btn.getAttribute('data-config-id') || '';
+  name.value = btn.getAttribute('data-config-name') || '';
+});
+</script>
+JS;
     }
 
     if ($tab === 'import') {

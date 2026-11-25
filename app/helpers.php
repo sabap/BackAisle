@@ -433,6 +433,12 @@ function ba_kind_allowed(string $kind, string $fallback = 'ups'): string {
     return $kind;
 }
 
+/** Compare vendor names without spaces or punctuation. CyberPower and Cyber Power match. */
+function ba_vendor_key(string $label): string {
+    $key = strtolower((string)preg_replace('/[^a-z0-9]+/i', '', $label));
+    return $key;
+}
+
 function ba_ensure_snmp_schema(PDO $db): void {
     static $done = false;
     if ($done) {

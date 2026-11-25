@@ -18,6 +18,8 @@ OIDS = {
     "model": (1, 3, 6, 1, 4, 1, 3808, 1, 1, 1, 1, 1, 1, 0),
     "name": (1, 3, 6, 1, 4, 1, 3808, 1, 1, 1, 1, 1, 2, 0),
     "firmware": (1, 3, 6, 1, 4, 1, 3808, 1, 1, 1, 1, 2, 1, 0),
+    # Card firmware. Kept out of IDENTITY_KEYS so a missing object cannot blank the UPS identity.
+    "agentFirmware": (1, 3, 6, 1, 4, 1, 3808, 1, 1, 1, 1, 2, 4, 0),
     "serial": (1, 3, 6, 1, 4, 1, 3808, 1, 1, 1, 1, 2, 3, 0),
     "batteryStatus": (1, 3, 6, 1, 4, 1, 3808, 1, 1, 1, 2, 1, 1, 0),
     "timeOnBattery": (1, 3, 6, 1, 4, 1, 3808, 1, 1, 1, 2, 1, 2, 0),
@@ -85,6 +87,17 @@ def _str(val) -> str | None:
             parts = [hx[i:i + 2] for i in range(0, 12, 2)]
             return ":".join(parts)
     return pretty
+
+
+def _agent_fw(val) -> str | None:
+    """RMCARD agent firmware. Empty or missing leaves any stored value alone."""
+    text = _str(val)
+    if not text:
+        return None
+    text = text.replace("\x00", "").strip()
+    if not text or text.lower() in ("nosuchobject", "nosuchinstance", "endofmibview"):
+        return None
+    return text[:64]
 
 
 def _cps_date(val) -> str | None:
@@ -206,6 +219,7 @@ def decode(raw: dict[str, Any]) -> dict[str, Any]:
         "time_on_battery_ticks": _int(raw.get("timeOnBattery")),
         "battery_last_replace": last_replace,
         "battery_replace_by": replace_by,
+        "agent_firmware": _agent_fw(raw.get("agentFirmware")),
     }
 
 
@@ -391,10 +405,11 @@ async def snmp_get(
                 )
             except Exception:
                 pass
-            # One OID at a time. A card that has no date must not fail the poll,
-            # and a noSuchName must not wipe the status values already read.
+            # One OID at a time. A card that has no date or no card firmware
+            # must not fail the poll, and a noSuchName must not wipe the status
+            # values already read. A miss leaves the stored card firmware alone.
             date_target = await UdpTransportTarget.create((host, 161), timeout=2.0, retries=0)
-            for name in ("batteryLastReplace", "batteryAgeMonths"):
+            for name in ("batteryLastReplace", "batteryAgeMonths", "agentFirmware"):
                 await _snmp_one(engine, creds, date_target, ctx, name, raw)
         return decode(raw)
     finally:
@@ -457,7 +472,7 @@ SET_OIDS = {
     "envirTempLow": (1, 3, 6, 1, 4, 1, 3808, 1, 1, 4, 2, 3, 0),
     "envirHumidHigh": (1, 3, 6, 1, 4, 1, 3808, 1, 1, 4, 3, 2, 0),
     "envirHumidLow": (1, 3, 6, 1, 4, 1, 3808, 1, 1, 4, 3, 3, 0),
-    "agentFirmware": (1, 3, 6, 1, 4, 1, 3808, 1, 1, 1, 1, 2, 4, 0),
+    "agentFirmware": OIDS["agentFirmware"],
     # RMCARD battery replacement date, DisplayString mm/dd/yyyy.
     "batteryLastReplace": (1, 3, 6, 1, 4, 1, 3808, 1, 1, 1, 2, 1, 3, 0),
 }

@@ -112,6 +112,23 @@ function ba_templates(PDO $db, bool $activeOnly = true): array {
     return $out;
 }
 
+function ba_add_template_guard(PDO $db, int $templateId, string $kind, string $vendorKey): void
+{
+    if ($templateId < 1) {
+        return;
+    }
+    $tpl = ba_template($db, $templateId);
+    if (!$tpl || !(int)($tpl['is_active'] ?? 0)) {
+        throw new RuntimeException('Template not found');
+    }
+    if ((string)($tpl['kind'] ?? '') !== $kind) {
+        throw new RuntimeException('That template is for a different kind of device.');
+    }
+    if ($kind === 'ups' && $vendorKey !== '' && ba_vendor_key((string)($tpl['manufacturer'] ?? '')) !== $vendorKey) {
+        throw new RuntimeException('That template is for a different vendor.');
+    }
+}
+
 function ba_template_options(PDO $db, ?int $selected = null, ?string $kind = null): string {
     $html = '<option value="">(no template)</option>';
     foreach (ba_templates($db) as $t) {

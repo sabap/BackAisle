@@ -518,6 +518,10 @@ def store_sample(con, device_id, sample, va_rating=2000):
     if sample.get("battery_replace_by"):
         fields.append("warranty_replace_by=?")
         args.append(sample["battery_replace_by"])
+    # A missed card-firmware GET must not clear a version already stored.
+    if sample.get("agent_firmware"):
+        fields.append("agent_firmware=?")
+        args.append(sample["agent_firmware"])
     if fields:
         args.append(device_id)
         con.execute(f"UPDATE devices SET {', '.join(fields)}, updated_at=? WHERE id=?", [*args[:-1], now(), device_id])

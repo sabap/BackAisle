@@ -326,8 +326,9 @@ function page_fleet(PDO $db): void {
       </select>
       <button class="btn">Filter</button>
     </form>
+    <p class="muted">RMCARD is the management card firmware read over SNMP. A dash means that reading is not stored yet.</p>
     <table>
-      <thead><tr><th>State</th><th>Group</th><th>Host</th><th>IP</th><th>UPS</th><th>Cap</th><th>Runtime</th><th>Load</th><th>Power</th><th>Temp</th><th>RH</th><th>Sensor</th><th>Last poll</th></tr></thead>
+      <thead><tr><th>State</th><th>Group</th><th>Host</th><th>IP</th><th>RMCARD</th><th>UPS</th><th>Cap</th><th>Runtime</th><th>Load</th><th>Power</th><th>Temp</th><th>RH</th><th>Sensor</th><th>Last poll</th></tr></thead>
       <tbody>
       <?php foreach ($rows as $r): $cls = ba_worst($r); ?>
         <tr class="<?= $cls ?>">
@@ -335,6 +336,10 @@ function page_fleet(PDO $db): void {
           <td><a href="/device.php?id=<?= (int)$r['id'] ?>"><?= h($r['group_name'] ?: ($r['building'] . ' / ' . $r['idf_closet'])) ?></a></td>
           <td><?= h($r['hostname']) ?></td>
           <td><?= h($r['ip']) ?></td>
+          <td><?php
+            $cardFw = trim((string)ba_col($r, 'agent_firmware', ''));
+            echo $cardFw === '' ? '<span class="muted">—</span>' : h($cardFw);
+          ?></td>
           <td><?= h(ba_output_text(isset($r['output_status']) ? (int)$r['output_status'] : null)) ?></td>
           <td><?= ba_fmt($r['capacity_pct'] ?? null, '%', 0) ?></td>
           <td><?= ba_fmt($r['runtime_min'] ?? null, 'min', 0) ?></td>
@@ -961,6 +966,254 @@ function page_api_search(PDO $db): void
     echo json_encode(ba_search_lookup($db, $q), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 }
 
+function ba_add_device_modal(PDO $db, array $user, bool $canEdit, bool $canFactory): void
+{
+    if (!$canEdit && !$canFactory) {
+        return;
+    }
+    $factoryOnly = $canFactory && !$canEdit;
+    $kinds = $canEdit
+        ? ['ups' => 'UPS', 'switch' => 'Switch', 'router' => 'Router', 'patch_panel' => 'Patch panel', 'other' => 'Other']
+        : ['ups' => 'UPS'];
+    $vendors = $factoryOnly
+        ? [['key' => 'cyberpower', 'label' => 'CyberPower']]
+        : ba_ups_vendor_choices($db);
+    $profileSt = $db->query('SELECT id, name FROM config_templates ORDER BY name');
+    $profiles = $profileSt ? $profileSt->fetchAll() : [];
+    if ($profileSt) {
+        $profileSt->closeCursor();
+    }
+    ba_users_modal_open('modal-add-device', 'Add device', false, '', true, 'add-device-modal');
+    echo '<form method="post" class="stack" action="' . h(ba_href('/devices')) . '" data-can-factory="' . ($canFactory ? '1' : '0') . '" data-factory-only="' . ($factoryOnly ? '1' : '0') . '">';
+    echo '<input type="hidden" name="act" value="add">';
+    echo '<input type="hidden" name="factory_pick" value="0">';
+    echo '<input type="hidden" name="kind" value="">';
+    echo '<input type="hidden" name="vendor" value="">';
+    echo '<div data-add-step="kind">';
+    echo '<p class="muted">Choose what you are adding.</p>';
+    echo '<div class="kind-picks" role="group" aria-label="Device kind">';
+    foreach ($kinds as $key => $label) {
+        echo '<button type="button" class="btn" data-add-kind="' . h($key) . '">' . h($label) . '</button>';
+    }
+    echo '</div></div>';
+    echo '<fieldset data-add-step="vendor" hidden disabled>';
+    echo '<button type="button" class="btn" data-add-back="kind">Back</button>';
+    echo '<p class="muted">Choose the UPS vendor. The template list shows models from that vendor.</p>';
+    echo '<div class="kind-picks" role="group" aria-label="UPS vendor">';
+    foreach ($vendors as $vendor) {
+        echo '<button type="button" class="btn" data-add-vendor="' . h((string)$vendor['key']) . '">' . h((string)$vendor['label']) . '</button>';
+    }
+    echo '</div></fieldset>';
+    echo '<fieldset data-add-step="fields" hidden disabled>';
+    echo '<button type="button" class="btn" data-add-back="fields">Back</button>';
+    echo '<p class="add-device-crumb" data-add-crumb></p>';
+    if ($canFactory) {
+        echo '<div data-add-factory hidden>';
+        echo '<label class="switch"><input type="checkbox" id="add-factory" value="1"' . ($factoryOnly ? ' checked disabled' : '') . '>';
+        echo '<span class="switch-ui"></span><span class="switch-label">Factory defaulted</span></label>';
+        echo '<p class="muted">Turn this on for a card that is still on the factory account. BackAisle signs in with that factory account, then writes the Web/SSH/FTP login you choose.</p>';
+        echo '<div data-add-config hidden>';
+        echo '<label for="add-config-id">Config profile</label><select id="add-config-id" name="config_id" disabled>';
+        echo '<option value="">Choose a profile</option>';
+        foreach ($profiles as $profile) {
+            echo '<option value="' . (int)$profile['id'] . '">' . h((string)$profile['name']) . '</option>';
+        }
+        echo '</select>';
+        if (!$profiles) {
+            echo '<p class="muted">No config profile is stored yet. Create one before adding a factory-default UPS.</p>';
+        }
+        echo '<p class="muted">BackAisle writes this profile after the factory sign-in. The card keeps its own address and name. Minimum firmware and the battery date still follow Power, Vendors.</p>';
+        echo '</div></div>';
+    }
+    echo '<label for="add-template-id">Template</label><select id="add-template-id" name="template_id">' . ba_template_options($db) . '</select>';
+    echo '<p class="muted" data-add-no-template hidden>No template is stored for this vendor yet. You can enter this unit by hand.</p>';
+    echo '<p class="muted">Pick a template when this hardware is already in the catalog. It fills the model, the height, the outlets, the credentials, and the model profile. A credential choice here overrides the template.</p>';
+    if (ba_editor($user, 'edit_snmp')) {
+        echo '<label for="add-snmp-id">SNMPv3 credentials</label><select id="add-snmp-id" name="snmp_profile_id"><option value="">(from the template, or the site default)</option>';
+        $snmpSt = $db->query('SELECT id, name FROM snmp_profiles ORDER BY name');
+        $snmpRows = $snmpSt ? $snmpSt->fetchAll() : [];
+        if ($snmpSt) {
+            $snmpSt->closeCursor();
+        }
+        foreach ($snmpRows as $sp) {
+            echo '<option value="' . (int)$sp['id'] . '">' . h((string)$sp['name']) . '</option>';
+        }
+        echo '</select>';
+    }
+    echo '<label for="add-web-id" data-add-cred-label>Web/SSH/FTP login</label>';
+    echo '<select id="add-web-id" name="web_credential_id"><option value="">(site default)</option>' . ba_webcred_options($db, null) . '</select>';
+    echo '<p class="muted" data-add-cred-off>The username and password BackAisle uses for SSH, the web card, and FTP. SNMPv3 credentials stay separate. Site default uses UPS_WEB_USER when that is set.</p>';
+    echo '<p class="muted" data-add-cred-on hidden>This login is written onto the card. The first connection uses the factory account. Choose a login that is not the factory account. Site default uses UPS_WEB_USER when that is set.</p>';
+    echo '<label for="add-ip">IP</label><input id="add-ip" name="ip" placeholder="IP" required>';
+    echo '<label for="add-host">Hostname</label><input id="add-host" name="hostname" placeholder="hostname">';
+    echo '<label for="add-site">Site</label><input id="add-site" name="site" value="Hospital" placeholder="site">';
+    echo '<label for="add-building">Building</label><input id="add-building" name="building" placeholder="building">';
+    echo '<label for="add-closet">IDF / closet</label><input id="add-closet" name="idf_closet" placeholder="IDF/closet">';
+    echo '<label for="add-rack">Rack label</label><input id="add-rack" name="rack" placeholder="rack label">';
+    echo '<label for="add-circuit">Circuit</label><input id="add-circuit" name="circuit" placeholder="circuit">';
+    ba_department_field($db, $user, null);
+    echo '<input type="hidden" name="sensor_expected" value="0">';
+    echo '<label class="muted"><input type="checkbox" name="sensor_expected" value="1" checked data-add-sensor> sensor expected</label>';
+    echo '<button data-add-submit>Add device</button>';
+    echo '<p class="muted">Leave the template empty to enter this unit by hand. You can save it as a template afterward. Model, serial, and firmware fill in on the next poll.</p>';
+    echo '</fieldset></form>';
+    echo <<<'JS'
+<script>
+(function () {
+  var modal = document.getElementById('modal-add-device');
+  if (!modal) return;
+  var form = modal.querySelector('form');
+  var kindStep = modal.querySelector('[data-add-step="kind"]');
+  var vendorStep = modal.querySelector('[data-add-step="vendor"]');
+  var fieldStep = modal.querySelector('[data-add-step="fields"]');
+  var kindInput = form.querySelector('[name="kind"]');
+  var vendorInput = form.querySelector('[name="vendor"]');
+  var actInput = form.querySelector('[name="act"]');
+  var factoryPick = form.querySelector('[name="factory_pick"]');
+  var factoryBox = form.querySelector('#add-factory');
+  var factoryWrap = form.querySelector('[data-add-factory]');
+  var configWrap = form.querySelector('[data-add-config]');
+  var configSelect = form.querySelector('#add-config-id');
+  var templateSelect = form.querySelector('#add-template-id');
+  var credOff = form.querySelector('[data-add-cred-off]');
+  var credOn = form.querySelector('[data-add-cred-on]');
+  var credLabel = form.querySelector('[data-add-cred-label]');
+  var crumb = form.querySelector('[data-add-crumb]');
+  var submit = form.querySelector('[data-add-submit]');
+  var sensor = form.querySelector('[data-add-sensor]');
+  var emptyNote = form.querySelector('[data-add-no-template]');
+  var canFactory = form.getAttribute('data-can-factory') === '1';
+  var factoryOnly = form.getAttribute('data-factory-only') === '1';
+
+  function vendorKey(text) {
+    return String(text || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+  }
+  function show(step) {
+    [kindStep, vendorStep, fieldStep].forEach(function (el) {
+      if (!el) return;
+      var on = el.getAttribute('data-add-step') === step;
+      el.hidden = !on;
+      if (el.tagName === 'FIELDSET') el.disabled = !on;
+    });
+  }
+  var templateMaster = templateSelect ? Array.prototype.map.call(templateSelect.options, function (opt) {
+    return opt.cloneNode(true);
+  }) : [];
+  function filterTemplates() {
+    if (!templateSelect) return;
+    var kind = kindInput.value;
+    var vendor = vendorInput.value;
+    var current = templateSelect.value;
+    var visible = 0;
+    templateSelect.innerHTML = '';
+    templateMaster.forEach(function (src) {
+      var opt = src.cloneNode(true);
+      if (opt.value) {
+        var okKind = !kind || opt.getAttribute('data-kind') === kind;
+        var okVendor = !(kind === 'ups' && vendor) || vendorKey(opt.getAttribute('data-mfr') || '') === vendor;
+        if (!okKind || !okVendor) return;
+        visible++;
+      }
+      templateSelect.appendChild(opt);
+    });
+    templateSelect.value = current;
+    if (templateSelect.value !== current) templateSelect.value = '';
+    if (emptyNote) emptyNote.hidden = !(kind === 'ups' && vendor && visible === 0);
+  }
+  function paintFactory() {
+    var cyber = kindInput.value === 'ups' && vendorInput.value === 'cyberpower' && canFactory;
+    var on = cyber && factoryBox && factoryBox.checked;
+    if (factoryOnly && factoryBox) factoryBox.checked = true;
+    if (factoryOnly) on = cyber;
+    if (factoryWrap) factoryWrap.hidden = !cyber;
+    if (configWrap) configWrap.hidden = !on;
+    if (configSelect) {
+      configSelect.disabled = !on;
+      configSelect.required = !!on;
+    }
+    if (factoryPick) factoryPick.value = on ? '1' : '0';
+    if (actInput) actInput.value = on ? 'add_default' : 'add';
+    if (credOff) credOff.hidden = !!on;
+    if (credOn) credOn.hidden = !on;
+    if (credLabel) credLabel.textContent = on ? 'Web/SSH/FTP login to apply' : 'Web/SSH/FTP login';
+    if (submit) submit.textContent = on ? 'Add factory UPS' : 'Add device';
+    if (sensor) {
+      var router = kindInput.value === 'router';
+      if (router) sensor.checked = false;
+      sensor.disabled = router;
+    }
+  }
+  function resetWizard() {
+    form.reset();
+    kindInput.value = '';
+    vendorInput.value = '';
+    if (factoryBox) factoryBox.checked = factoryOnly;
+    if (crumb) crumb.textContent = '';
+    filterTemplates();
+    paintFactory();
+    show('kind');
+  }
+  form.querySelectorAll('[data-add-kind]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      kindInput.value = btn.getAttribute('data-add-kind') || '';
+      vendorInput.value = '';
+      if (factoryBox && !factoryOnly) factoryBox.checked = false;
+      if (kindInput.value === 'ups') {
+        show('vendor');
+        var first = vendorStep.querySelector('button[data-add-vendor]');
+        if (first) first.focus();
+        return;
+      }
+      if (crumb) crumb.textContent = btn.textContent || '';
+      filterTemplates();
+      paintFactory();
+      show('fields');
+      var ip = form.querySelector('#add-ip');
+      if (ip) ip.focus();
+    });
+  });
+  form.querySelectorAll('[data-add-vendor]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      vendorInput.value = btn.getAttribute('data-add-vendor') || '';
+      if (crumb) crumb.textContent = 'UPS · ' + (btn.textContent || '');
+      if (factoryBox && !factoryOnly) factoryBox.checked = false;
+      filterTemplates();
+      paintFactory();
+      show('fields');
+      var ip = form.querySelector('#add-ip');
+      if (ip) ip.focus();
+    });
+  });
+  form.querySelectorAll('[data-add-back]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      if (btn.getAttribute('data-add-back') === 'kind' || kindInput.value !== 'ups') {
+        kindInput.value = '';
+        vendorInput.value = '';
+        show('kind');
+        var first = kindStep.querySelector('button');
+        if (first) first.focus();
+        return;
+      }
+      vendorInput.value = '';
+      show('vendor');
+    });
+  });
+  if (factoryBox) factoryBox.addEventListener('change', paintFactory);
+  document.addEventListener('click', function (ev) {
+    var opener = ev.target.closest ? ev.target.closest('[data-open-modal="modal-add-device"]') : null;
+    if (!opener) return;
+    resetWizard();
+    setTimeout(function () {
+      var live = kindStep.querySelector('button');
+      if (live) live.focus();
+    }, 0);
+  });
+})();
+</script>
+JS;
+    ba_users_modal_close();
+}
+
 function page_devices(PDO $db, array $user): void {
     $canEditDevices = ba_can_edit_device($user, null);
     $canAssign = ba_can($user, 'edit_devices_all');
@@ -1126,7 +1379,13 @@ function page_devices(PDO $db, array $user): void {
             $ip = trim($_POST['ip'] ?? '');
             if (filter_var($ip, FILTER_VALIDATE_IP)) {
                 $kind = ba_kind_allowed((string)($_POST['kind'] ?? 'ups'), 'ups');
-                $sensor = ($kind === 'router') ? 0 : (isset($_POST['sensor_expected']) ? 1 : 0);
+                try {
+                    ba_add_template_guard($db, (int)($_POST['template_id'] ?? 0), $kind, ba_vendor_key((string)($_POST['vendor'] ?? '')));
+                } catch (Throwable $e) {
+                    header('Location: ' . ba_href('/devices?bad=1&msg=' . rawurlencode($e->getMessage())));
+                    exit;
+                }
+                $sensor = ($kind === 'router') ? 0 : (((string)($_POST['sensor_expected'] ?? '0') === '1') ? 1 : 0);
                 $db->prepare("INSERT INTO devices (ip, hostname, site, building, idf_closet, rack, circuit, load_notes, sensor_expected, is_simulated, enabled, kind) VALUES (?,?,?,?,?,?,?,?,?,0,1,?)")
                     ->execute([
                         $ip, trim($_POST['hostname'] ?? ''), trim($_POST['site'] ?? 'Hospital'),
@@ -1284,11 +1543,8 @@ function page_devices(PDO $db, array $user): void {
     if ($canApply) {
         $head .= '<button type="button" class="btn" data-open-modal="modal-apply-config">Apply config profile</button>';
     }
-    if ($canEditDevices) {
+    if ($canEditDevices || $canDefaultUps) {
         $head .= '<button type="button" class="btn" data-open-modal="modal-add-device">Add device</button>';
-    }
-    if ($canDefaultUps) {
-        $head .= '<button type="button" class="btn" data-open-modal="modal-add-default">Add default UPS</button>';
     }
     ba_card_open('Devices', $head, 'inventory');
     echo '<table><thead><tr>';
@@ -1425,7 +1681,8 @@ JS;
         echo '<form method="post" class="stack" data-copy-devices="1" action="'.h(ba_href('/devices')).'">';
         echo '<input type="hidden" name="act" value="pull_config">';
         echo '<p class="muted" data-need-devices hidden>Select at least one UPS in the list.</p>';
-        echo '<p class="muted">Reads the saved configuration from each checked UPS and stores a config profile. The file stays outside the website. Each profile is named from the hostname. A switch, router, or patch panel is not a UPS card.</p>';
+        echo '<label for="pull-profile-name">Profile name</label><input id="pull-profile-name" name="template_name" maxlength="128" autocomplete="off">';
+        echo '<p class="muted">Reads the saved configuration from each checked UPS and stores a config profile. The file stays outside the website. When one UPS is checked, the profile uses the name above. Leave that name blank to use the hostname. When several UPS units are checked, each profile uses that UPS hostname. A switch, router, or patch panel is not a UPS card.</p>';
         echo '<button>Create config profile</button></form>';
         ba_users_modal_close();
     }
@@ -1435,53 +1692,8 @@ JS;
     if ($canCard) {
         ba_card_settings_modal(true);
     }
-    if ($canEditDevices) {
-        ba_users_modal_open('modal-add-device', 'Add device', false);
-        echo '<form method="post" class="stack">';
-        echo '<input type="hidden" name="act" value="add">';
-        echo '<label>Template</label><select name="template_id">'.ba_template_options($db).'</select>';
-        echo '<p class="muted">Pick a template when this hardware is already in the catalog. It fills the kind, the model, the height, the outlets, the credentials, and the model profile. A credential choice here overrides the template.</p>';
-        if (ba_editor($user, 'edit_snmp')) {
-            echo '<label>SNMPv3 credentials</label><select name="snmp_profile_id"><option value="">(from the template, or the site default)</option>';
-            foreach ($db->query('SELECT id, name FROM snmp_profiles ORDER BY name') as $sp) {
-                echo '<option value="'.(int)$sp['id'].'">'.h($sp['name']).'</option>';
-            }
-            echo '</select>';
-        }
-        echo '<label>Web/SSH/FTP login</label><select name="web_credential_id"><option value="">(site default)</option>'.ba_webcred_options($db, null).'</select>';
-        echo '<p class="muted">The username and password BackAisle uses for SSH, the web card, and FTP. SNMPv3 credentials stay separate. Site default uses UPS_WEB_USER when that is set.</p>';
-        echo '<label>IP</label><input name="ip" placeholder="IP" required>';
-        echo '<label>Hostname</label><input name="hostname" placeholder="hostname">';
-        echo '<label>Site</label><input name="site" value="Hospital" placeholder="site">';
-        echo '<label>Building</label><input name="building" placeholder="building">';
-        echo '<label>IDF / closet</label><input name="idf_closet" placeholder="IDF/closet">';
-        echo '<label>Rack label</label><input name="rack" placeholder="rack label">';
-        echo '<label>Kind</label><select name="kind">'.ba_kind_options('ups').'</select>';
-        echo '<label>Circuit</label><input name="circuit" placeholder="circuit">';
-        ba_department_field($db, $user, null);
-        echo '<label class="muted"><input type="checkbox" name="sensor_expected" checked> sensor expected</label>';
-        echo '<button>Add device</button></form>';
-        echo '<p class="muted">Leave the template empty to enter this unit by hand. You can save it as a template afterward. Model, serial, and firmware fill in on the next poll.</p>';
-        ba_users_modal_close();
-    }
-    if ($canDefaultUps) {
-        $groups = ba_groups($db);
-        ba_users_modal_open('modal-add-default', 'Add default UPS', false, '', true);
-        echo '<p class="muted">Adds a new CyberPower UPS and starts onboarding. Assign a Web/SSH/FTP login that is not the factory account. BackAisle signs in with the factory account and sets that saved login when the card asks, or at the command prompt when it does not. Default config, minimum firmware, and the battery replacement date come from Power, Vendors. A card that is already in inventory uses Apply config profile instead.</p>';
-        echo '<form method="post" class="stack" action="'.h(ba_href('/devices')).'">';
-        echo '<label>IP</label><input name="ip" placeholder="IP" required>';
-        echo '<label>Hostname</label><input name="hostname" placeholder="hostname">';
-        echo '<label>Group</label><select name="group_id"><option value="">group</option>'.ba_group_options($groups).'</select>';
-        echo '<label>Web/SSH/FTP login</label><select name="web_credential_id"><option value="">(site default)</option>'.ba_webcred_options($db, null).'</select>';
-        echo '<p class="muted">Site default uses UPS_WEB_USER when that is set. The saved login must not be the factory account.</p>';
-        echo '<label>SNMPv3 credentials</label><select name="snmp_profile_id"><option value="">SNMPv3 after apply</option>';
-        foreach (ba_snmp_card_profiles($db) as $p) {
-            echo '<option value="'.(int)$p['id'].'">'.h($p['name']).'</option>';
-        }
-        echo '</select>';
-        ba_department_field($db, $user, null);
-        echo '<input type="hidden" name="act" value="add_default"><button>Add default UPS</button></form>';
-        ba_users_modal_close();
+    if ($canEditDevices || $canDefaultUps) {
+        ba_add_device_modal($db, $user, $canEditDevices, $canDefaultUps);
     }
     ba_layout_end();
 }
@@ -1543,7 +1755,13 @@ function ba_render_device_stage(array $r, array $faces, string $deptName): void
     $add('Model', ba_col($r, 'model', ''), true);
     $add('Serial', ba_col($r, 'serial', ''), true);
     $add('MAC', ba_col($r, 'mac', ''), true);
-    $add('Firmware', ba_col($r, 'firmware', ''), true);
+    $kindFacts = strtolower(trim((string)ba_col($r, 'kind', 'ups')));
+    if ($kindFacts === '' || $kindFacts === 'ups') {
+        $add('UPS firmware', ba_col($r, 'firmware', ''), true);
+        $add('RMCARD', ba_col($r, 'agent_firmware', ''), true);
+    } else {
+        $add('Firmware', ba_col($r, 'firmware', ''), true);
+    }
     $add('SNMP name', ba_col($r, 'snmp_name', ''), true);
     $comm = trim((string)ba_col($r, 'comm_state', ''));
     $add('Comm', $comm !== '' ? $comm : 'unknown', true);
@@ -2175,8 +2393,8 @@ function page_device(PDO $db, array $user): void {
         ba_users_modal_open('modal-pull-config', 'Create config profile', false);
         echo '<form method="post" class="stack" action="'.h(ba_href('/device?id='.$id)).'">';
         echo '<input type="hidden" name="act" value="pull_config">';
-        echo '<label>Name</label><input name="template_name" maxlength="128" value="'.h($profileName).'" required>';
-        echo '<p class="muted">Reads the saved configuration from this card and stores a config profile. The file stays outside the website. The profile appears on Organization, Config profiles when the job succeeds.</p>';
+        echo '<label for="device-profile-name">Profile name</label><input id="device-profile-name" name="template_name" maxlength="128" value="'.h($profileName).'" required>';
+        echo '<p class="muted">Reads the saved configuration from this card and stores a config profile. The file stays outside the website. The name has to be different from every other profile. The profile appears on Organization, Config profiles when the job succeeds.</p>';
         echo '<button>Create config profile</button></form>';
         ba_users_modal_close();
     }

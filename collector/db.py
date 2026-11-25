@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS devices (
   model TEXT,
   serial TEXT,
   firmware TEXT,
+  agent_firmware TEXT,
   snmp_name TEXT,
   site TEXT,
   building TEXT,
@@ -673,6 +674,7 @@ def init_db(con=None):
             "IF COL_LENGTH('samples_hourly','power_avg') IS NULL ALTER TABLE samples_hourly ADD power_avg FLOAT NULL",
             "IF OBJECT_ID('dbo.web_credentials','U') IS NULL CREATE TABLE web_credentials (id INT IDENTITY(1,1) PRIMARY KEY, name NVARCHAR(128) NOT NULL, username NVARCHAR(128) NOT NULL, notes NVARCHAR(MAX) NULL)",
             "IF COL_LENGTH('devices','web_credential_id') IS NULL ALTER TABLE devices ADD web_credential_id INT NULL",
+            "IF COL_LENGTH('devices','agent_firmware') IS NULL ALTER TABLE devices ADD agent_firmware NVARCHAR(64) NULL",
             "IF COL_LENGTH('events','source') IS NULL ALTER TABLE events ADD source NVARCHAR(16) NULL",
             "IF COL_LENGTH('snmp_profiles','cred_style') IS NULL ALTER TABLE snmp_profiles ADD cred_style NVARCHAR(16) NOT NULL CONSTRAINT DF_snmp_profiles_cred_style DEFAULT 'authpriv'",
             "IF COL_LENGTH('firmware_images','notes_path') IS NULL ALTER TABLE firmware_images ADD notes_path NVARCHAR(512) NULL",
@@ -702,6 +704,7 @@ def init_db(con=None):
     _add_col(con, "devices", "port_count", "INTEGER")
     _add_col(con, "devices", "manufacturer", "TEXT")
     _add_col(con, "devices", "template_id", "INTEGER")
+    _add_col(con, "devices", "agent_firmware", "TEXT")
     _add_col(con, "samples", "power_w", "REAL")
     _add_col(con, "samples_hourly", "power_avg", "REAL")
     _add_col(con, "events", "source", "TEXT")

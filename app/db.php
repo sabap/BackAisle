@@ -134,6 +134,9 @@ function ba_db(bool $reconnect = false): PDO {
         if (function_exists('ba_ensure_floor_schema')) {
             ba_ensure_floor_schema($pdo);
         }
+        if (function_exists('ba_ensure_column')) {
+            ba_ensure_column($pdo, 'devices', 'agent_firmware', 'NVARCHAR(64) NULL');
+        }
         return $pdo;
     }
     $path = (string)($db['path'] ?? BA_DB);
@@ -159,6 +162,9 @@ function ba_db(bool $reconnect = false): PDO {
     }
     if (function_exists('ba_ensure_floor_schema')) {
         ba_ensure_floor_schema($pdo);
+    }
+    if (function_exists('ba_ensure_column')) {
+        ba_ensure_column($pdo, 'devices', 'agent_firmware', 'TEXT');
     }
     return $pdo;
 }
@@ -214,6 +220,7 @@ function ba_ensure_infra_schema(PDO $db): void {
     ba_add_col($db, 'devices', 'manufacturer', 'TEXT');
     ba_add_col($db, 'devices', 'template_id', 'INTEGER');
     ba_add_col($db, 'devices', 'on_floor', 'INTEGER NOT NULL DEFAULT 0');
+    ba_add_col($db, 'devices', 'agent_firmware', 'TEXT');
     $db->exec(
         "CREATE TABLE IF NOT EXISTS device_templates (
             id INTEGER PRIMARY KEY,

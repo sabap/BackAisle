@@ -321,6 +321,39 @@ function ba_firmware_images(PDO $db): array
     return $rows;
 }
 
+/** @return list<array{key:string,label:string}> */
+function ba_ups_vendor_choices(PDO $db): array
+{
+    $choices = ['cyberpower' => 'CyberPower'];
+    if (function_exists('ba_templates')) {
+        foreach (ba_templates($db) as $tpl) {
+            if ((string)($tpl['kind'] ?? '') !== 'ups') {
+                continue;
+            }
+            $label = trim((string)($tpl['manufacturer'] ?? ''));
+            $key = ba_vendor_key($label);
+            if ($key === '' || isset($choices[$key])) {
+                continue;
+            }
+            $choices[$key] = $label;
+        }
+    }
+    $out = [];
+    foreach ($choices as $key => $label) {
+        $out[] = ['key' => $key, 'label' => $label];
+    }
+    usort($out, static function (array $a, array $b): int {
+        if ($a['key'] === 'cyberpower') {
+            return -1;
+        }
+        if ($b['key'] === 'cyberpower') {
+            return 1;
+        }
+        return strcasecmp($a['label'], $b['label']);
+    });
+    return $out;
+}
+
 /** Refuse a factory account before a new card is inserted. The password is not returned. */
 function ba_vendor_onboarding_login(PDO $db, ?int $webId): void
 {
@@ -438,7 +471,7 @@ function page_power_vendors(PDO $db, array $user): void
     echo '<p class="muted">Each vendor keeps the onboarding defaults, the commands for that vendor, and the firmware packages used when a new unit is added. CyberPower is the first section.</p>';
 
     ba_card_open('CyberPower');
-    echo '<p class="muted">These settings apply when someone adds a default UPS. A factory card is signed in with the factory account. If it asks for a new username and password, BackAisle answers with the Web/SSH/FTP login saved on that UPS. If it opens at the command prompt, BackAisle sets the name and password there. Apply config profile uses that same check when its factory login box is checked. That apply does not update firmware and does not set the battery date.</p>';
+    echo '<p class="muted">Minimum firmware and the battery replacement date on this card are used when Inventory adds a factory-default UPS. The config profile is chosen in that Add device dialog. A factory card is signed in with the factory account. If it asks for a new username and password, BackAisle answers with the Web/SSH/FTP login saved on that UPS. If it opens at the command prompt, BackAisle sets the name and password there. Apply config profile uses that same check when its factory login box is checked. That apply does not update firmware and does not set the battery date. Apply a default config profile here is used only when the Add device dialog does not choose a profile.</p>';
     echo '<form method="post" class="stack">';
     echo '<input type="hidden" name="act" value="save_cyberpower">';
     ba_vendor_switch('apply_config', 'Apply a default config profile', (int)$settings['apply_config'] === 1);

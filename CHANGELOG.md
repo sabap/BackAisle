@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.121] - 2026-11-25
+
+- Inventory has one Add device button. Choose UPS, Switch, Router, Patch panel, or Other. A UPS asks for the vendor first, then a template for that vendor. Factory defaulted is available for CyberPower when the person can edit the organization. On, it asks for a config profile and the Web/SSH/FTP login to write on the card, signs in with the factory account, and queues the same provision job as Add default UPS. Minimum firmware and the battery date still come from Power, Vendors. Off, the Web/SSH/FTP login is the login used to connect.
+- A config profile can be named when it is created. One UPS uses that name. Several UPS units each use the hostname. The device page requires a name. Organization, Config profiles can rename a profile. The saved file stays where it is. A name already in use is refused.
+- UPS fleet shows the RMCARD firmware from SNMP. The device page labels UPS firmware and RMCARD separately. The collector stores the card version on the climate poll. A dash means that reading is not stored yet. A missed read leaves a stored version in place.
+- Signed-in pages use app.css?v=layout22. Login stays layout6.
+- The collector reloads when collector.py is newer than the running process. The writer does not need a restart.
+
 ## [0.5.120] - 2026-11-25
 
 - A UPS can stand on the closet floor. The closet page lists those units. Placement on a device is In a network rack, On the closet floor, or Not placed.

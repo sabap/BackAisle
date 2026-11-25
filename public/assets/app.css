@@ -231,6 +231,20 @@ form.stack label.switch input:checked + .switch-ui { background:#1c4d38; border-
 form.stack label.switch input:checked + .switch-ui::after { left:1.2rem; background:#86efac; }
 form.stack label.switch input:focus-visible + .switch-ui { outline:2px solid #f59e0b; outline-offset:2px; }
 .switch-label { color:var(--ink); }
+.add-device-modal fieldset { border: 0; margin: 0; padding: 0; min-inline-size: 0; }
+.add-device-modal .kind-picks {
+  display: grid; grid-template-columns: 1fr 1fr; gap: .6rem; margin: .2rem 0 .4rem;
+}
+.add-device-modal .kind-picks button,
+.add-device-modal [data-add-back],
+.add-device-modal label.switch {
+  min-height: 48px; font-size: 1.05rem;
+}
+.add-device-modal form.stack .kind-picks button { margin-top: 0; }
+.add-device-modal .add-device-crumb { margin: .35rem 0 .2rem; font-weight: 650; }
+@media (max-width: 520px) {
+  .add-device-modal .kind-picks { grid-template-columns: 1fr; }
+}
 form.stack { max-width:640px; }
 form.stack .outlet-row {
   display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; margin:.35rem 0;
@@ -241,6 +255,9 @@ form.stack .outlet-row input { flex:1 1 8rem; }
 #outlet-rows h3 { margin:.9rem 0 .25rem; font-size:1rem; }
 .btn.on { background:#2a5278; }
 .btn-quiet { background:transparent; border-color:transparent; color:var(--muted); padding:.15rem .4rem; }
+.cfg-actions { display:flex; flex-wrap:wrap; gap:.35rem; align-items:center; }
+.cfg-actions form { display:inline; margin:0; }
+body.tech .cfg-actions button { min-height:48px; font-size:1.05rem; }
 form.inline { display:inline; }
 .idf-tree-row { margin:.28rem 0; }
 .loc-toolbar { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; margin:0 0 .85rem; }

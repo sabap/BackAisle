@@ -101,6 +101,52 @@ function ba_device_can_pull_config(array $row): bool
     return (bool)filter_var(trim((string)($row['ip'] ?? '')), FILTER_VALIDATE_IP);
 }
 
+function ba_config_profile_name(string $raw): string
+{
+    $name = trim($raw);
+    if ($name === '') {
+        throw new RuntimeException('Enter a profile name.');
+    }
+    if (preg_match('/[\x00-\x1F\x7F]/', $name) === 1) {
+        throw new RuntimeException('A profile name cannot include a line break.');
+    }
+    if (strlen($name) > 128) {
+        throw new RuntimeException('A profile name is 128 characters or fewer.');
+    }
+    return $name;
+}
+
+function ba_config_profile_name_taken(PDO $db, string $name, int $exceptId = 0): bool
+{
+    $st = $db->prepare('SELECT id FROM config_templates WHERE LOWER(name) = LOWER(?) AND id <> ?');
+    $st->execute([$name, $exceptId]);
+    $row = $st->fetch();
+    $st->closeCursor();
+    return (bool)$row;
+}
+
+function ba_rename_config_profile(PDO $db, int $id, string $raw): string
+{
+    if ($id < 1) {
+        throw new RuntimeException('That config profile is not on this site.');
+    }
+    $name = ba_config_profile_name($raw);
+    $st = $db->prepare('SELECT id FROM config_templates WHERE id=?');
+    $st->execute([$id]);
+    $row = $st->fetch();
+    $st->closeCursor();
+    if (!$row) {
+        throw new RuntimeException('That config profile is not on this site.');
+    }
+    if (ba_config_profile_name_taken($db, $name, $id)) {
+        throw new RuntimeException('A config profile already uses that name.');
+    }
+    $upd = $db->prepare('UPDATE config_templates SET name=? WHERE id=?');
+    $upd->execute([$name, $id]);
+    $upd->closeCursor();
+    return $name;
+}
+
 /** @return array{job_id:int, job_ids:list<int>, message:string} */
 function ba_queue_config_profiles(PDO $db, array $user, array $deviceIds, string $name): array
 {
@@ -118,8 +164,9 @@ function ba_queue_config_profiles(PDO $db, array $user, array $deviceIds, string
         throw new RuntimeException('Select 100 UPS units or fewer');
     }
     $name = trim($name);
-    if (strlen($name) > 128) {
-        $name = substr($name, 0, 128);
+    $custom = $name !== '';
+    if ($custom) {
+        $name = ba_config_profile_name($name);
     }
     $rows = [];
     foreach ($ids as $id) {
@@ -139,8 +186,11 @@ function ba_queue_config_profiles(PDO $db, array $user, array $deviceIds, string
         }
         $rows[] = $row;
     }
-    $jobs = [];
     $single = count($rows) === 1;
+    if ($single && $custom && ba_config_profile_name_taken($db, $name)) {
+        throw new RuntimeException('A config profile already uses that name.');
+    }
+    $jobs = [];
     foreach ($rows as $row) {
         $id = (int)$row['id'];
         $host = trim((string)($row['hostname'] ?? ''));
@@ -153,9 +203,13 @@ function ba_queue_config_profiles(PDO $db, array $user, array $deviceIds, string
             'template_name' => $templateName,
         ], (string)($user['username'] ?? ''), false, false);
     }
-    $message = count($jobs) === 1
-        ? 'Config profile queued. Job #' . $jobs[0]
-        : 'Queued ' . count($jobs) . ' config profiles.';
+    if (count($jobs) === 1) {
+        $message = 'Config profile queued. Job #' . $jobs[0];
+    } elseif ($custom) {
+        $message = 'Queued ' . count($jobs) . ' config profiles. The name you entered is not used when several UPS units are checked. Each profile uses that UPS hostname.';
+    } else {
+        $message = 'Queued ' . count($jobs) . ' config profiles. Each profile uses that UPS hostname.';
+    }
     return ['job_id' => $jobs[0], 'job_ids' => $jobs, 'message' => $message];
 }
 
@@ -302,7 +356,11 @@ function page_fleet_writes(PDO $db, array $user): void {
             $act = $_POST['act'] ?? '';
             if ($act === 'pull') {
                 $id = (int)($_POST['source_id'] ?? 0);
-                $name = trim($_POST['template_name'] ?? '') ?: ('lab-' . date('Ymd_His'));
+                $typed = trim((string)($_POST['template_name'] ?? ''));
+                $name = $typed !== '' ? ba_config_profile_name($typed) : ('lab-' . date('Ymd_His'));
+                if (ba_config_profile_name_taken($db, $name)) {
+                    throw new RuntimeException('A config profile already uses that name.');
+                }
                 $jid = ba_create_job($db, 'pull_config', [$id], ['device_id' => $id, 'template_name' => $name], $user['username']);
                 $msg = "Pull job #$jid queued";
             } elseif ($act === 'push_config') {
@@ -395,11 +453,11 @@ function page_fleet_writes(PDO $db, array $user): void {
       <form method="post" class="stack">
         <label>Source</label>
         <select name="source_id"><?php foreach ($devices as $d) echo '<option value="'.(int)$d['id'].'">'.h($d['hostname'].' '.$d['ip']).'</option>'; ?></select>
-        <label>Template name</label>
-        <input name="template_name" placeholder="lab-baseline">
+        <label>Profile name</label>
+        <input name="template_name" maxlength="128" placeholder="lab-baseline">
         <input type="hidden" name="act" value="pull">
         <button>Pull config from card</button>
-        <p class="muted">FTP GET (fw ≥ 1.4.0) or web Save. File is stored outside the web root. UI shows a redacted copy only. A UPS device page, and checked UPS rows on Inventory, can pull any enabled UPS and can apply a profile to that UPS. The card keeps its own address. A push from this page still uses the lab unit until AllowMultiWrite is on.</p>
+        <p class="muted">Leave the name blank to use lab- and the time. A name already in use is refused. FTP GET (fw ≥ 1.4.0) or web Save. File is stored outside the web root. UI shows a redacted copy only. A UPS device page, and checked UPS rows on Inventory, can pull any enabled UPS and can apply a profile to that UPS. The card keeps its own address. A push from this page still uses the lab unit until AllowMultiWrite is on.</p>
       </form>
     <?php ba_users_modal_close(); ba_users_modal_open('modal-push', 'Push config', false, '', true); ?>
       <form method="post" class="stack">
